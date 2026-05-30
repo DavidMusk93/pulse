@@ -14,6 +14,8 @@ public class AgentHeartbeatFactory {
     private final String agentId;
     private final String host;
     private final String ip;
+    private final String cluster;
+    private final String area;
     private final String zone;
     private final String role;
     private final long epoch;
@@ -25,6 +27,8 @@ public class AgentHeartbeatFactory {
             String agentId,
             String host,
             String ip,
+            String cluster,
+            String area,
             String zone,
             String role,
             long epoch,
@@ -33,6 +37,8 @@ public class AgentHeartbeatFactory {
         this.agentId = agentId;
         this.host = host;
         this.ip = ip;
+        this.cluster = cluster;
+        this.area = area;
         this.zone = zone;
         this.role = role;
         this.epoch = epoch;
@@ -52,6 +58,8 @@ public class AgentHeartbeatFactory {
                         "status", "alive",
                         "host", host,
                         "ip", ip,
+                        "cluster", cluster,
+                        "area", area,
                         "zone", zone,
                         "role", role,
                         "load", loadAverage(),
@@ -63,11 +71,13 @@ public class AgentHeartbeatFactory {
         String host = env("PULSE_AGENT_HOST", localHostName());
         String ip = env("PULSE_AGENT_IP", firstNonLoopbackAddress().orElse("-"));
         String agentId = env("PULSE_AGENT_ID", host);
-        String zone = env("PULSE_AGENT_ZONE", "-");
+        String cluster = env("PULSE_AGENT_CLUSTER", "unknown");
+        String area = env("PULSE_AGENT_AREA", "unknown");
+        String zone = env("PULSE_AGENT_ZONE", area);
         String role = env("PULSE_AGENT_ROLE", "agent");
         long epoch = Long.parseLong(env("PULSE_AGENT_EPOCH", String.valueOf(clock.millis())));
         long ttlMs = Long.parseLong(env("PULSE_TTL_MS", "15000"));
-        return new AgentHeartbeatFactory(agentId, host, ip, zone, role, epoch, ttlMs, clock);
+        return new AgentHeartbeatFactory(agentId, host, ip, cluster, area, zone, role, epoch, ttlMs, clock);
     }
 
     private static String env(String key, String fallback) {

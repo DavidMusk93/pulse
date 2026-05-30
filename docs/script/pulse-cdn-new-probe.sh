@@ -17,6 +17,12 @@ if command -v java >/dev/null 2>&1; then
 fi
 echo "SYSTEMCTL=$(command -v systemctl || true)"
 echo "INSTALL_ROOT=/data24/otf/pulse"
+tide_pid=$(pgrep -f tide_worker | head -n 1 || true)
+echo "TIDE_WORKER_PID=${tide_pid:-}"
+if [ -n "$tide_pid" ] && [ -r "/proc/$tide_pid/environ" ]; then
+  echo "TIDELET_AREA=$(tr '\0' '\n' < "/proc/$tide_pid/environ" | awk -F= '$1=="_TIDELET_AREA"{print $2; exit}')"
+  echo "TIDELET_CLUSTER_ID=$(tr '\0' '\n' < "/proc/$tide_pid/environ" | awk -F= '$1=="_TIDELET_CLUSTER_ID"{print $2; exit}')"
+fi
 if [ -d /data24/otf ]; then
   ls -ld /data24/otf
 else

@@ -33,6 +33,9 @@ if [ -n "$java_bin" ]; then
   echo "JAVA_VERSION=$("$java_bin" -version 2>&1 | head -n 1 || true)"
 fi
 echo "AGENT_ACTIVE=$(systemctl is-active pulse-agent.service 2>/dev/null || systemctl --user is-active pulse-agent.service 2>/dev/null || true)"
+if [ -f "$install_root/etc/pulse-agent.env" ]; then
+  grep -E '^(PULSE_AGENT_CLUSTER|PULSE_AGENT_AREA|PULSE_AGENT_ROLE|PULSE_AGENT_ZONE)=' "$install_root/etc/pulse-agent.env" || true
+fi
 echo "COORDINATOR_EXPECTED=${is_coordinator}"
 echo "COORDINATOR_ACTIVE=$(systemctl is-active pulse-coordinator.service 2>/dev/null || systemctl --user is-active pulse-coordinator.service 2>/dev/null || true)"
 echo "PORT_9966=$(ss -ltn 2>/dev/null | awk '{print $4}' | grep -E '(:|])9966$' || true)"

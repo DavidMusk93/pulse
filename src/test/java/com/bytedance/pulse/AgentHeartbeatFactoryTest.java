@@ -12,7 +12,7 @@ class AgentHeartbeatFactoryTest {
     void createsIncrementalStateHeartbeat() {
         Clock clock = Clock.fixed(Instant.ofEpochMilli(1_710_000_000_000L), ZoneOffset.UTC);
         AgentHeartbeatFactory factory = new AgentHeartbeatFactory(
-                "agent-1", "host-1", "fd00::1", "az-a", "worker", 100, 15_000, clock);
+                "agent-1", "host-1", "fd00::1", "cdn_new", "area-a", "az-a", "worker", 100, 15_000, clock);
 
         HeartbeatRequest first = factory.nextHeartbeat();
         HeartbeatRequest second = factory.nextHeartbeat();
@@ -24,5 +24,7 @@ class AgentHeartbeatFactoryTest {
         assertEquals("state.heartbeat", first.messages().get(0).type());
         assertEquals("host-1", first.messages().get(0).payload().get("host"));
         assertEquals("fd00::1", first.messages().get(0).payload().get("ip"));
+        assertEquals("cdn_new", first.messages().get(0).payload().get("cluster"));
+        assertEquals("area-a", first.messages().get(0).payload().get("area"));
     }
 }

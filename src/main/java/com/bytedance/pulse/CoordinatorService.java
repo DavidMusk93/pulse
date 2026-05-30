@@ -62,7 +62,9 @@ public class CoordinatorService {
         long now = clock.millis();
         return states.values().stream()
                 .map(state -> state.toHostView(now))
-                .sorted(Comparator.comparing(HostView::status).thenComparing(HostView::agentId))
+                .sorted(Comparator.comparing(HostView::cluster)
+                        .thenComparing(HostView::status)
+                        .thenComparing(HostView::agentId))
                 .toList();
     }
 
@@ -160,6 +162,8 @@ public class CoordinatorService {
                     source,
                     value("host", agentId),
                     value("ip", "-"),
+                    value("cluster", "unknown"),
+                    value("area", "unknown"),
                     value("zone", "-"),
                     value("role", "-"),
                     value("load", "-"),

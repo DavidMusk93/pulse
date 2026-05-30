@@ -9,6 +9,7 @@ call() {
   local coordinators_csv=$4
   local install_root=${5:-/data24/otf/pulse}
   local jre_tarball=${6:-}
+  local cluster_fallback=${7:-unknown}
   local scp_host
   local remote_tmp
 
@@ -21,13 +22,14 @@ call() {
   if [ -n "$jre_tarball" ] && [ "$jre_tarball" != "-" ]; then
     scp "$jre_tarball" "${scp_host}:${remote_tmp}/pulse-jre.tar.gz"
   fi
-  ssh "$host" 'bash -s' -- "$host" "$coordinators_csv" "$install_root" "$remote_tmp" <<'REMOTE'
+  ssh "$host" 'bash -s' -- "$host" "$coordinators_csv" "$install_root" "$remote_tmp" "$cluster_fallback" <<'REMOTE'
 set -euo pipefail
 
 host=$1
 coordinators_csv=$2
 install_root=$3
 remote_tmp=$4
+cluster_fallback=$5
 
 java_bin="${PULSE_JAVA_BIN:-$(command -v java || true)}"
 
@@ -86,13 +88,25 @@ if [ -z "$ip_value" ]; then
   ip_value=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
 fi
 
+tide_pid=$(pgrep -f tide_worker | head -n 1 || true)
+tide_area="unknown"
+tide_cluster="$cluster_fallback"
+if [ -n "$tide_pid" ] && [ -r "/proc/$tide_pid/environ" ]; then
+  tide_area=$(tr '\0' '\n' < "/proc/$tide_pid/environ" | awk -F= '$1=="_TIDELET_AREA"{print $2; exit}')
+  tide_cluster=$(tr '\0' '\n' < "/proc/$tide_pid/environ" | awk -F= '$1=="_TIDELET_CLUSTER_ID"{print $2; exit}')
+fi
+[ -n "$tide_area" ] || tide_area="unknown"
+[ -n "$tide_cluster" ] || tide_cluster="unknown"
+
 cat > "$install_root/etc/pulse-agent.env" <<ENV
 PULSE_COORDINATOR_URLS=${coordinator_urls}
 PULSE_AGENT_ID=${hostname_value}
 PULSE_AGENT_HOST=${hostname_value}
 PULSE_AGENT_IP=${ip_value:-unknown}
-PULSE_AGENT_ROLE=cdn_new
-PULSE_AGENT_ZONE=cdn_new
+PULSE_AGENT_CLUSTER=${tide_cluster}
+PULSE_AGENT_AREA=${tide_area}
+PULSE_AGENT_ROLE=${cluster_fallback}
+PULSE_AGENT_ZONE=${tide_area}
 PULSE_HEARTBEAT_INTERVAL_MS=5000
 PULSE_TTL_MS=15000
 ENV
@@ -194,7 +208,7 @@ else
 fi
 
 rm -rf "$remote_tmp"
-echo "ROLE agent=1 coordinator=${is_coordinator} urls=${coordinator_urls}"
+echo "ROLE agent=1 coordinator=${is_coordinator} cluster=${tide_cluster} area=${tide_area} urls=${coordinator_urls}"
 REMOTE
   echo "EVENT phase=deploy host=${host} index=${index} status=ok"
 }

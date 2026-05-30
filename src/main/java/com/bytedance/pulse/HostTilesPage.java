@@ -3,7 +3,10 @@ package com.bytedance.pulse;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 public final class HostTilesPage {
     private static final DateTimeFormatter FORMATTER =
@@ -12,13 +15,15 @@ public final class HostTilesPage {
     private HostTilesPage() {}
 
     public static String render(String coordinatorId, List<HostView> hosts) {
-        StringBuilder tiles = new StringBuilder();
-        for (int i = 0; i < hosts.size(); i++) {
-            HostView host = hosts.get(i);
-            tiles.append(renderTile(host, i));
-        }
+        StringBuilder groups = new StringBuilder();
         if (hosts.isEmpty()) {
-            tiles.append("<section class=\"empty\">No hosts yet. POST /heartbeat to light up the board.</section>");
+            groups.append("<section class=\"empty\">No hosts yet. POST /heartbeat to light up the board.</section>");
+        } else {
+            Map<String, List<HostView>> byCluster = hosts.stream()
+                    .collect(Collectors.groupingBy(HostView::cluster, LinkedHashMap::new, Collectors.toList()));
+            for (Map.Entry<String, List<HostView>> entry : byCluster.entrySet()) {
+                groups.append(renderCluster(entry.getKey(), entry.getValue()));
+            }
         }
 
         return """
@@ -131,6 +136,24 @@ public final class HostTilesPage {
                       border: 1px dashed rgba(255,255,255,.35);
                       color: #cbd5e1;
                     }
+                    .cluster-section {
+                      padding: 0 clamp(20px, 4vw, 56px) 34px;
+                    }
+                    .cluster-title {
+                      display: flex;
+                      align-items: baseline;
+                      gap: 12px;
+                      margin: 12px 0 16px;
+                    }
+                    .cluster-title h2 {
+                      margin: 0;
+                      font-size: 26px;
+                      font-weight: 300;
+                    }
+                    .cluster-title span {
+                      color: #94a3b8;
+                      font-size: 13px;
+                    }
                   </style>
                 </head>
                 <body>
@@ -138,12 +161,33 @@ public final class HostTilesPage {
                     <h1>Pulse Hosts</h1>
                     <div class="subtitle">Coordinator __COORDINATOR_ID__ · Windows Phone style host tiles · auto refresh 5s</div>
                   </header>
-                  <main class="tile-grid">__TILES__</main>
+                  <main>__GROUPS__</main>
                 </body>
                 </html>
                 """
                 .replace("__COORDINATOR_ID__", escape(coordinatorId))
-                .replace("__TILES__", tiles.toString());
+                .replace("__GROUPS__", groups.toString());
+    }
+
+    private static String renderCluster(String cluster, List<HostView> hosts) {
+        StringBuilder tiles = new StringBuilder();
+        for (int i = 0; i < hosts.size(); i++) {
+            tiles.append(renderTile(hosts.get(i), i));
+        }
+        return """
+                <section class="cluster-section" data-cluster="%s">
+                  <div class="cluster-title">
+                    <h2>%s</h2>
+                    <span>%d host%s</span>
+                  </div>
+                  <div class="tile-grid">%s</div>
+                </section>
+                """.formatted(
+                escape(cluster),
+                escape(cluster),
+                hosts.size(),
+                hosts.size() == 1 ? "" : "s",
+                tiles);
     }
 
     private static String renderTile(HostView host, int index) {
@@ -155,6 +199,7 @@ public final class HostTilesPage {
                   <div class="tile-host">%s</div>
                   <div class="tile-meta">
                     <div><span>IP</span>%s</div>
+                    <div><span>Area</span>%s</div>
                     <div><span>Role</span>%s</div>
                     <div><span>Zone</span>%s</div>
                     <div><span>Load</span>%s</div>
@@ -170,6 +215,7 @@ public final class HostTilesPage {
                 escape(host.agentId()),
                 escape(host.host()),
                 escape(host.ip()),
+                escape(host.area()),
                 escape(host.role()),
                 escape(host.zone()),
                 escape(host.load()),

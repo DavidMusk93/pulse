@@ -13,6 +13,8 @@ public record HostView(
         String source,
         String host,
         String ip,
+        String cluster,
+        String area,
         String zone,
         String role,
         String load,

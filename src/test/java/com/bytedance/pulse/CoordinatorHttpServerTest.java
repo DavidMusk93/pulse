@@ -86,7 +86,7 @@ class CoordinatorHttpServerTest {
                       "message_id": "msg-agent-1-42",
                       "type": "state.heartbeat",
                       "version": 1,
-                      "payload": {"host": "tile-host", "ip": "10.0.0.8", "role": "worker"}
+                      "payload": {"host": "tile-host", "ip": "10.0.0.8", "cluster": "cluster-a", "area": "area-a", "role": "worker"}
                     }
                   ]
                 }
@@ -96,6 +96,8 @@ class CoordinatorHttpServerTest {
 
         assertEquals(200, response.statusCode());
         assertTrue(response.body().contains("tile-grid"));
+        assertTrue(response.body().contains("cluster-section"));
+        assertTrue(response.body().contains("cluster-a"));
         assertTrue(response.body().contains("tile-host"));
         assertTrue(response.body().contains("Windows Phone"));
     }

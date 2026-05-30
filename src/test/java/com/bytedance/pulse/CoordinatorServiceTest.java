@@ -25,6 +25,8 @@ class CoordinatorServiceTest {
         assertEquals("agent-1", host.agentId());
         assertEquals("host-a", host.host());
         assertEquals("10.0.0.1", host.ip());
+        assertEquals("cluster-a", host.cluster());
+        assertEquals("area-a", host.area());
         assertEquals("alive", host.status());
     }
 
@@ -128,6 +130,8 @@ class CoordinatorServiceTest {
                         Map.of(
                                 "host", host,
                                 "ip", ip,
+                                "cluster", "cluster-a",
+                                "area", "area-a",
                                 "zone", "az-a",
                                 "role", "worker",
                                 "load", "0.42"))));
