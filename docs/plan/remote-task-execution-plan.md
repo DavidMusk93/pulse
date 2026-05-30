@@ -149,7 +149,7 @@ CoordinatorService 改动：
 bash "$script_path" --dry-run
 ```
 
-- 超时默认 `120000ms`。
+- 超时默认 `600000ms`，避免 `analyze_block_layout_dry_run` 在大盘机器上被过早中断。
 - 捕获 stdout/stderr。
 - stdout/stderr tail 默认各 `64KiB`。
 - 结果写入待上报 reply buffer。
@@ -159,7 +159,7 @@ PulseAgentApp 改动：
 - 每次 heartbeat response 后处理 `cmd.task_execute`。
 - task accepted 后尽快触发一次 heartbeat，携带 `reply.task_accepted`。
 - task 完成后尽快触发一次 heartbeat，携带 `reply.task_result`。
-- task result 随后续 3 次 heartbeat 重复上报，仍保持每次 heartbeat 只写一个 coordinator。
+- task accepted 与 result 随后续 3 次 heartbeat 重复上报，仍保持每次 heartbeat 只写一个 coordinator。
 - coordinator completion queue 按 `task_id` 去重，避免多 coordinator 轮询或重试造成重复展示。
 - direct、leader、follower、dynamic 模式都共用同一 TaskRunner。
 

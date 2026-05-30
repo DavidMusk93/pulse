@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class RemoteTaskService {
     private static final int MAX_COMPLETIONS_PER_AGENT = 50;
+    private static final long DEFAULT_TASK_TIMEOUT_MS = 600_000;
     private final Clock clock;
     private final Map<String, Queue<RemoteTask>> executionQueues = new ConcurrentHashMap<>();
     private final Map<String, Map<String, RemoteTask>> inFlight = new ConcurrentHashMap<>();
@@ -71,7 +72,7 @@ public class RemoteTaskService {
                 null,
                 null,
                 null,
-                now + 120_000,
+                now + DEFAULT_TASK_TIMEOUT_MS,
                 "pulse-ui",
                 1);
         queue(agentId).add(task);
@@ -102,7 +103,7 @@ public class RemoteTaskService {
                         "task_type", delivered.taskType(),
                         "script_path", delivered.scriptPath(),
                         "args", delivered.args(),
-                        "timeout_ms", 120_000,
+                        "timeout_ms", DEFAULT_TASK_TIMEOUT_MS,
                         "created_at_ms", delivered.createdAtMs())));
     }
 

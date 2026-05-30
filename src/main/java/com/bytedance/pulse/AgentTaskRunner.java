@@ -17,6 +17,8 @@ import java.util.concurrent.TimeUnit;
 
 public class AgentTaskRunner {
     private static final int OUTPUT_TAIL_BYTES = 64 * 1024;
+    private static final int REPLY_REPLAY_SENDS = 3;
+    private static final long DEFAULT_TASK_TIMEOUT_MS = 600_000;
     private final String agentId;
     private final Clock clock;
     private final String taskDir;
@@ -63,12 +65,13 @@ public class AgentTaskRunner {
         String traceId = stringValue(payload, "trace_id");
         String taskType = stringValue(payload, "task_type");
         String scriptPath = stringValue(payload, "script_path");
+        long timeoutMs = longValue(payload, "timeout_ms", DEFAULT_TASK_TIMEOUT_MS);
         if (taskId.isBlank() || !acceptedTasks.add(taskId)) {
             return;
         }
         TaskDefinition definition = definition(taskType);
         if (definition == null || !definition.scriptPath().equals(scriptPath) || !definition.args().equals(argsValue(payload))) {
-            pendingReplies.add(new PendingReply(resultMessage(message.messageId(), taskId, traceId, taskType, "rejected", null, 0, 0, "", "", false, "task is not in agent allowlist"), 3));
+            pendingReplies.add(new PendingReply(resultMessage(message.messageId(), taskId, traceId, taskType, "rejected", null, 0, 0, "", "", false, "task is not in agent allowlist"), REPLY_REPLAY_SENDS));
             return;
         }
         pendingReplies.add(new PendingReply(new PulseMessage(
@@ -83,16 +86,16 @@ public class AgentTaskRunner {
                         "agent_id", agentId,
                         "task_type", taskType,
                         "status", "accepted",
-                        "accepted_at_ms", clock.millis())), 1));
-        executor.submit(() -> execute(message.messageId(), taskId, traceId, definition));
+                        "accepted_at_ms", clock.millis())), REPLY_REPLAY_SENDS));
+        executor.submit(() -> execute(message.messageId(), taskId, traceId, definition, timeoutMs));
     }
 
-    private void execute(String replyTo, String taskId, String traceId, TaskDefinition definition) {
+    private void execute(String replyTo, String taskId, String traceId, TaskDefinition definition, long timeoutMs) {
         long started = clock.millis();
         Process process = null;
         try {
             if (!Files.isRegularFile(Path.of(definition.scriptPath()))) {
-                pendingReplies.add(new PendingReply(resultMessage(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", "", false, "script not found"), 3));
+                pendingReplies.add(new PendingReply(resultMessage(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", "", false, "script not found"), REPLY_REPLAY_SENDS));
                 return;
             }
             List<String> command = new ArrayList<>();
@@ -111,11 +114,11 @@ public class AgentTaskRunner {
             Thread stderrThread = new Thread(() -> copyTail(running.getErrorStream(), stderr));
             stdoutThread.start();
             stderrThread.start();
-            boolean finished = process.waitFor(120, TimeUnit.SECONDS);
+            boolean finished = process.waitFor(Math.max(1, timeoutMs), TimeUnit.MILLISECONDS);
             long finishedAt = clock.millis();
             if (!finished) {
                 process.destroyForcibly();
-                pendingReplies.add(new PendingReply(resultMessage(replyTo, taskId, traceId, definition.taskType(), "timed_out", null, started, finishedAt, stdout.toString(StandardCharsets.UTF_8), stderr.toString(StandardCharsets.UTF_8), false, "task timed out"), 3));
+                pendingReplies.add(new PendingReply(resultMessage(replyTo, taskId, traceId, definition.taskType(), "timed_out", null, started, finishedAt, stdout.toString(StandardCharsets.UTF_8), stderr.toString(StandardCharsets.UTF_8), false, "task timed out"), REPLY_REPLAY_SENDS));
                 return;
             }
             stdoutThread.join(1000);
@@ -133,12 +136,12 @@ public class AgentTaskRunner {
                     stdout.toString(StandardCharsets.UTF_8),
                     stderr.toString(StandardCharsets.UTF_8),
                     false,
-                    ""), 3));
+                    ""), REPLY_REPLAY_SENDS));
         } catch (Exception exception) {
             if (process != null) {
                 process.destroyForcibly();
             }
-            pendingReplies.add(new PendingReply(resultMessage(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", "", false, exception.getMessage()), 3));
+            pendingReplies.add(new PendingReply(resultMessage(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", "", false, exception.getMessage()), REPLY_REPLAY_SENDS));
         }
     }
 
@@ -202,6 +205,18 @@ public class AgentTaskRunner {
     private static String stringValue(Map<String, Object> payload, String key) {
         Object value = payload.get(key);
         return value == null ? "" : value.toString();
+    }
+
+    private static long longValue(Map<String, Object> payload, String key, long defaultValue) {
+        Object value = payload.get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return value == null || value.toString().isBlank() ? defaultValue : Long.parseLong(value.toString());
+        } catch (NumberFormatException ignored) {
+            return defaultValue;
+        }
     }
 
     private static String tail(String value) {

@@ -63,7 +63,7 @@ group leader 是转发层，不是 task 权威。
 - 使用本地 `TaskRunner` 幂等接收 task。
 - 在后台线程池异步执行 task。
 - 执行完成后生成 `reply.task_result`，随下一次或立即触发的 heartbeat 上报。
-- `reply.task_result` 默认随后续 3 次 heartbeat 重复上报，确保轮询多 coordinator 时每个 coordinator 都能收到 completion。
+- `reply.task_accepted` 与 `reply.task_result` 默认随后续 3 次 heartbeat 重复上报，确保轮询多 coordinator 时每个 coordinator 都能补齐 trace 与 completion。
 - 维护本地已接收/执行过的 `task_id` 与 `trace_id` 缓存，避免重复执行。
 
 ### Web UI
@@ -222,7 +222,7 @@ coordinator 通过 heartbeat response 下发。
     "task_type": "prepare_disk_layout_dry_run",
     "script_path": "/data24/otf/pulse/tasks/prepare-disk-layout.sh",
     "args": ["--dry-run"],
-    "timeout_ms": 120000,
+    "timeout_ms": 600000,
     "created_at_ms": 1710000000000
   }
 }
@@ -445,7 +445,7 @@ bash "$script_path" --dry-run
 - 强制 `--dry-run`。
 - 不允许 UI 或 coordinator 传任意 shell 片段。
 - 不通过 shell 拼接用户输入。
-- 设置超时，例如 `120s`。
+- 设置超时，例如 `600s`，避免 block layout dry-run 在大盘机器上被过早中断。
 - 捕获 stdout/stderr。
 - 记录 exit code。
 
@@ -461,7 +461,7 @@ bash "$script_path" --dry-run
 | --- | --- |
 | coordinator 重复下发同一 task | agent 通过 `task_id` 去重 |
 | agent 执行中重启 | coordinator `in_flight` 超时，UI 显示 timed out |
-| agent 完成后 result 上报失败 | agent 在后续 heartbeat 重试 `reply.task_result` |
+| agent accepted/result 上报失败 | agent 在后续 heartbeat 重试 `reply.task_accepted` 和 `reply.task_result` |
 | group leader 重启 | follower fallback direct 或等待新 plan；coordinator queue 保留 task |
 | completion queue 满 | 丢弃最旧 result，写 trace log |
 | task 超时 | agent kill 子进程，上报 `timed_out` |
