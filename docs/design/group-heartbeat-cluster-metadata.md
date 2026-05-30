@@ -243,6 +243,13 @@ agent 行为：
 - follower 从 leader 的 `/group/heartbeat` 响应中获取 leader 转发的 `cmd.group_plan`。
 - plan 缺失或 leader 上报失败时，agent 可短暂 fallback 到 direct，避免 host 完全失联。
 
+coordinator 一致性约束：
+
+- 当前阶段不实现 coordinator 间强一致复制。
+- 为避免某个 coordinator 长时间收不到 group 内 host 更新，leader 每轮 batch heartbeat 必须广播到全部 coordinator。
+- follower 不直接打 coordinator，因此 coordinator 侧请求数从 `N * coordinator_count` 收敛为 `group_count * coordinator_count`。
+- 默认 heartbeat interval 为 5s，TTL 调整为 30s，避免多 coordinator fanout、网络抖动和部署重启时踩 15s 过期边界。
+
 废弃项：
 
 - `docs/script/pulse-generate-group-plan.py` 仅保留为历史验证工具，不再作为生产部署路径。
@@ -291,14 +298,21 @@ coordinator 可选配置：
   - last batch heartbeat time
   - batch size
 
-## 当前缺口
+## 当前状态
 
-当前缺口如下：
+已完成：
 
-- 静态 group assignment 已验证，但应废弃为生产路径。
-- 需要将 group assignment 迁移到 coordinator 的 `handleHeartbeat` 状态维护流程。
-- 需要 agent 默认通过 coordinator plan 动态切换 leader/follower。
-- 需要 group plan 展示与健康检查。
+- 静态 group assignment 已废弃为生产路径，仅保留为历史验证和回滚工具。
+- group assignment 已迁移到 coordinator 的 `handleHeartbeat` 状态维护流程。
+- coordinator 已通过 heartbeat response message 下发 `cmd.group_plan`。
+- agent 已默认通过 coordinator plan 动态切换 `direct`、`leader`、`follower`。
+- group leader 已监听 `/group/heartbeat` 并转发 follower 的 `cmd.group_plan`。
+
+仍需验证和增强：
+
+- 线上多 coordinator 场景需要确认所有 coordinator 都能稳定看到完整 alive host。
+- group leader 需要持续广播 batch heartbeat 到全部 coordinator，避免 coordinator 间无复制导致局部过期。
+- 后续可补充 group 健康指标和 Web 只读展示，但不作为 agent 获取 plan 的接口。
 
 这些缺口不影响已验证的 group heartbeat 服务端协议，但会影响“通过分组降低 coordinator heartbeat read/write 压力”这一最终目标。
 
