@@ -79,6 +79,27 @@ class CoordinatorServiceTest {
     }
 
     @Test
+    void coordinatorMaintainsDynamicGroupPlansWithLimitSeven() {
+        CoordinatorService service = new CoordinatorService("coordinator-a", clock);
+        for (int i = 1; i <= 8; i++) {
+            service.handleHeartbeat(singleHeartbeat("agent-" + i, 1, i, "host-" + i, "10.0.0." + i));
+        }
+
+        List<GroupView> groups = service.groups();
+
+        assertEquals(2, groups.size());
+        assertEquals(7, groups.get(0).size());
+        assertEquals(1, groups.get(1).size());
+        AgentGroupPlan leaderPlan = service.agentPlan("agent-1");
+        AgentGroupPlan followerPlan = service.agentPlan("agent-2");
+        assertEquals("leader", leaderPlan.groupMode());
+        assertEquals("follower", followerPlan.groupMode());
+        assertEquals(7, followerPlan.sizeLimit());
+        assertEquals("agent-1", followerPlan.leaderAgentId());
+        assertEquals("http://10.0.0.1:9977", followerPlan.leaderUrl());
+    }
+
+    @Test
     void forwardOnlyMergesStateMessages() {
         CoordinatorService service = new CoordinatorService("coordinator-b", clock);
         ForwardState state = new ForwardState(

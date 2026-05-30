@@ -123,8 +123,8 @@ fi
 [ -n "$tide_area" ] || tide_area="unknown"
 [ -n "$tide_cluster" ] || tide_cluster="unknown"
 
-group_id="${cluster_fallback}/unknown/000"
-group_mode="direct"
+group_id="dynamic"
+group_mode="dynamic"
 group_leader_url=""
 group_members=""
 if [ -f "$remote_tmp/pulse-group-plan.csv" ]; then
@@ -136,8 +136,8 @@ if [ -f "$remote_tmp/pulse-group-plan.csv" ]; then
     group_members=$(printf '%s\n' "$group_row" | awk -F, '{print $5}')
   fi
 fi
-[ -n "$group_id" ] || group_id="${cluster_fallback}/unknown/000"
-[ -n "$group_mode" ] || group_mode="direct"
+[ -n "$group_id" ] || group_id="dynamic"
+[ -n "$group_mode" ] || group_mode="dynamic"
 
 cat > "$install_root/etc/pulse-agent.env" <<ENV
 PULSE_COORDINATOR_URLS=${coordinator_urls}
@@ -162,6 +162,8 @@ cat > "$install_root/etc/pulse-coordinator.env" <<ENV
 PULSE_COORDINATOR_ID=${hostname_value}
 PULSE_BIND_HOST=::
 PULSE_PORT=9966
+PULSE_GROUP_SIZE_LIMIT=7
+PULSE_GROUP_PORT=9977
 ENV
 
 install_system_unit() {

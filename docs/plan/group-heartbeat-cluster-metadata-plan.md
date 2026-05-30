@@ -46,9 +46,32 @@
   - `group_id` 格式：`cluster/area/shard_index`。
   - leader：组内排序后的第一个 alive agent。
 - 演进路径：
-  - 第一阶段用 auto-ops 静态生成 `PULSE_GROUP_*` 环境变量。
-  - 第二阶段 agent 支持 leader/follower 模式，由 leader 批量上报 `agents[]`。
-  - 第三阶段 coordinator 提供 `/api/groups` 和动态 group plan。
+  - 废弃生产路径中的 auto-ops 静态 group CSV。
+  - coordinator 在 `handleHeartbeat` 后维护 `groupPlans` 和 `groupViews`。
+  - agent 默认以 `dynamic` 模式向 coordinator 拉取 plan，再切换 leader/follower。
+
+## 阶段 2.2：Coordinator 动态分组实现
+
+- `CoordinatorService`：
+  - 新增 `groupPlans: agent_id -> AgentGroupPlan`。
+  - 新增 `groups: group_id -> GroupView`。
+  - 在 `handleHeartbeat` 和 `handleForward` 合并状态后重新计算 group assignment。
+  - 按 `cluster -> area -> ipv6/agent_id` 稳定排序。
+  - 每 7 个 alive agent 形成一个 group。
+  - 每个 group 第一个 alive agent 为 leader。
+- `CoordinatorHttpServer`：
+  - 新增 `GET /api/agent-plan?agent_id=...`。
+  - 新增 `GET /api/groups`。
+- `PulseAgentApp`：
+  - 默认 `PULSE_GROUP_MODE=dynamic`。
+  - 每轮先生成 heartbeat，再拉取 coordinator plan。
+  - plan 为 `leader` 时聚合 follower 并批量上报。
+  - plan 为 `follower` 时上报给 leader。
+  - plan 不存在或请求失败时 fallback 到 direct。
+- 部署脚本：
+  - 不再依赖静态 group CSV。
+  - 默认写入 `PULSE_GROUP_MODE=dynamic`。
+  - 保留静态配置仅作为回滚或本地验证能力。
 
 ## 阶段 3：测试驱动
 
@@ -171,7 +194,10 @@ curl -g -sS --proxy socks5h://127.0.0.1:6699 \
 - 已补充减压型分组策略设计：
   - 当前实现缺少 group assignment 和 agent leader/follower 模式。
   - 后续应按最多 7 个 agent 一组推进批量化心跳上报。
+- 已发现静态 group plan 不符合最终目标：
+  - 静态 plan 是验证捷径，不应作为生产路径。
+  - group 逻辑必须放到 coordinator 心跳状态处理中维护。
 - 下一步：
-  - 设计并实现部署侧静态分组脚本。
-  - 实现 agent leader/follower 模式。
-  - 验证 coordinator 请求量是否从 `N` 收敛到 `ceil(N / 7)`。
+  - 实现 coordinator 动态 group plan。
+  - 部署 agent dynamic 模式。
+  - 验证 `/api/groups`、`/api/agent-plan` 和 coordinator source 分布。

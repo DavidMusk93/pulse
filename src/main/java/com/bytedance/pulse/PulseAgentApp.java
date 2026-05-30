@@ -6,9 +6,11 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.URI;
 import java.net.InetSocketAddress;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Arrays;
@@ -23,7 +25,7 @@ public final class PulseAgentApp {
         Duration timeout = Duration.ofMillis(Long.parseLong(System.getenv().getOrDefault("PULSE_AGENT_TIMEOUT_MS", "2000")));
         AgentHeartbeatFactory heartbeatFactory = AgentHeartbeatFactory.fromEnvironment(Clock.systemUTC());
         HeartbeatClient client = new HeartbeatClient(coordinatorUrls, timeout);
-        String groupMode = System.getenv().getOrDefault("PULSE_GROUP_MODE", "direct");
+        String groupMode = System.getenv().getOrDefault("PULSE_GROUP_MODE", "dynamic");
 
         System.out.printf(
                 "Pulse agent started coordinators=%s interval_ms=%d group_mode=%s%n",
@@ -36,6 +38,10 @@ public final class PulseAgentApp {
         }
         if ("follower".equalsIgnoreCase(groupMode)) {
             runFollower(intervalMs, timeout, heartbeatFactory);
+            return;
+        }
+        if ("dynamic".equalsIgnoreCase(groupMode)) {
+            runDynamic(intervalMs, heartbeatFactory, client);
             return;
         }
         while (!Thread.currentThread().isInterrupted()) {
@@ -78,6 +84,33 @@ public final class PulseAgentApp {
         }
     }
 
+    private static void runDynamic(long intervalMs, AgentHeartbeatFactory heartbeatFactory, HeartbeatClient client)
+            throws Exception {
+        int port = Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_PORT", "9977"));
+        String bindHost = System.getenv().getOrDefault("PULSE_GROUP_BIND_HOST", "::");
+        GroupHeartbeatCollector collector = new GroupHeartbeatCollector();
+        GroupHeartbeatReceiver receiver = new GroupHeartbeatReceiver(bindHost, port, collector);
+        receiver.start();
+        System.out.printf("Pulse dynamic group receiver started port=%d%n", port);
+        while (!Thread.currentThread().isInterrupted()) {
+            HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat();
+            AgentGroupPlan plan = client.fetchPlan(heartbeat.agentId());
+            String mode = plan.groupMode();
+            if ("leader".equalsIgnoreCase(mode)) {
+                HeartbeatRequest batch = collector.batch(plan.groupId(), heartbeat, Clock.systemUTC().millis(), plan.sizeLimit());
+                client.send("/heartbeat", batch);
+            } else if ("follower".equalsIgnoreCase(mode) && !plan.leaderUrl().isBlank()) {
+                HeartbeatClient leaderClient = new HeartbeatClient(List.of(plan.leaderUrl()), client.timeout);
+                if (!leaderClient.send("/group/heartbeat", heartbeat)) {
+                    client.send("/heartbeat", heartbeat);
+                }
+            } else {
+                client.send("/heartbeat", heartbeat);
+            }
+            Thread.sleep(intervalMs);
+        }
+    }
+
     private static List<String> coordinatorUrls() {
         String raw = System.getenv().getOrDefault("PULSE_COORDINATOR_URLS", "http://[::1]:9966");
         return Arrays.stream(raw.split(","))
@@ -101,7 +134,7 @@ public final class PulseAgentApp {
             this.timeout = timeout;
         }
 
-        void send(String path, HeartbeatRequest heartbeat) {
+        boolean send(String path, HeartbeatRequest heartbeat) {
             for (int attempt = 0; attempt < coordinatorUrls.size(); attempt++) {
                 String baseUrl = coordinatorUrls.get((nextCoordinatorIndex + attempt) % coordinatorUrls.size());
                 try {
@@ -125,7 +158,7 @@ public final class PulseAgentApp {
                                     baseUrl,
                                     heartbeat.seq());
                         }
-                        return;
+                        return true;
                     }
                     System.err.printf(
                             "heartbeat status=bad_response coordinator=%s code=%d body=%s%n",
@@ -139,6 +172,36 @@ public final class PulseAgentApp {
                             exception.getMessage());
                 }
             }
+            return false;
+        }
+
+        AgentGroupPlan fetchPlan(String agentId) {
+            String encoded = URLEncoder.encode(agentId, StandardCharsets.UTF_8);
+            for (int attempt = 0; attempt < coordinatorUrls.size(); attempt++) {
+                String baseUrl = coordinatorUrls.get((nextCoordinatorIndex + attempt) % coordinatorUrls.size());
+                try {
+                    HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/api/agent-plan?agent_id=" + encoded))
+                            .timeout(timeout)
+                            .GET()
+                            .build();
+                    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                    if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                        nextCoordinatorIndex = (nextCoordinatorIndex + attempt) % coordinatorUrls.size();
+                        return mapper.readValue(response.body(), AgentGroupPlan.class);
+                    }
+                    System.err.printf(
+                            "plan status=bad_response coordinator=%s code=%d body=%s%n",
+                            baseUrl,
+                            response.statusCode(),
+                            response.body());
+                } catch (Exception exception) {
+                    System.err.printf(
+                            "plan status=failed coordinator=%s error=%s%n",
+                            baseUrl,
+                            exception.getMessage());
+                }
+            }
+            return AgentGroupPlan.direct(agentId, Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_SIZE_LIMIT", "7")));
         }
     }
 

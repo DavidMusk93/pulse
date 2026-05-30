@@ -1,8 +1,10 @@
 package com.bytedance.pulse;
 
 import java.time.Clock;
+import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -12,10 +14,16 @@ public class CoordinatorService {
     private final String coordinatorId;
     private final Clock clock;
     private final Map<String, NodeState> states = new ConcurrentHashMap<>();
+    private final Map<String, AgentGroupPlan> groupPlans = new ConcurrentHashMap<>();
+    private final Map<String, GroupView> groupViews = new ConcurrentHashMap<>();
+    private final int groupSizeLimit;
+    private final int groupLeaderPort;
 
     public CoordinatorService(String coordinatorId, Clock clock) {
         this.coordinatorId = coordinatorId;
         this.clock = clock;
+        this.groupSizeLimit = Math.max(1, Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_SIZE_LIMIT", "7")));
+        this.groupLeaderPort = Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_PORT", "9977"));
     }
 
     public String coordinatorId() {
@@ -30,11 +38,13 @@ public class CoordinatorService {
                 long acceptedSeq = merge(agent, source, clock.millis(), agent.messages());
                 agentResponses.add(new AgentHeartbeatResponse(agent.agentId(), acceptedSeq, List.of()));
             }
+            recomputeGroups(clock.millis());
             return HeartbeatResponse.batch(coordinatorId, agentResponses);
         }
 
         AgentHeartbeat heartbeat = request.toSingleAgentHeartbeat();
         long acceptedSeq = merge(heartbeat, "direct", clock.millis(), heartbeat.messages());
+        recomputeGroups(clock.millis());
         return HeartbeatResponse.single(coordinatorId, acceptedSeq, List.of());
     }
 
@@ -55,6 +65,7 @@ public class CoordinatorService {
                 merged++;
             }
         }
+        recomputeGroups(clock.millis());
         return new HeartbeatForwardResponse(true, coordinatorId, accepted, merged);
     }
 
@@ -66,6 +77,20 @@ public class CoordinatorService {
                         .thenComparing(HostView::status)
                         .thenComparing(HostView::agentId))
                 .toList();
+    }
+
+    public List<GroupView> groups() {
+        return groupViews.values().stream()
+                .sorted(Comparator.comparing(GroupView::groupId))
+                .toList();
+    }
+
+    public AgentGroupPlan agentPlan(String agentId) {
+        if (agentId == null || agentId.isBlank()) {
+            throw new IllegalArgumentException("agent_id is required");
+        }
+        recomputeGroups(clock.millis());
+        return groupPlans.getOrDefault(agentId, AgentGroupPlan.direct(agentId, groupSizeLimit));
     }
 
     private long merge(AgentHeartbeat heartbeat, String source, long observedAtMs, List<PulseMessage> messages) {
@@ -80,6 +105,94 @@ public class CoordinatorService {
         NodeState selected = existing == null ? incoming : NodeState.newer(existing, incoming);
         states.put(state.agentId(), selected);
         return selected == incoming;
+    }
+
+    private void recomputeGroups(long now) {
+        Map<String, List<HostView>> buckets = new HashMap<>();
+        for (HostView host : hosts()) {
+            if (!"alive".equals(host.status())) {
+                continue;
+            }
+            String cluster = blankToUnknown(host.cluster());
+            String area = blankToUnknown(host.area());
+            buckets.computeIfAbsent(cluster + "\n" + area, ignored -> new ArrayList<>()).add(host);
+        }
+
+        Map<String, AgentGroupPlan> nextPlans = new HashMap<>();
+        Map<String, GroupView> nextGroups = new HashMap<>();
+        for (Map.Entry<String, List<HostView>> entry : buckets.entrySet()) {
+            String[] key = entry.getKey().split("\n", 2);
+            String cluster = key[0];
+            String area = key.length > 1 ? key[1] : "unknown";
+            List<HostView> members = entry.getValue().stream()
+                    .sorted(Comparator.comparing(CoordinatorService::ipSortKey).thenComparing(HostView::agentId))
+                    .toList();
+            for (int start = 0; start < members.size(); start += groupSizeLimit) {
+                int end = Math.min(start + groupSizeLimit, members.size());
+                List<HostView> groupMembers = members.subList(start, end);
+                int shard = start / groupSizeLimit;
+                String groupId = "%s/%s/%03d".formatted(cluster, area, shard);
+                HostView leader = groupMembers.get(0);
+                String leaderUrl = leaderUrl(leader);
+                List<String> memberIds = groupMembers.stream().map(HostView::agentId).toList();
+                nextGroups.put(groupId, new GroupView(
+                        groupId,
+                        cluster,
+                        area,
+                        leader.agentId(),
+                        leaderUrl,
+                        memberIds,
+                        memberIds.size(),
+                        groupSizeLimit));
+                for (HostView member : groupMembers) {
+                    String mode = member.agentId().equals(leader.agentId()) ? "leader" : "follower";
+                    nextPlans.put(member.agentId(), new AgentGroupPlan(
+                            member.agentId(),
+                            groupId,
+                            mode,
+                            leader.agentId(),
+                            leaderUrl,
+                            memberIds,
+                            cluster,
+                            area,
+                            groupSizeLimit));
+                }
+            }
+        }
+
+        groupPlans.clear();
+        groupPlans.putAll(nextPlans);
+        groupViews.clear();
+        groupViews.putAll(nextGroups);
+    }
+
+    private static String blankToUnknown(String value) {
+        return value == null || value.isBlank() || "-".equals(value) ? "unknown" : value;
+    }
+
+    private String leaderUrl(HostView leader) {
+        String ip = leader.ip();
+        if (ip == null || ip.isBlank() || "-".equals(ip)) {
+            return "";
+        }
+        if (ip.contains(":")) {
+            return "http://[%s]:%d".formatted(ip, groupLeaderPort);
+        }
+        return "http://%s:%d".formatted(ip, groupLeaderPort);
+    }
+
+    private static String ipSortKey(HostView host) {
+        String ip = host.ip();
+        try {
+            byte[] bytes = InetAddress.getByName(ip).getAddress();
+            StringBuilder builder = new StringBuilder();
+            for (byte value : bytes) {
+                builder.append("%02x".formatted(value & 0xff));
+            }
+            return "0/" + builder;
+        } catch (Exception ignored) {
+            return "1/" + host.agentId();
+        }
     }
 
     private static final class NodeState {

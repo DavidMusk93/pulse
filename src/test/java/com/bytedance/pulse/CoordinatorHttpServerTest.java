@@ -102,6 +102,52 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("Windows Phone"));
     }
 
+    @Test
+    void exposesDynamicGroupPlanApis() throws Exception {
+        postJson("/heartbeat", """
+                {
+                  "agent_id": "agent-1",
+                  "epoch": 1,
+                  "seq": 42,
+                  "ttl_ms": 15000,
+                  "messages": [
+                    {
+                      "message_id": "msg-agent-1-42",
+                      "type": "state.heartbeat",
+                      "version": 1,
+                      "payload": {"host": "host-1", "ip": "10.0.0.1", "cluster": "cluster-a", "area": "area-a"}
+                    }
+                  ]
+                }
+                """);
+        postJson("/heartbeat", """
+                {
+                  "agent_id": "agent-2",
+                  "epoch": 1,
+                  "seq": 43,
+                  "ttl_ms": 15000,
+                  "messages": [
+                    {
+                      "message_id": "msg-agent-2-43",
+                      "type": "state.heartbeat",
+                      "version": 1,
+                      "payload": {"host": "host-2", "ip": "10.0.0.2", "cluster": "cluster-a", "area": "area-a"}
+                    }
+                  ]
+                }
+                """);
+
+        HttpResponse<String> groups = get("/api/groups");
+        HttpResponse<String> plan = get("/api/agent-plan?agent_id=agent-2");
+
+        assertEquals(200, groups.statusCode());
+        assertTrue(groups.body().contains("cluster-a/area-a/000"));
+        assertEquals(200, plan.statusCode());
+        JsonNode planJson = mapper.readTree(plan.body());
+        assertEquals("follower", planJson.get("group_mode").asText());
+        assertEquals("agent-1", planJson.get("leader_agent_id").asText());
+    }
+
     private HttpResponse<String> get(String path) throws Exception {
         HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path)).GET().build();
         return client.send(request, HttpResponse.BodyHandlers.ofString());

@@ -40,9 +40,9 @@ Pulse coordinator 已支持单机 agent 心跳和批量 `agents[]` group heartbe
 | --- | --- | --- | --- |
 | Web 展示分组 | 已实现 | 按 `cluster` 展示 host 磁贴 | 否 |
 | Group heartbeat 协议 | 已实现并验证 | 单次 `/heartbeat` 接收多个 `agents[]` | 仅协议具备能力，线上 agent 尚未使用 |
-| Agent 减压分组策略 | 缺失 | 将同集群 agent 编排为小组，批量上报心跳 | 是 |
+| Agent 减压分组策略 | 需要迁移到 coordinator | 将同集群 agent 编排为小组，批量上报心跳 | 是 |
 
-因此，当前确实缺乏完整分组策略。现有 agent 仍然逐台直接向 coordinator 上报心跳，coordinator 的 CPU 和 IO 仍会主要消耗在大量 read/write heartbeat 请求上。已实现的 group heartbeat 只是为批量化处理提供了服务端协议基础。
+因此，静态 group plan 只能作为验证手段，不能作为最终设计。最终分组逻辑必须位于 coordinator 的心跳处理逻辑中，由 coordinator 基于内存中的 `NodeState` 维护 group assignment，并通过 API 下发给 agent。agent 不应该依赖部署脚本生成的静态 CSV 来决定 leader/follower。
 
 ## 分组目标
 
@@ -170,21 +170,82 @@ coordinator 收到 group heartbeat 后：
 - `source` 记录为 `group_id`。
 - 任何一个 agent 的旧状态不影响同请求内其他 agent 的新状态写入。
 
-## 分组编排位置
+## Coordinator 内部分组编排
 
-分组可以在三个位置实现，推荐分阶段演进：
+分组编排必须由 coordinator 完成，并维护在 coordinator 的数据结构中：
 
-| 方案 | 说明 | 优点 | 风险 |
-| --- | --- | --- | --- |
-| 部署侧静态分组 | auto-ops 部署时生成 group env | 实现最快，适合当前脚本体系 | 机器变更后需要重新部署 |
-| coordinator 下发分组 | coordinator 根据心跳视图生成 group plan，agent 拉取 | 动态性好，便于重平衡 | 需要新增 API 与 agent 拉取逻辑 |
-| gossip/自组织分组 | agent 之间自行发现和选主 | coordinator 压力最低 | 实现复杂，故障面大 |
+```text
+NodeState(agent_id) -> HostView -> GroupAssignment
+```
 
-当前推荐路径：
+核心数据结构：
 
-- 第一阶段：部署侧静态分组，快速把 `cdn_new`、`doubao`、`tlbmirror` 切成最多 7 台一组。
-- 第二阶段：coordinator 增加 group plan API，让 agent 周期拉取分组与 leader 信息。
-- 第三阶段：根据线上规模和故障模型评估是否需要更复杂的自组织能力。
+| 数据结构 | 维护者 | 说明 |
+| --- | --- | --- |
+| `states: agent_id -> NodeState` | coordinator | 已有心跳状态表 |
+| `groupPlans: agent_id -> AgentGroupPlan` | coordinator | 每个 agent 当前应执行的 group plan |
+| `groupViews: group_id -> GroupView` | coordinator | 每个 group 的 leader、members、cluster、area |
+
+更新时机：
+
+- 每次 `handleHeartbeat` 合并心跳后，coordinator 基于最新 `states` 重新计算 group assignment。
+- 每次 `handleForward` 合并 peer state 后，也重新计算 group assignment。
+- 只使用 `alive` host 参与 leader/follower 分组。
+- `expired` host 不参与新 group，但仍保留在 host 视图中。
+
+下发 API：
+
+| API | 说明 |
+| --- | --- |
+| `GET /api/agent-plan?agent_id=...` | 返回指定 agent 当前 group plan |
+| `GET /api/groups` | 返回 coordinator 当前所有 group 视图 |
+
+`AgentGroupPlan` 示例：
+
+```json
+{
+  "agent_id": "dc05-p11-t636-n012.byted.org",
+  "group_id": "cdn2/yg/000",
+  "group_mode": "follower",
+  "leader_agent_id": "dc05-p11-t636-n010.byted.org",
+  "leader_url": "http://[fdbd:dc05:11:636::10]:9977",
+  "members": ["dc05-p11-t636-n010.byted.org", "dc05-p11-t636-n012.byted.org"],
+  "cluster": "cdn2",
+  "area": "yg",
+  "size_limit": 7
+}
+```
+
+没有 plan 时返回：
+
+```json
+{
+  "agent_id": "new-agent",
+  "group_id": "direct",
+  "group_mode": "direct",
+  "leader_agent_id": "new-agent",
+  "leader_url": "",
+  "members": ["new-agent"],
+  "cluster": "unknown",
+  "area": "unknown",
+  "size_limit": 7
+}
+```
+
+agent 行为：
+
+- agent 默认以 `dynamic` 模式启动。
+- 每轮先生成本机 heartbeat，再向 coordinator 拉取 `/api/agent-plan`。
+- `direct`：直接向 coordinator 上报单机 heartbeat。
+- `leader`：启动本地 `/group/heartbeat`，聚合 follower state，并向 coordinator 批量上报。
+- `follower`：将本机 heartbeat 上报给 leader，不再直接打 coordinator。
+- 拉取 plan 失败或 leader 上报失败时，agent 可短暂 fallback 到 direct，避免 host 完全失联。
+
+废弃项：
+
+- `docs/script/pulse-generate-group-plan.py` 仅保留为历史验证工具，不再作为生产部署路径。
+- 部署脚本不再传入静态 group CSV。
+- `PULSE_GROUP_MODE=leader/follower` 不再由部署脚本静态写死，默认使用 `dynamic`。
 
 ## 推荐新增配置
 
@@ -196,7 +257,7 @@ agent 环境变量：
 | `PULSE_GROUP_LEADER` | 当前 group leader agent id | `dc05-p11-t636-n012.byted.org` |
 | `PULSE_GROUP_MEMBERS` | 当前 group 成员列表 | `agent-a,agent-b` |
 | `PULSE_GROUP_SIZE_LIMIT` | group size 上限 | `7` |
-| `PULSE_GROUP_MODE` | `direct` 或 `leader` | `leader` |
+| `PULSE_GROUP_MODE` | `dynamic`、`direct`、`leader` 或 `follower` | `dynamic` |
 
 coordinator 可选配置：
 
@@ -207,25 +268,21 @@ coordinator 可选配置：
 
 ## 后续实现建议
 
-### 阶段 A：部署侧静态分组
+### 阶段 A：Coordinator Group Plan
 
-- auto-ops 获取目标机器列表。
-- 对每个集群按 `cluster -> area -> ipv6/agent_id` 排序。
-- 每 7 台切一个 group。
-- 部署时写入 `PULSE_GROUP_*` 环境变量。
-- 暂时保留 direct heartbeat 作为兜底开关。
+- coordinator 在 `handleHeartbeat` 后基于 `states` 计算 `groupPlans` 和 `groupViews`。
+- 新增 `/api/agent-plan` 和 `/api/groups`。
+- agent 默认以 `dynamic` 模式拉取 plan。
 
 ### 阶段 B：Agent Leader 模式
 
-- agent 启动后读取 `PULSE_GROUP_MODE`。
+- agent 启动后读取 coordinator plan。
 - leader 周期性向本机或轻量 HTTP endpoint 收集 follower state。
 - leader 调用 `/heartbeat`，使用 `agents[]` 批量上报。
 - follower 不再直接向 coordinator 上报，除非 leader 长时间不可用。
 
-### 阶段 C：Coordinator Group Plan
+### 阶段 C：可观测性与重平衡
 
-- coordinator 新增 `/api/groups`：
-  - 返回 group、leader、members、size、cluster、area。
 - coordinator 新增 group 健康指标：
   - group alive count
   - leader freshness
@@ -236,11 +293,10 @@ coordinator 可选配置：
 
 当前缺口如下：
 
-- 缺少 group assignment 生成逻辑。
-- 缺少 agent leader/follower 运行模式。
-- 缺少 follower 到 leader 的本地 state 传递协议。
-- 缺少 group plan 展示与健康检查。
-- 缺少 group size 上限 `7` 的测试与部署验证。
+- 静态 group assignment 已验证，但应废弃为生产路径。
+- 需要将 group assignment 迁移到 coordinator 的 `handleHeartbeat` 状态维护流程。
+- 需要 agent 默认通过 coordinator plan 动态切换 leader/follower。
+- 需要 group plan 展示与健康检查。
 
 这些缺口不影响已验证的 group heartbeat 服务端协议，但会影响“通过分组降低 coordinator heartbeat read/write 压力”这一最终目标。
 

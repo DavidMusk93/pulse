@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.Executors;
@@ -57,6 +58,14 @@ public class CoordinatorHttpServer {
                 writeJson(exchange, 200, service.hosts());
                 return;
             }
+            if ("GET".equals(method) && "/api/groups".equals(path)) {
+                writeJson(exchange, 200, service.groups());
+                return;
+            }
+            if ("GET".equals(method) && "/api/agent-plan".equals(path)) {
+                writeJson(exchange, 200, service.agentPlan(queryParam(exchange, "agent_id")));
+                return;
+            }
             if ("GET".equals(method) && ("/".equals(path) || "/hosts".equals(path))) {
                 writeHtml(exchange, 200, HostTilesPage.render(service.coordinatorId(), service.hosts()));
                 return;
@@ -75,6 +84,25 @@ public class CoordinatorHttpServer {
         try (InputStream body = exchange.getRequestBody()) {
             return mapper.readValue(body, type);
         }
+    }
+
+    private static String queryParam(HttpExchange exchange, String key) {
+        String query = exchange.getRequestURI().getRawQuery();
+        if (query == null || query.isBlank()) {
+            return "";
+        }
+        for (String pair : query.split("&")) {
+            int index = pair.indexOf('=');
+            String rawKey = index >= 0 ? pair.substring(0, index) : pair;
+            if (key.equals(decode(rawKey))) {
+                return index >= 0 ? decode(pair.substring(index + 1)) : "";
+            }
+        }
+        return "";
+    }
+
+    private static String decode(String value) {
+        return URLDecoder.decode(value, StandardCharsets.UTF_8);
     }
 
     private void writeJson(HttpExchange exchange, int status, Object body) throws IOException {
