@@ -426,7 +426,7 @@ public final class HostTilesPage {
                         tile.innerHTML = `
                           <div class="tile-scroll">
                             <div class="tile-head">
-                              <div class="tile-agent" data-field="identity"></div>
+                              <div class="tile-agent" data-field="seen"></div>
                               <div class="status" data-field="status"></div>
                             </div>
                             <div class="tile-host" data-field="ip_title"></div>
@@ -434,11 +434,8 @@ public final class HostTilesPage {
                               <div><span>Load</span><span data-field="load"></span></div>
                               <div><span>IP</span><span data-field="ip"></span></div>
                               <div><span>Area</span><span data-field="area"></span></div>
-                              <div><span>Role</span><span data-field="role"></span></div>
                               <div><span>Zone</span><span data-field="zone"></span></div>
                               <div><span>Confirm</span><span data-field="confirmations"></span></div>
-                              <div><span>Source</span><span data-field="source"></span></div>
-                              <div><span>Seen</span><span data-field="seen"></span></div>
                             </div>
                             <div class="worker-list" data-field="workers"></div>
                           </div>
@@ -455,17 +452,14 @@ public final class HostTilesPage {
                         tile.dataset.agentId = agentId;
                         tile.className = 'tile ' + statusClass;
                         tile.style.setProperty('--load-level', level.toFixed(3));
-                        setText(tile, 'identity', [host.role, host.area].filter(Boolean).join(' · ') || 'agent');
+                        setText(tile, 'seen', formatSeen(host.observed_at_ms));
                         setText(tile, 'status', host.status || '');
                         setText(tile, 'ip_title', host.ip || 'unknown ip');
                         setText(tile, 'load', host.load || '');
                         setText(tile, 'ip', host.ip || '');
                         setText(tile, 'area', host.area || '');
-                        setText(tile, 'role', host.role || '');
                         setText(tile, 'zone', host.zone || '');
                         setText(tile, 'confirmations', String(host.heartbeat_confirmations || 0) + '/3 in 20s');
-                        setText(tile, 'source', host.source || '');
-                        setText(tile, 'seen', formatSeen(host.observed_at_ms));
                         renderWorkers(tile.querySelector('[data-field="workers"]'), tideWorkers(host));
                       }
 

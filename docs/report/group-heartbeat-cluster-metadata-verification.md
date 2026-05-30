@@ -733,6 +733,58 @@ Web UI 验证：
 - 本次改动包含 agent 侧采集逻辑、coordinator 侧 alive 规则和 UI 展示，因此已全量同步 3 个集群的 coordinator & agent。
 - `.tmp/verify_tide_worker_alive.py` 是本次手工验证脚本，位于已忽略的 `.tmp/` 下，不纳入提交。
 
+## Host Tile Header Seen 调整
+
+需求：
+
+- 卡片 header 展示 `Seen` datetime。
+- 磁贴正文不展示 `Role`。
+- 磁贴正文不展示 `Source`。
+
+本地验证：
+
+```bash
+mvn test
+mvn package
+```
+
+结果：
+
+- `mvn test`：`18 tests, 0 failures, 0 errors`。
+- `mvn package`：构建成功。
+- Jar SHA256：`fdf5afd7c3029d4fadb99cfb129cceac7084e4fb373cc4f2f86b34229916026d`。
+
+部署范围：
+
+- 本次仅修改 coordinator 内嵌 `/hosts` 页面渲染和设计文档，不涉及 agent 采集或心跳协议。
+- 仅升级 3 台 coordinator：
+  - `fdbd:dc05:11:634::45`
+  - `fdbd:dc05:13:10c::40`
+  - `fdbd:dc07:0:810::44`
+
+部署结果：
+
+- Dry-run：`total=3`。
+- 部署：`summary: total=3 ok=3 failed=0`。
+
+验证结果：
+
+| Coordinator | Total | Alive | Warming | Expired | Required UI | Forbidden UI |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| `fdbd:dc05:11:634::45` | 63 | 63 | 0 | 0 | `seen`, `formatSeen`, `ip_title` | none |
+| `fdbd:dc05:13:10c::40` | 63 | 63 | 0 | 0 | `seen`, `formatSeen`, `ip_title` | none |
+| `fdbd:dc07:0:810::44` | 63 | 63 | 0 | 0 | `seen`, `formatSeen`, `ip_title` | none |
+
+Forbidden UI 确认不包含：
+
+- `data-field="role"`
+- `data-field="source"`
+- `data-field="identity"`
+- `<span>Role</span>`
+- `<span>Source</span>`
+- `<span>Seq</span>`
+- `<span>Rank</span>`
+
 ## Host UI 去动效与 Keyed DOM 刷新
 
 问题：

@@ -462,7 +462,9 @@ Web 页面按 `cluster` 进行一级分组：
 - 磁贴不做额外交互动效，保持自然滚动；禁止持续播放的水波、扫光、果冻抖动或背景动态。
 - cluster 只用于 section/group 表达，不在单个 agent 磁贴中重复展示。
 - 磁贴不展示 hostname，不展示 `Seq` 和 `Rank`。
-- 磁贴展示 `IP`、`Area`、`Role`、`Zone`、`Load`、`Confirm`、`Source`、`Seen`。
+- 磁贴 header 展示 `Seen` datetime 与 status。
+- 磁贴正文展示 `IP`、`Area`、`Zone`、`Load`、`Confirm`。
+- 磁贴不展示 `Role` 和 `Source`。
 - 磁贴展示每个 `tide_worker` 的 `pid`、`cpu_percent`、`mem_percent`、`PORT1`、`TIDELET_COMPONENT_VERSION`；`pid` 变化用于判断进程重启。
 
 UI 开发门禁：
