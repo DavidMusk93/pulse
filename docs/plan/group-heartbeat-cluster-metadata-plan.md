@@ -74,6 +74,7 @@
   - plan 为 `leader` 时聚合 follower 并批量上报。
   - plan 为 `follower` 时上报给 leader。
   - 非 leader 节点拒绝 `/group/heartbeat`，避免旧 leader 缓存 plan 继续传播。
+  - leader 只接受当前 plan `members` 内的 follower，避免 stale follower 挤占 group batch。
   - leader 将 batch heartbeat response 中的 `agents[].messages[]` 转发给 follower。
   - agent 和 group leader 每轮 heartbeat 只写一个 coordinator，禁止向所有 coordinator 广播 `/heartbeat`。
   - plan 不存在或请求失败时 fallback 到 direct。
