@@ -421,6 +421,30 @@ UI check 项：
 - `mvn test`：17 个测试全部通过。
 - `mvn package`：构建成功。
 
+部署结果：
+
+| 集群 | 并发 | 结果 |
+| --- | ---: | --- |
+| `cdn_new` | 8 | `summary: total=50 ok=50 failed=0` |
+| `doubao` | 8 | `summary: total=8 ok=8 failed=0` |
+| `tlbmirror` | 8 | `summary: total=5 ok=5 failed=0` |
+
+Service verify：
+
+| 集群 | 并发 | 结果 |
+| --- | ---: | --- |
+| `cdn_new` | 8 | `summary: total=50 ok=50 failed=0` |
+| `doubao` | 8 | `summary: total=8 ok=8 failed=0` |
+| `tlbmirror` | 8 | `summary: total=5 ok=5 failed=0` |
+
+Coordinator 收敛与 UI 验证：
+
+| Coordinator | Total | Alive | Expired | Direct | Groups | Max Group Source Count | UI Checks |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `fdbd:dc05:11:634::45` | 63 | 63 | 0 | 0 | 16 | 7 | pass |
+| `fdbd:dc05:13:10c::40` | 63 | 63 | 0 | 0 | 16 | 7 | pass |
+| `fdbd:dc07:0:810::44` | 63 | 63 | 0 | 0 | 16 | 7 | pass |
+
 UI check 项：
 
 - `PulseView reactive dashboard`
@@ -429,6 +453,8 @@ UI check 项：
 - `JSON diff refresh`
 - `window.PulseView = PulseView`
 - 不包含 `http-equiv="refresh"`
+- `aspect-ratio: 1 / 1`
+- `liquid-flow`
 
 部署约束：
 
