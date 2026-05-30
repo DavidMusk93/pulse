@@ -21,7 +21,7 @@ public class AgentTaskRunner {
     private final Clock clock;
     private final String taskDir;
     private final ExecutorService executor;
-    private final ConcurrentLinkedQueue<PulseMessage> pendingReplies = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<PendingReply> pendingReplies = new ConcurrentLinkedQueue<>();
     private final Set<String> acceptedTasks = ConcurrentHashMap.newKeySet();
 
     public AgentTaskRunner(String agentId, Clock clock) {
@@ -43,9 +43,16 @@ public class AgentTaskRunner {
 
     public List<PulseMessage> drainReplies() {
         List<PulseMessage> replies = new ArrayList<>();
-        PulseMessage message;
-        while ((message = pendingReplies.poll()) != null) {
-            replies.add(message);
+        int size = pendingReplies.size();
+        for (int index = 0; index < size; index++) {
+            PendingReply reply = pendingReplies.poll();
+            if (reply == null) {
+                break;
+            }
+            replies.add(reply.message());
+            if (reply.remainingSends() > 1) {
+                pendingReplies.add(new PendingReply(reply.message(), reply.remainingSends() - 1));
+            }
         }
         return replies;
     }
@@ -61,10 +68,10 @@ public class AgentTaskRunner {
         }
         TaskDefinition definition = definition(taskType);
         if (definition == null || !definition.scriptPath().equals(scriptPath) || !definition.args().equals(argsValue(payload))) {
-            pendingReplies.add(resultMessage(message.messageId(), taskId, traceId, taskType, "rejected", null, 0, 0, "", "", false, "task is not in agent allowlist"));
+            pendingReplies.add(new PendingReply(resultMessage(message.messageId(), taskId, traceId, taskType, "rejected", null, 0, 0, "", "", false, "task is not in agent allowlist"), 3));
             return;
         }
-        pendingReplies.add(new PulseMessage(
+        pendingReplies.add(new PendingReply(new PulseMessage(
                 "reply-task-accepted-" + agentId + "-" + taskId,
                 "reply.task_accepted",
                 1,
@@ -76,7 +83,7 @@ public class AgentTaskRunner {
                         "agent_id", agentId,
                         "task_type", taskType,
                         "status", "accepted",
-                        "accepted_at_ms", clock.millis())));
+                        "accepted_at_ms", clock.millis())), 1));
         executor.submit(() -> execute(message.messageId(), taskId, traceId, definition));
     }
 
@@ -85,7 +92,7 @@ public class AgentTaskRunner {
         Process process = null;
         try {
             if (!Files.isRegularFile(Path.of(definition.scriptPath()))) {
-                pendingReplies.add(resultMessage(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", "", false, "script not found"));
+                pendingReplies.add(new PendingReply(resultMessage(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", "", false, "script not found"), 3));
                 return;
             }
             List<String> command = new ArrayList<>();
@@ -108,13 +115,13 @@ public class AgentTaskRunner {
             long finishedAt = clock.millis();
             if (!finished) {
                 process.destroyForcibly();
-                pendingReplies.add(resultMessage(replyTo, taskId, traceId, definition.taskType(), "timed_out", null, started, finishedAt, stdout.toString(StandardCharsets.UTF_8), stderr.toString(StandardCharsets.UTF_8), false, "task timed out"));
+                pendingReplies.add(new PendingReply(resultMessage(replyTo, taskId, traceId, definition.taskType(), "timed_out", null, started, finishedAt, stdout.toString(StandardCharsets.UTF_8), stderr.toString(StandardCharsets.UTF_8), false, "task timed out"), 3));
                 return;
             }
             stdoutThread.join(1000);
             stderrThread.join(1000);
             int exitCode = process.exitValue();
-            pendingReplies.add(resultMessage(
+            pendingReplies.add(new PendingReply(resultMessage(
                     replyTo,
                     taskId,
                     traceId,
@@ -126,12 +133,12 @@ public class AgentTaskRunner {
                     stdout.toString(StandardCharsets.UTF_8),
                     stderr.toString(StandardCharsets.UTF_8),
                     false,
-                    ""));
+                    ""), 3));
         } catch (Exception exception) {
             if (process != null) {
                 process.destroyForcibly();
             }
-            pendingReplies.add(resultMessage(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", "", false, exception.getMessage()));
+            pendingReplies.add(new PendingReply(resultMessage(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", "", false, exception.getMessage()), 3));
         }
     }
 
@@ -221,4 +228,6 @@ public class AgentTaskRunner {
             // Best-effort output capture must not fail the task runner.
         }
     }
+
+    private record PendingReply(PulseMessage message, int remainingSends) {}
 }

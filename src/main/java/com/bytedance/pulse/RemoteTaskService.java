@@ -144,6 +144,7 @@ public class RemoteTaskService {
                 TaskResult result = resultFrom(agentId, payload);
                 inFlight(agentId).remove(taskId);
                 ArrayDeque<TaskResult> completions = completions(agentId);
+                completions.removeIf(existing -> existing.taskId().equals(result.taskId()));
                 completions.addLast(result);
                 while (completions.size() > MAX_COMPLETIONS_PER_AGENT) {
                     completions.removeFirst();

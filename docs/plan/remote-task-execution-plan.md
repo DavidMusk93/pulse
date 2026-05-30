@@ -159,6 +159,8 @@ PulseAgentApp 改动：
 - 每次 heartbeat response 后处理 `cmd.task_execute`。
 - task accepted 后尽快触发一次 heartbeat，携带 `reply.task_accepted`。
 - task 完成后尽快触发一次 heartbeat，携带 `reply.task_result`。
+- task result 随后续 3 次 heartbeat 重复上报，仍保持每次 heartbeat 只写一个 coordinator。
+- coordinator completion queue 按 `task_id` 去重，避免多 coordinator 轮询或重试造成重复展示。
 - direct、leader、follower、dynamic 模式都共用同一 TaskRunner。
 
 测试：

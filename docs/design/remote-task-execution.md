@@ -63,6 +63,7 @@ group leader 是转发层，不是 task 权威。
 - 使用本地 `TaskRunner` 幂等接收 task。
 - 在后台线程池异步执行 task。
 - 执行完成后生成 `reply.task_result`，随下一次或立即触发的 heartbeat 上报。
+- `reply.task_result` 默认随后续 3 次 heartbeat 重复上报，确保轮询多 coordinator 时每个 coordinator 都能收到 completion。
 - 维护本地已接收/执行过的 `task_id` 与 `trace_id` 缓存，避免重复执行。
 
 ### Web UI
@@ -142,6 +143,7 @@ ExecutionQueue {
 - coordinator 下发 task 后先标记 `delivered` 并放入 `in_flight`。
 - agent 回 `reply.task_accepted` 后标记 `accepted`。
 - agent 回 `reply.task_result` 后从 `in_flight` 移除，结果进入 completion queue。
+- coordinator 按 `task_id` 对 completion queue 去重；同一 result 重复到达时更新为最后一次结果，不新增重复 completion。
 - 超过 `deadline_ms` 未完成时标记 `timed_out`，仍允许迟到 result 进入 completion queue，并在 trace log 标记 `late_result`。
 
 ### CompletionQueue
