@@ -246,7 +246,8 @@ agent 行为：
 coordinator 一致性约束：
 
 - 当前阶段不实现 coordinator 间强一致复制。
-- 为避免某个 coordinator 长时间收不到 group 内 host 更新，leader 每轮 batch heartbeat 必须广播到全部 coordinator。
+- agent 按 `PULSE_COORDINATOR_URLS` 的顺序优先采纳主 coordinator 返回的 `cmd.group_plan`，避免不同 coordinator 基于局部状态返回的 plan 互相覆盖。
+- 为避免某个 coordinator 长时间收不到 group 内 host 更新，leader 每轮 batch heartbeat 必须广播到全部 coordinator，但只使用主 coordinator 或主 coordinator 故障后的第一个成功响应更新本地 plan。
 - follower 不直接打 coordinator，因此 coordinator 侧请求数从 `N * coordinator_count` 收敛为 `group_count * coordinator_count`。
 - 默认 heartbeat interval 为 5s，TTL 调整为 30s，避免多 coordinator fanout、网络抖动和部署重启时踩 15s 过期边界。
 
@@ -311,7 +312,7 @@ coordinator 可选配置：
 仍需验证和增强：
 
 - 线上多 coordinator 场景需要确认所有 coordinator 都能稳定看到完整 alive host。
-- group leader 需要持续广播 batch heartbeat 到全部 coordinator，避免 coordinator 间无复制导致局部过期。
+- group leader 需要持续广播 batch heartbeat 到全部 coordinator，同时保持主 coordinator plan 的单一决策源。
 - 后续可补充 group 健康指标和 Web 只读展示，但不作为 agent 获取 plan 的接口。
 
 这些缺口不影响已验证的 group heartbeat 服务端协议，但会影响“通过分组降低 coordinator heartbeat read/write 压力”这一最终目标。
