@@ -62,7 +62,7 @@ public final class HostTilesPage {
                       min-height: 0;
                       padding: 0;
                       color: white;
-                      border-radius: 0;
+                      border-radius: 22px;
                       background:
                         linear-gradient(135deg,
                           hsl(var(--cluster-hue) 44% calc(68% - var(--load-level) * 24%)),
@@ -105,6 +105,7 @@ public final class HostTilesPage {
                       letter-spacing: .04em;
                       text-transform: uppercase;
                       background: rgba(255,255,255,.14);
+                      border-radius: 999px;
                     }
                     .tile-agent {
                       min-width: 0;
@@ -131,6 +132,7 @@ public final class HostTilesPage {
                       padding: 9px;
                       border: 1px solid rgba(255,255,255,.24);
                       background: rgba(15,23,42,.16);
+                      border-radius: 14px;
                     }
                     .worker-title {
                       display: flex;
@@ -164,8 +166,10 @@ public final class HostTilesPage {
                     .tile-meta div {
                       min-width: 0;
                       overflow-wrap: anywhere;
-                      padding-bottom: 7px;
-                      border-bottom: 1px solid rgba(255,255,255,.2);
+                      padding: 7px 8px;
+                      border: 1px solid rgba(255,255,255,.16);
+                      border-radius: 12px;
+                      background: rgba(15,23,42,.1);
                     }
                     .tile-meta span {
                       display: block;
@@ -182,6 +186,8 @@ public final class HostTilesPage {
                       bottom: 0;
                       height: 7px;
                       background: rgba(15, 23, 42, .24);
+                      border-radius: 0 0 22px 22px;
+                      overflow: hidden;
                     }
                     .load-bar::after {
                       content: "";
@@ -434,7 +440,6 @@ public final class HostTilesPage {
                               <div><span>Load</span><span data-field="load"></span></div>
                               <div><span>IP</span><span data-field="ip"></span></div>
                               <div><span>Area</span><span data-field="area"></span></div>
-                              <div><span>Zone</span><span data-field="zone"></span></div>
                               <div><span>Confirm</span><span data-field="confirmations"></span></div>
                             </div>
                             <div class="worker-list" data-field="workers"></div>
@@ -458,7 +463,6 @@ public final class HostTilesPage {
                         setText(tile, 'load', host.load || '');
                         setText(tile, 'ip', host.ip || '');
                         setText(tile, 'area', host.area || '');
-                        setText(tile, 'zone', host.zone || '');
                         setText(tile, 'confirmations', String(host.heartbeat_confirmations || 0) + '/3 in 20s');
                         renderWorkers(tile.querySelector('[data-field="workers"]'), tideWorkers(host));
                       }

@@ -140,9 +140,13 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("pid ${escapeHtml(worker.pid || '')}"));
         assertTrue(response.body().contains("host.heartbeat_confirmations"));
         assertTrue(response.body().contains("data-field=\"seen\""));
+        assertTrue(response.body().contains("border-radius: 22px"));
+        assertTrue(response.body().contains("border-radius: 14px"));
+        assertTrue(response.body().contains("border-radius: 999px"));
         assertTrue(response.body().contains("background: rgba(15, 23, 42, .24)"));
         assertTrue(response.body().contains("background: hsl(var(--cluster-hue) 48% 24%)"));
         assertTrue(!response.body().contains("data-field=\"host\""));
+        assertTrue(!response.body().contains("data-field=\"zone\""));
         assertTrue(!response.body().contains("data-field=\"identity\""));
         assertTrue(!response.body().contains("data-field=\"role\""));
         assertTrue(!response.body().contains("data-field=\"source\""));
@@ -150,6 +154,7 @@ class CoordinatorHttpServerTest {
         assertTrue(!response.body().contains("<span>Rank</span>"));
         assertTrue(!response.body().contains("<span>Role</span>"));
         assertTrue(!response.body().contains("<span>Source</span>"));
+        assertTrue(!response.body().contains("<span>Zone</span>"));
         assertTrue(!response.body().contains("background: rgba(255,255,255,.86)"));
         assertTrue(!response.body().contains("liquid-flow"));
         assertTrue(!response.body().contains("water-ripple"));

@@ -785,6 +785,56 @@ Forbidden UI 确认不包含：
 - `<span>Seq</span>`
 - `<span>Rank</span>`
 
+## Host Tile 去 Zone 与圆角
+
+需求：
+
+- `Area` 和 `Zone` 展示重复，磁贴只保留 `Area`。
+- 矩形或长方形 UI 元素增加圆润边角。
+
+本地验证：
+
+```bash
+mvn test
+mvn package
+```
+
+结果：
+
+- `mvn test`：`18 tests, 0 failures, 0 errors`。
+- `mvn package`：构建成功。
+- Jar SHA256：`683463e10d3978f9d7f04fa0f275443cda1d17d029bbcc157ce92e286a3af4bf`。
+
+部署范围：
+
+- 本次仅修改 coordinator 内嵌 `/hosts` 页面渲染和设计文档，不涉及 agent 采集或心跳协议。
+- 仅升级 3 台 coordinator：
+  - `fdbd:dc05:11:634::45`
+  - `fdbd:dc05:13:10c::40`
+  - `fdbd:dc07:0:810::44`
+
+部署结果：
+
+- Dry-run：`total=3`。
+- 部署：`summary: total=3 ok=3 failed=0`。
+
+验证结果：
+
+| Coordinator | Total | Alive | Warming | Expired | Required UI | Forbidden UI |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| `fdbd:dc05:11:634::45` | 63 | 63 | 0 | 0 | `border-radius: 22px`, `border-radius: 14px`, `border-radius: 999px`, `area` | none |
+| `fdbd:dc05:13:10c::40` | 63 | 63 | 0 | 0 | `border-radius: 22px`, `border-radius: 14px`, `border-radius: 999px`, `area` | none |
+| `fdbd:dc07:0:810::44` | 63 | 63 | 0 | 0 | `border-radius: 22px`, `border-radius: 14px`, `border-radius: 999px`, `area` | none |
+
+Forbidden UI 确认不包含：
+
+- `data-field="zone"`
+- `<span>Zone</span>`
+- `data-field="role"`
+- `data-field="source"`
+- `<span>Seq</span>`
+- `<span>Rank</span>`
+
 ## Host UI 去动效与 Keyed DOM 刷新
 
 问题：

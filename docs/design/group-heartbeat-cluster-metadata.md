@@ -459,11 +459,13 @@ Web 页面按 `cluster` 进行一级分组：
 - 组内 host 按 `load` 从高到低排序。
 - 同一 cluster 内，`load` 越高磁贴色彩越深，并提供底部 load bar；load bar 必须使用深色轨道和深色/cluster 色填充，禁止白底白条。
 - 磁贴内容超过可视区域时，必须在磁贴内部滚动，文字使用 `overflow-wrap`，禁止覆盖和溢出。
+- 磁贴、状态徽标、指标行、worker 小卡和底部 load bar 等矩形元素必须使用圆润边角，避免硬直方角。
 - 磁贴不做额外交互动效，保持自然滚动；禁止持续播放的水波、扫光、果冻抖动或背景动态。
 - cluster 只用于 section/group 表达，不在单个 agent 磁贴中重复展示。
 - 磁贴不展示 hostname，不展示 `Seq` 和 `Rank`。
 - 磁贴 header 展示 `Seen` datetime 与 status。
-- 磁贴正文展示 `IP`、`Area`、`Zone`、`Load`、`Confirm`。
+- 磁贴正文展示 `IP`、`Area`、`Load`、`Confirm`。
+- `Area` 和 `Zone` 语义重复时只展示 `Area`，不展示 `Zone`。
 - 磁贴不展示 `Role` 和 `Source`。
 - 磁贴展示每个 `tide_worker` 的 `pid`、`cpu_percent`、`mem_percent`、`PORT1`、`TIDELET_COMPONENT_VERSION`；`pid` 变化用于判断进程重启。
 
