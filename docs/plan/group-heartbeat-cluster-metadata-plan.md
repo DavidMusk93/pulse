@@ -33,8 +33,9 @@
   - `/hosts` 改为前端 app shell，禁止 `<meta refresh>` 整页刷新。
   - 内嵌轻量 reactive runtime `PulseView`，不依赖公网 CDN。
   - `PulseView` 每 5s fetch `/api/hosts`，仅更新 app DOM 区域。
+  - `PulseView` 在 render 前后按 `agent_id` 保存并恢复磁贴内部滚动 cursor。
   - 磁贴改为正方形，内部支持滚动，禁止文字覆盖。
-  - 不同 cluster 使用不同色彩。
+  - 不同 cluster 使用不同低饱和冷静色，避免紫色、红色等高刺激亮色。
   - cluster 内按机器 `load` 降序排序。
   - `load` 越高磁贴色彩越重，并展示 load bar。
   - 滑动与 hover 提供轻量流水动效，并支持 `prefers-reduced-motion`。
@@ -104,6 +105,7 @@
   - 验证 `/hosts` 包含正方形磁贴、内部滚动、load 排序和流水动效相关 CSS。
   - 验证 `/hosts` 不包含 `http-equiv="refresh"`。
   - 验证 `/hosts` 包含 `PulseView`、`fetch('/api/hosts'` 和 JSON refresh 文案。
+  - 验证 `/hosts` 包含 `captureTileScroll`、`restoreTileScroll` 和低饱和 palette。
 - 执行：
 
 ```bash

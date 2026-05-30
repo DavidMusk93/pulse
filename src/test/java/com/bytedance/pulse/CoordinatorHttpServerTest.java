@@ -132,6 +132,12 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("prefers-reduced-motion"));
         assertTrue(response.body().contains("loadValue(right) - loadValue(left)"));
         assertTrue(response.body().contains("window.PulseView = PulseView"));
+        assertTrue(response.body().contains("scrollPositions: new Map()"));
+        assertTrue(response.body().contains("captureTileScroll"));
+        assertTrue(response.body().contains("restoreTileScroll"));
+        assertTrue(response.body().contains("data-agent-id"));
+        assertTrue(response.body().contains("const palette = [205, 188, 168, 146, 126, 95, 48, 215, 200, 178]"));
+        assertTrue(!response.body().contains("265, 338"));
         assertTrue(!response.body().contains("http-equiv=\"refresh\""));
     }
 

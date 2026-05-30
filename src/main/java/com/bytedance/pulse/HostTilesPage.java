@@ -65,8 +65,8 @@ public final class HostTilesPage {
                       border-radius: 0;
                       background:
                         linear-gradient(135deg,
-                          hsl(var(--cluster-hue) 78% calc(64% - var(--load-level) * 20%)),
-                          hsl(var(--cluster-hue) 72% calc(48% - var(--load-level) * 14%)));
+                          hsl(var(--cluster-hue) 44% calc(68% - var(--load-level) * 24%)),
+                          hsl(var(--cluster-hue) 42% calc(54% - var(--load-level) * 18%)));
                       box-shadow: none;
                       isolation: isolate;
                     }
@@ -184,9 +184,9 @@ public final class HostTilesPage {
                     .error {
                       margin: 0 clamp(18px, 4vw, 56px) 20px;
                       padding: 14px 16px;
-                      color: #7f1d1d;
-                      background: #fee2e2;
-                      border: 1px solid #fecaca;
+                      color: #3f3f46;
+                      background: #fef3c7;
+                      border: 1px solid #fde68a;
                     }
                     .cluster-section {
                       padding: 0 clamp(18px, 4vw, 56px) 34px;
@@ -202,7 +202,7 @@ public final class HostTilesPage {
                       font-size: 26px;
                       font-weight: 800;
                       letter-spacing: -.04em;
-                      color: hsl(var(--cluster-hue) 72% 36%);
+                      color: hsl(var(--cluster-hue) 44% 34%);
                     }
                     .cluster-title span {
                       color: #64748b;
@@ -231,13 +231,14 @@ public final class HostTilesPage {
                   <script>
                     (() => {
                       const refreshMs = 5000;
-                      const palette = [205, 176, 148, 28, 265, 338, 118, 12, 232, 296];
+                      const palette = [205, 188, 168, 146, 126, 95, 48, 215, 200, 178];
                       const app = document.getElementById('pulse-app');
                       const status = document.getElementById('pulse-status');
                       const coordinatorId = document.body.dataset.coordinatorId || 'unknown';
 
                       const PulseView = {
                         state: {hosts: [], loading: true, error: null, updatedAt: null},
+                        scrollPositions: new Map(),
                         setState(patch) {
                           this.state = {...this.state, ...patch};
                           this.render();
@@ -255,8 +256,33 @@ public final class HostTilesPage {
                           }
                         },
                         render() {
+                          this.captureTileScroll();
                           status.innerHTML = renderStatus(this.state);
                           app.innerHTML = renderApp(this.state);
+                          this.restoreTileScroll();
+                        },
+                        captureTileScroll() {
+                          app.querySelectorAll('[data-agent-id] .tile-scroll').forEach(scroller => {
+                            const tile = scroller.closest('[data-agent-id]');
+                            if (!tile) {
+                              return;
+                            }
+                            this.scrollPositions.set(tile.dataset.agentId, {
+                              top: scroller.scrollTop,
+                              left: scroller.scrollLeft
+                            });
+                          });
+                        },
+                        restoreTileScroll() {
+                          app.querySelectorAll('[data-agent-id] .tile-scroll').forEach(scroller => {
+                            const tile = scroller.closest('[data-agent-id]');
+                            const position = tile ? this.scrollPositions.get(tile.dataset.agentId) : null;
+                            if (!position) {
+                              return;
+                            }
+                            scroller.scrollTop = position.top;
+                            scroller.scrollLeft = position.left;
+                          });
                         },
                         start() {
                           this.render();
@@ -330,11 +356,12 @@ public final class HostTilesPage {
                         const load = loadValue(host);
                         const level = maxLoad <= 0 ? 0 : Math.max(0, Math.min(1, load / maxLoad));
                         const statusClass = host.status === 'expired' ? 'expired' : 'alive';
+                        const agentId = host.agent_id || '';
                         return `
-                          <section class="tile ${statusClass}" style="--load-level:${level.toFixed(3)};">
+                          <section class="tile ${statusClass}" data-agent-id="${escapeHtml(agentId)}" style="--load-level:${level.toFixed(3)};">
                             <div class="tile-scroll">
                               <div class="tile-head">
-                                <div class="tile-agent">${escapeHtml(host.agent_id || '')}</div>
+                                <div class="tile-agent">${escapeHtml(agentId)}</div>
                                 <div class="status">${escapeHtml(host.status || '')}</div>
                               </div>
                               <div class="tile-host">${escapeHtml(host.host || '')}</div>
