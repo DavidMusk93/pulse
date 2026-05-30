@@ -10,6 +10,7 @@ call() {
 set -euo pipefail
 echo "HOST=$(hostname -f 2>/dev/null || hostname)"
 echo "WHOAMI=$(id -un)"
+echo "ARCH=$(uname -m)"
 echo "JAVA=$(command -v java || true)"
 if command -v java >/dev/null 2>&1; then
   java -version 2>&1 | head -n 1
