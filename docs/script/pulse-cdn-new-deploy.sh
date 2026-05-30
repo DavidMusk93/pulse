@@ -37,6 +37,27 @@ mkdir -p "$install_root/bin" "$install_root/etc" "$install_root/logs"
 cp "$remote_tmp/pulse.jar" "$install_root/bin/pulse.jar"
 chmod 0644 "$install_root/bin/pulse.jar"
 
+java_major_version() {
+  local candidate=$1
+  local version_line
+  local version
+  version_line=$("$candidate" -version 2>&1 | head -n 1 || true)
+  version=$(printf '%s\n' "$version_line" | sed -n 's/.*version "\([^"]*\)".*/\1/p')
+  if [[ "$version" == 1.* ]]; then
+    printf '%s\n' "$version" | cut -d. -f2
+  else
+    printf '%s\n' "$version" | cut -d. -f1
+  fi
+}
+
+if [ -n "$java_bin" ] && [ -x "$java_bin" ]; then
+  java_major=$(java_major_version "$java_bin")
+  if [ -z "$java_major" ] || [ "$java_major" -lt 17 ]; then
+    echo "JAVA_BIN_REJECTED=${java_bin} major=${java_major:-unknown}; require Java 17+"
+    java_bin=""
+  fi
+fi
+
 if { [ -z "$java_bin" ] || [ ! -x "$java_bin" ]; } && [ -f "$remote_tmp/pulse-jre.tar.gz" ]; then
   rm -rf "$install_root/jre" "$install_root/jre.tmp"
   mkdir -p "$install_root/jre.tmp"
