@@ -1,0 +1,153 @@
+# Group Heartbeat 与多集群 Agent 执行计划
+
+## 执行原则
+
+- 每个新需求必须先补 `docs/design` 与 `docs/plan`。
+- 每次代码或脚本改动后必须本地验证。
+- 每次有效改动必须及时提交并使用 `127.0.0.1:2080` 推送。
+- 访问 coordinator Web/API 必须使用 `127.0.0.1:6699`。
+- 部署前先 dry-run 确认目标机器范围。
+
+## 阶段 1：设计与计划
+
+- 新增 `docs/design/group-heartbeat-cluster-metadata.md`。
+- 新增 `docs/plan/group-heartbeat-cluster-metadata-plan.md`。
+- 明确 group heartbeat、tide metadata、Web 分组、Arthas、多集群部署与 Java 17 约束。
+
+## 阶段 2：代码开发
+
+- `AgentHeartbeatFactory`：
+  - 增加 `cluster`、`area` 字段。
+  - 从 `PULSE_AGENT_CLUSTER`、`PULSE_AGENT_AREA` 读取。
+  - 心跳 payload 上报 `cluster`、`area`。
+- `HostView`：
+  - 增加顶层 `cluster`、`area` 字段。
+- `CoordinatorService`：
+  - 从 state 中提取 `cluster`、`area`。
+  - host 列表按 `cluster/status/agentId` 排序。
+- `HostTilesPage`：
+  - 按 `cluster` 渲染 `cluster-section`。
+  - 磁贴增加 `Area` 展示。
+
+## 阶段 3：测试驱动
+
+- 更新 `AgentHeartbeatFactoryTest`：
+  - 验证 heartbeat payload 包含 `cluster`、`area`。
+- 更新 `CoordinatorServiceTest`：
+  - 验证 coordinator HostView 顶层字段包含 `cluster`、`area`。
+  - 保持 group heartbeat per-agent `accepted_seq` 测试。
+- 更新 `CoordinatorHttpServerTest`：
+  - 验证 `/hosts` 包含 `cluster-section` 和 cluster 名称。
+- 执行：
+
+```bash
+bash -n docs/script/pulse-cdn-new-deploy.sh docs/script/pulse-cdn-new-probe.sh docs/script/pulse-cdn-new-verify.sh docs/script/pulse-arthas-deploy.sh
+mvn test
+mvn package
+```
+
+## 阶段 4：脚本开发
+
+- `docs/script/pulse-cdn-new-deploy.sh`：
+  - 增加部署参数 `cluster_fallback`。
+  - 读取 `tide_worker` 环境变量。
+  - 写入 `PULSE_AGENT_CLUSTER`、`PULSE_AGENT_AREA`。
+  - 检测 Java 17+，低版本自动切换 bundled JRE。
+  - 部署后显式 `restart` agent/coordinator。
+- `docs/script/pulse-cdn-new-probe.sh`：
+  - 输出 `tide_worker` pid 与 tide metadata。
+- `docs/script/pulse-cdn-new-verify.sh`：
+  - 输出 agent env 中的 cluster/area/role/zone。
+- `docs/script/pulse-arthas-deploy.sh`：
+  - 上传 Arthas boot jar 到 `/data24/otf/pulse/tools/arthas`。
+- `docs/debug/arthas.md`：
+  - 记录部署与使用方式。
+
+## 阶段 5：本地提交
+
+- 本地验证通过后提交并推送：
+
+```bash
+git add ...
+git commit -m "Group hosts by cluster and capture tide metadata"
+git -c http.proxy=socks5h://127.0.0.1:2080 \
+    -c https.proxy=socks5h://127.0.0.1:2080 \
+    push origin main
+```
+
+## 阶段 6：线上验证 Group Heartbeat
+
+- 通过 `127.0.0.1:6699` 代理向 coordinator 发送 `agents[]` 请求。
+- 验证响应：
+  - `ok=true`
+  - `accepted_seq=null`
+  - `agents[].accepted_seq` 正确
+- 拉取 `/api/hosts`：
+  - 验证测试 agent 的 `source=group_id`
+  - 验证 status 为 `alive`
+
+## 阶段 7：多集群部署
+
+- dry-run：
+
+```bash
+bash scripts/call.sh -f docs/script/pulse-cdn-new-deploy.sh -t cdn_new --dry-run
+bash scripts/call.sh -f docs/script/pulse-cdn-new-deploy.sh -t doubao --dry-run
+bash scripts/call.sh -f docs/script/pulse-cdn-new-deploy.sh -t tlbmirror --dry-run
+```
+
+- 真实部署：
+  - `cdn_new`：50 台，包含 3 台 coordinator。
+  - `doubao`：8 台 agent。
+  - `tlbmirror`：5 台 agent。
+- coordinator 地址：
+  - `fdbd:dc05:11:634::45`
+  - `fdbd:dc05:13:10c::40`
+  - `fdbd:dc07:0:810::44`
+
+## 阶段 8：线上验证
+
+- 使用 verify 脚本验证三组机器：
+  - agent active
+  - coordinator active
+  - Java 17+ 或 systemd ExecStart 指向 bundled JRE
+  - env 包含 cluster/area
+- 通过 `127.0.0.1:6699` 访问 coordinator：
+
+```bash
+curl -g -sS --proxy socks5h://127.0.0.1:6699 \
+  "http://[fdbd:dc05:11:634::45]:9966/api/hosts"
+
+curl -g -sS --proxy socks5h://127.0.0.1:6699 \
+  "http://[fdbd:dc05:11:634::45]:9966/hosts"
+```
+
+- 验证：
+  - host count 达到预期。
+  - status 主要为 `alive`。
+  - API 顶层包含 `cluster`、`area`。
+  - HTML 包含 `cluster-section`。
+  - HTML 展示 `doubao`、`tlbmirror`、`cdn2` 或 tide 实际 cluster。
+
+## 阶段 9：报告与收尾
+
+- 新增 `docs/report/group-heartbeat-cluster-metadata-verification.md`。
+- 记录：
+  - group heartbeat 请求与响应。
+  - 三组部署数量与验证结果。
+  - coordinator API host count 与 cluster 分布。
+  - Web 分组展示校验。
+  - Java 17 与 bundled JRE 切换情况。
+- 提交并使用 `127.0.0.1:2080` 推送。
+
+## 当前进度
+
+- 已完成代码开发、测试、打包。
+- 已完成首次多集群部署。
+- 已发现并修复两个部署问题：
+  - 系统 Java 11 被误用，已改为 Java 17+ 检测与 bundled JRE 兜底。
+  - 部署后未重启旧服务，已改为显式 restart。
+- 下一步：
+  - 重新部署三组机器。
+  - 再次验证 `/api/hosts` 与 `/hosts`。
+  - 生成报告并提交推送。
