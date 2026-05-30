@@ -23,8 +23,62 @@ Pulse is a lightweight distributed heartbeat and message coordination system.
 
 ## Development
 
-This project intentionally starts with a minimal Java and Maven skeleton. Runtime framework choices will be added only when necessary.
+This project uses a lightweight Java runtime. The coordinator is implemented with the JDK HTTP server and keeps framework choices minimal.
 
 ```bash
 mvn test
+```
+
+Set up the local development environment without sudo:
+
+```bash
+docs/script/setup-local-dev.sh
+```
+
+Build and start the coordinator:
+
+```bash
+mvn package
+java -jar target/pulse-0.1.0-SNAPSHOT.jar
+```
+
+Optional runtime variables:
+
+```bash
+PULSE_PORT=8080
+PULSE_COORDINATOR_ID=coordinator-local
+```
+
+## Coordinator Runtime
+
+- `POST /heartbeat`: accepts single agent heartbeats or group batch heartbeats.
+- `POST /heartbeat_fwd`: accepts peer coordinator forwarded state messages.
+- `GET /api/hosts`: returns current host state as JSON.
+- `GET /hosts`: renders host information as Windows Phone style tiles.
+
+Example heartbeat:
+
+```bash
+curl -X POST http://127.0.0.1:8080/heartbeat \
+  -H 'content-type: application/json' \
+  -d '{
+    "agent_id": "agent-1",
+    "epoch": 1,
+    "seq": 42,
+    "ttl_ms": 15000,
+    "messages": [
+      {
+        "message_id": "msg-agent-1-42",
+        "type": "state.heartbeat",
+        "version": 1,
+        "payload": {
+          "host": "host-a",
+          "ip": "10.0.0.1",
+          "zone": "az-a",
+          "role": "worker",
+          "load": "0.42"
+        }
+      }
+    ]
+  }'
 ```
