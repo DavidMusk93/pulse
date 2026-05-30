@@ -5,6 +5,7 @@
 - 先设计后实现，设计文档见 `docs/design/remote-task-execution.md`。
 - 不新增 agent 入站接口，所有 agent 指令仍走 `/heartbeat` response。
 - 不允许任意命令执行，第一版只支持 allowlist dry-run task。
+- 预定义 task 脚本必须放在当前 Pulse 仓库 `docs/task/`，并由部署脚本同步到远端 `${install_root}/tasks`。
 - 每次代码改动后执行 `mvn test` 和 `mvn package`。
 - 部署前必须 dry-run 确认目标范围。
 - 有效改动必须及时提交并推送。
@@ -66,6 +67,9 @@
     - `prepare_disk_layout_dry_run`
     - `analyze_block_layout_dry_run`
   - 自动填充 `script_path` 和 `args=["--dry-run"]`。
+  - 远端 script path 固定为：
+    - `/data24/otf/pulse/tasks/prepare-disk-layout.sh`
+    - `/data24/otf/pulse/tasks/analyze-block-layout.py`
 - `TaskQueueService`
   - `agent_id -> ExecutionQueue`
   - `agent_id -> CompletionQueue`

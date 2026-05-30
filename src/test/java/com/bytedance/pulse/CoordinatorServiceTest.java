@@ -134,6 +134,53 @@ class CoordinatorServiceTest {
     }
 
     @Test
+    void remoteTaskFlowsThroughHeartbeatAndCompletionQueue() {
+        CoordinatorService service = new CoordinatorService("coordinator-a", clock);
+        service.enqueueTask("agent-1", "prepare_disk_layout_dry_run");
+
+        HeartbeatResponse commandResponse = service.handleHeartbeat(singleHeartbeat("agent-1", 1, 10, "host-1", "10.0.0.1"));
+        PulseMessage command = commandResponse.messages().stream()
+                .filter(message -> "cmd.task_execute".equals(message.type()))
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals("prepare_disk_layout_dry_run", command.payload().get("task_type"));
+        assertEquals(List.of("--dry-run"), command.payload().get("args"));
+
+        service.handleHeartbeat(new HeartbeatRequest(
+                null,
+                "agent-1",
+                1L,
+                11L,
+                15_000L,
+                List.of(
+                        new PulseMessage("state-agent-1-11", "state.heartbeat", 1, null, null, Map.of("host", "host-1")),
+                        new PulseMessage(
+                                "result-agent-1",
+                                "reply.task_result",
+                                1,
+                                command.messageId(),
+                                null,
+                                Map.ofEntries(
+                                        Map.entry("task_id", command.payload().get("task_id")),
+                                        Map.entry("trace_id", command.payload().get("trace_id")),
+                                        Map.entry("task_type", "prepare_disk_layout_dry_run"),
+                                        Map.entry("status", "completed"),
+                                        Map.entry("exit_code", 0),
+                                        Map.entry("started_at_ms", clock.millis()),
+                                        Map.entry("finished_at_ms", clock.millis() + 1),
+                                        Map.entry("duration_ms", 1),
+                                        Map.entry("stdout_tail", "ok"),
+                                        Map.entry("stderr_tail", ""),
+                                        Map.entry("output_truncated", false)))),
+                List.of()));
+
+        TaskSnapshot snapshot = service.taskSnapshot("agent-1");
+        assertEquals(1, snapshot.completionQueue().size());
+        assertEquals("completed", snapshot.completionQueue().get(0).status());
+    }
+
+    @Test
     void forwardOnlyMergesStateMessages() {
         CoordinatorService service = new CoordinatorService("coordinator-b", clock);
         ForwardState state = new ForwardState(

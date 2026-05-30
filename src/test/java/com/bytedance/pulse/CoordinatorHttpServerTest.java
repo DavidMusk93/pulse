@@ -140,6 +140,11 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("pid ${escapeHtml(worker.pid || '')}"));
         assertTrue(response.body().contains("host.heartbeat_confirmations"));
         assertTrue(response.body().contains("data-field=\"seen\""));
+        assertTrue(response.body().contains("data-action=\"run-task\""));
+        assertTrue(response.body().contains("task-modal"));
+        assertTrue(response.body().contains("prepare_disk_layout_dry_run"));
+        assertTrue(response.body().contains("analyze_block_layout_dry_run"));
+        assertTrue(!response.body().contains("shell command"));
         assertTrue(response.body().contains("border-radius: 22px"));
         assertTrue(response.body().contains("border-radius: 14px"));
         assertTrue(response.body().contains("border-radius: 999px"));
@@ -167,6 +172,24 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("const palette = [205, 188, 168, 146, 126, 95, 48, 215, 200, 178]"));
         assertTrue(!response.body().contains("265, 338"));
         assertTrue(!response.body().contains("http-equiv=\"refresh\""));
+    }
+
+    @Test
+    void taskApiOnlyAcceptsAllowlistedDryRunTasks() throws Exception {
+        HttpResponse<String> unknown = postJson("/api/agents/agent-1/tasks", """
+                {"task_type":"rm_rf"}
+                """);
+        assertEquals(400, unknown.statusCode());
+
+        HttpResponse<String> response = postJson("/api/agents/agent-1/tasks", """
+                {"task_type":"analyze_block_layout_dry_run"}
+                """);
+
+        assertEquals(200, response.statusCode());
+        JsonNode json = mapper.readTree(response.body());
+        assertEquals("agent-1", json.get("agent_id").asText());
+        assertEquals("analyze_block_layout_dry_run", json.get("execution_queue").get(0).get("task_type").asText());
+        assertEquals("--dry-run", json.get("execution_queue").get(0).get("args").get(0).asText());
     }
 
     @Test

@@ -55,6 +55,10 @@ public class AgentHeartbeatFactory {
     }
 
     public HeartbeatRequest nextHeartbeat() {
+        return nextHeartbeat(List.of());
+    }
+
+    public HeartbeatRequest nextHeartbeat(List<PulseMessage> extraMessages) {
         long nextSeq = seq.incrementAndGet();
         PulseMessage message = new PulseMessage(
                 "msg-" + agentId + "-" + epoch + "-" + nextSeq + "-state",
@@ -63,7 +67,12 @@ public class AgentHeartbeatFactory {
                 null,
                 null,
                 heartbeatPayload());
-        return new HeartbeatRequest(null, agentId, epoch, nextSeq, ttlMs, List.of(message), List.of());
+        List<PulseMessage> messages = new ArrayList<>();
+        messages.add(message);
+        if (extraMessages != null) {
+            messages.addAll(extraMessages);
+        }
+        return new HeartbeatRequest(null, agentId, epoch, nextSeq, ttlMs, messages, List.of());
     }
 
     private Map<String, Object> heartbeatPayload() {

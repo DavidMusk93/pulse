@@ -11,6 +11,7 @@ call() {
   local jre_tarball=${6:-}
   local cluster_fallback=${7:-unknown}
   local group_plan_path=${8:-}
+  local task_dir
   local scp_host
   local remote_tmp
 
@@ -20,6 +21,11 @@ call() {
   echo "EVENT phase=deploy host=${host} index=${index} status=start root=${install_root}"
   ssh "$host" "mkdir -p '$remote_tmp'"
   scp "$jar_path" "${scp_host}:${remote_tmp}/pulse.jar"
+  task_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../task" && pwd)"
+  if [ -d "$task_dir" ]; then
+    ssh "$host" "mkdir -p '$remote_tmp/tasks'"
+    scp "$task_dir"/prepare-disk-layout.sh "$task_dir"/analyze-block-layout.py "${scp_host}:${remote_tmp}/tasks/"
+  fi
   if [ -n "$jre_tarball" ] && [ "$jre_tarball" != "-" ]; then
     scp "$jre_tarball" "${scp_host}:${remote_tmp}/pulse-jre.tar.gz"
   fi
@@ -37,9 +43,13 @@ cluster_fallback=$5
 
 java_bin="${PULSE_JAVA_BIN:-$(command -v java || true)}"
 
-mkdir -p "$install_root/bin" "$install_root/etc" "$install_root/logs"
+mkdir -p "$install_root/bin" "$install_root/etc" "$install_root/logs" "$install_root/tasks"
 cp "$remote_tmp/pulse.jar" "$install_root/bin/pulse.jar"
 chmod 0644 "$install_root/bin/pulse.jar"
+if [ -d "$remote_tmp/tasks" ]; then
+  cp "$remote_tmp/tasks/"* "$install_root/tasks/"
+  chmod 0755 "$install_root/tasks/"*
+fi
 
 java_major_version() {
   local candidate=$1
@@ -168,6 +178,7 @@ PULSE_GROUP_LEADER_URL=${group_leader_url}
 PULSE_GROUP_MEMBERS=${group_members}
 PULSE_GROUP_SIZE_LIMIT=7
 PULSE_GROUP_PORT=9977
+PULSE_TASK_DIR=${install_root}/tasks
 ENV
 
 cat > "$install_root/etc/pulse-coordinator.env" <<ENV
@@ -178,6 +189,7 @@ PULSE_GROUP_SIZE_LIMIT=7
 PULSE_GROUP_PORT=9977
 PULSE_COORDINATOR_PEERS=${coordinator_peer_urls}
 PULSE_PEER_TIMEOUT_MS=1000
+PULSE_TASK_DIR=${install_root}/tasks
 ENV
 
 install_system_unit() {

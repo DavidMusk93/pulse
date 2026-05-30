@@ -16,6 +16,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.Executors;
 
 public class CoordinatorHttpServer {
@@ -76,6 +77,34 @@ public class CoordinatorHttpServer {
                 writeJson(exchange, 200, service.hosts());
                 return;
             }
+            if (path.startsWith("/api/agents/") && path.endsWith("/tasks")) {
+                String agentId = path.substring("/api/agents/".length(), path.length() - "/tasks".length());
+                if ("GET".equals(method)) {
+                    writeJson(exchange, 200, service.taskSnapshot(agentId));
+                    return;
+                }
+                if ("POST".equals(method)) {
+                    Map<?, ?> body = readJson(exchange, Map.class);
+                    Object taskType = body.get("task_type");
+                    if (taskType == null || taskType.toString().isBlank()) {
+                        throw new IllegalArgumentException("task_type is required");
+                    }
+                    writeJson(exchange, 200, service.enqueueTask(agentId, taskType.toString()));
+                    return;
+                }
+            }
+            Optional<TaskCompletionAction> completionAction = completionAction(path);
+            if ("POST".equals(method) && completionAction.isPresent()) {
+                TaskCompletionAction action = completionAction.get();
+                if ("keep".equals(action.action())) {
+                    writeJson(exchange, 200, service.keepCompletion(action.agentId(), action.taskId()));
+                    return;
+                }
+                if ("pop".equals(action.action())) {
+                    writeJson(exchange, 200, service.popCompletion(action.agentId(), action.taskId()));
+                    return;
+                }
+            }
             if ("GET".equals(method) && ("/".equals(path) || "/hosts".equals(path))) {
                 writeHtml(exchange, 200, HostTilesPage.render(service.coordinatorId(), service.hosts()));
                 return;
@@ -113,6 +142,24 @@ public class CoordinatorHttpServer {
             output.write(bytes);
         }
     }
+
+    private static Optional<TaskCompletionAction> completionAction(String path) {
+        String prefix = "/api/agents/";
+        String marker = "/tasks/completions/";
+        if (!path.startsWith(prefix) || !path.contains(marker)) {
+            return Optional.empty();
+        }
+        int markerIndex = path.indexOf(marker);
+        String agentId = path.substring(prefix.length(), markerIndex);
+        String rest = path.substring(markerIndex + marker.length());
+        int separator = rest.lastIndexOf('/');
+        if (agentId.isBlank() || separator <= 0 || separator >= rest.length() - 1) {
+            return Optional.empty();
+        }
+        return Optional.of(new TaskCompletionAction(agentId, rest.substring(0, separator), rest.substring(separator + 1)));
+    }
+
+    private record TaskCompletionAction(String agentId, String taskId, String action) {}
 
     interface PeerForwarder {
         void forward(HeartbeatRequest request);

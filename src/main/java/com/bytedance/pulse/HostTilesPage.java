@@ -107,6 +107,26 @@ public final class HostTilesPage {
                       background: rgba(255,255,255,.14);
                       border-radius: 999px;
                     }
+                    .tile-actions {
+                      display: flex;
+                      flex-direction: column;
+                      align-items: flex-end;
+                      gap: 6px;
+                    }
+                    .run-button {
+                      border: 1px solid rgba(255,255,255,.42);
+                      border-radius: 999px;
+                      color: white;
+                      background: rgba(15,23,42,.16);
+                      padding: 4px 9px;
+                      font-size: 11px;
+                      font-weight: 750;
+                      cursor: pointer;
+                    }
+                    .run-button:disabled {
+                      cursor: not-allowed;
+                      opacity: .45;
+                    }
                     .tile-agent {
                       min-width: 0;
                       font-size: 13px;
@@ -230,6 +250,69 @@ public final class HostTilesPage {
                       color: #64748b;
                       font-size: 13px;
                     }
+                    .task-modal {
+                      position: fixed;
+                      inset: 0;
+                      z-index: 20;
+                      display: none;
+                      align-items: center;
+                      justify-content: center;
+                      padding: 24px;
+                      background: rgba(15,23,42,.46);
+                    }
+                    .task-modal.open {
+                      display: flex;
+                    }
+                    .task-panel {
+                      width: min(960px, 92vw);
+                      max-height: 88vh;
+                      overflow: auto;
+                      border-radius: 24px;
+                      background: #f8fafc;
+                      color: #172033;
+                      box-shadow: 0 24px 80px rgba(15,23,42,.22);
+                    }
+                    .task-panel header {
+                      padding: 22px;
+                    }
+                    .task-grid {
+                      display: grid;
+                      grid-template-columns: 1fr 1.4fr;
+                      gap: 14px;
+                      padding: 0 22px 22px;
+                    }
+                    .task-card {
+                      border: 1px solid #dbe3ed;
+                      border-radius: 18px;
+                      background: white;
+                      padding: 14px;
+                    }
+                    .task-output {
+                      min-height: 220px;
+                      max-height: 360px;
+                      overflow: auto;
+                      border-radius: 14px;
+                      background: #0f172a;
+                      color: #dbeafe;
+                      padding: 12px;
+                      white-space: pre-wrap;
+                      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                      font-size: 12px;
+                    }
+                    .task-actions {
+                      display: flex;
+                      flex-wrap: wrap;
+                      gap: 10px;
+                      padding: 0 22px 22px;
+                    }
+                    .task-actions button,
+                    .task-actions select {
+                      border: 1px solid #cbd5e1;
+                      border-radius: 999px;
+                      background: white;
+                      color: #172033;
+                      padding: 9px 12px;
+                    }
                   </style>
                 </head>
                 <body data-coordinator-id="__COORDINATOR_ID__">
@@ -241,6 +324,35 @@ public final class HostTilesPage {
                   <main id="pulse-app" data-framework="PulseView">
                     <section class="empty">Loading hosts from /api/hosts...</section>
                   </main>
+                  <div id="task-modal" class="task-modal" aria-hidden="true">
+                    <section class="task-panel">
+                      <header>
+                        <h2 id="task-title">Run Task</h2>
+                        <div id="task-trace" class="subtitle">trace: pending</div>
+                      </header>
+                      <div class="task-grid">
+                        <section class="task-card">
+                          <h3>Execution Queue</h3>
+                          <div id="task-execution"></div>
+                        </section>
+                        <section class="task-card">
+                          <h3>Completion Queue</h3>
+                          <div id="task-completion-meta"></div>
+                          <pre id="task-output" class="task-output"></pre>
+                        </section>
+                      </div>
+                      <div class="task-actions">
+                        <select id="task-type">
+                          <option value="prepare_disk_layout_dry_run">prepare_disk_layout_dry_run</option>
+                          <option value="analyze_block_layout_dry_run">analyze_block_layout_dry_run</option>
+                        </select>
+                        <button id="task-run">Run dry-run</button>
+                        <button id="task-keep">Keep result</button>
+                        <button id="task-pop">Pop and show next</button>
+                        <button id="task-close">Close</button>
+                      </div>
+                    </section>
+                  </div>
                   <script>
                     (() => {
                       const refreshMs = 5000;
@@ -248,6 +360,19 @@ public final class HostTilesPage {
                       const app = document.getElementById('pulse-app');
                       const status = document.getElementById('pulse-status');
                       const coordinatorId = document.body.dataset.coordinatorId || 'unknown';
+                      const taskModal = document.getElementById('task-modal');
+                      const taskTitle = document.getElementById('task-title');
+                      const taskTrace = document.getElementById('task-trace');
+                      const taskExecution = document.getElementById('task-execution');
+                      const taskCompletionMeta = document.getElementById('task-completion-meta');
+                      const taskOutput = document.getElementById('task-output');
+                      const taskType = document.getElementById('task-type');
+                      const taskRun = document.getElementById('task-run');
+                      const taskKeep = document.getElementById('task-keep');
+                      const taskPop = document.getElementById('task-pop');
+                      const taskClose = document.getElementById('task-close');
+                      let activeTaskAgentId = '';
+                      let activeCompletionTaskId = '';
 
                       const PulseView = {
                         state: {hosts: [], loading: true, error: null, updatedAt: null},
@@ -433,7 +558,10 @@ public final class HostTilesPage {
                           <div class="tile-scroll">
                             <div class="tile-head">
                               <div class="tile-agent" data-field="seen"></div>
-                              <div class="status" data-field="status"></div>
+                              <div class="tile-actions">
+                                <div class="status" data-field="status"></div>
+                                <button class="run-button" data-action="run-task" type="button">Run</button>
+                              </div>
                             </div>
                             <div class="tile-host" data-field="ip_title"></div>
                             <div class="tile-meta">
@@ -459,6 +587,9 @@ public final class HostTilesPage {
                         tile.style.setProperty('--load-level', level.toFixed(3));
                         setText(tile, 'seen', formatSeen(host.observed_at_ms));
                         setText(tile, 'status', host.status || '');
+                        const runButton = tile.querySelector('[data-action="run-task"]');
+                        runButton.disabled = host.status !== 'alive';
+                        runButton.onclick = () => openTaskModal(agentId, host.ip || agentId);
                         setText(tile, 'ip_title', host.ip || 'unknown ip');
                         setText(tile, 'load', host.load || '');
                         setText(tile, 'ip', host.ip || '');
@@ -496,6 +627,83 @@ public final class HostTilesPage {
                       function setText(root, field, value) {
                         root.querySelector('[data-field="' + field + '"]').textContent = value;
                       }
+
+                      async function openTaskModal(agentId, label) {
+                        activeTaskAgentId = agentId;
+                        activeCompletionTaskId = '';
+                        taskTitle.textContent = 'Run Task · ' + label;
+                        taskTrace.textContent = 'trace: pending';
+                        taskModal.classList.add('open');
+                        taskModal.setAttribute('aria-hidden', 'false');
+                        await refreshTaskSnapshot();
+                      }
+
+                      async function refreshTaskSnapshot() {
+                        if (!activeTaskAgentId) {
+                          return;
+                        }
+                        const response = await fetch('/api/agents/' + encodeURIComponent(activeTaskAgentId) + '/tasks', {cache: 'no-store'});
+                        if (!response.ok) {
+                          throw new Error('task snapshot HTTP ' + response.status);
+                        }
+                        renderTaskSnapshot(await response.json());
+                      }
+
+                      function renderTaskSnapshot(snapshot) {
+                        const execution = snapshot.execution_queue || [];
+                        const completions = snapshot.completion_queue || [];
+                        const latest = completions[completions.length - 1] || null;
+                        activeCompletionTaskId = latest ? latest.task_id : '';
+                        taskExecution.innerHTML = execution.length
+                          ? execution.map(task => `<div class="tile-meta"><div><span>${escapeHtml(task.status || '')}</span>${escapeHtml(task.task_type || '')}<br>${escapeHtml(task.trace_id || '')}</div></div>`).join('')
+                          : '<div class="subtitle">Execution queue is empty.</div>';
+                        if (latest) {
+                          taskTrace.textContent = 'trace: ' + latest.trace_id;
+                          taskCompletionMeta.innerHTML = `<div>Status <strong>${escapeHtml(latest.status || '')}</strong> · Exit <strong>${escapeHtml(latest.exit_code ?? '-')}</strong> · Duration <strong>${escapeHtml(latest.duration_ms || 0)}ms</strong></div>`;
+                          taskOutput.textContent = ['STDOUT', latest.stdout_tail || '', '', 'STDERR', latest.stderr_tail || '', latest.runner_error ? '\\nERROR\\n' + latest.runner_error : ''].join('\\n');
+                        } else {
+                          taskTrace.textContent = 'trace: pending';
+                          taskCompletionMeta.innerHTML = '<div class="subtitle">No completion yet.</div>';
+                          taskOutput.textContent = '';
+                        }
+                      }
+
+                      taskRun.onclick = async () => {
+                        if (!activeTaskAgentId) {
+                          return;
+                        }
+                        const response = await fetch('/api/agents/' + encodeURIComponent(activeTaskAgentId) + '/tasks', {
+                          method: 'POST',
+                          headers: {'content-type': 'application/json'},
+                          body: JSON.stringify({task_type: taskType.value})
+                        });
+                        if (!response.ok) {
+                          taskOutput.textContent = 'Run failed: HTTP ' + response.status;
+                          return;
+                        }
+                        renderTaskSnapshot(await response.json());
+                      };
+
+                      taskKeep.onclick = async () => {
+                        if (activeTaskAgentId && activeCompletionTaskId) {
+                          await fetch('/api/agents/' + encodeURIComponent(activeTaskAgentId) + '/tasks/completions/' + encodeURIComponent(activeCompletionTaskId) + '/keep', {method: 'POST'});
+                          await refreshTaskSnapshot();
+                        }
+                      };
+
+                      taskPop.onclick = async () => {
+                        if (activeTaskAgentId && activeCompletionTaskId) {
+                          const response = await fetch('/api/agents/' + encodeURIComponent(activeTaskAgentId) + '/tasks/completions/' + encodeURIComponent(activeCompletionTaskId) + '/pop', {method: 'POST'});
+                          if (response.ok) {
+                            renderTaskSnapshot(await response.json());
+                          }
+                        }
+                      };
+
+                      taskClose.onclick = () => {
+                        taskModal.classList.remove('open');
+                        taskModal.setAttribute('aria-hidden', 'true');
+                      };
 
                       function clusterHue(cluster, index) {
                         if (!cluster) {

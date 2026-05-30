@@ -21,12 +21,14 @@ public class CoordinatorService {
     private final Map<String, GroupView> groupViews = new ConcurrentHashMap<>();
     private final int groupSizeLimit;
     private final int groupLeaderPort;
+    private final RemoteTaskService taskService;
 
     public CoordinatorService(String coordinatorId, Clock clock) {
         this.coordinatorId = coordinatorId;
         this.clock = clock;
         this.groupSizeLimit = Math.max(1, Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_SIZE_LIMIT", "7")));
         this.groupLeaderPort = Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_PORT", "9977"));
+        this.taskService = new RemoteTaskService(clock);
     }
 
     public String coordinatorId() {
@@ -40,6 +42,7 @@ public class CoordinatorService {
             String source = request.groupId() == null || request.groupId().isBlank() ? "group" : request.groupId();
             for (AgentHeartbeat agent : request.agents()) {
                 long acceptedSeq = merge(agent, source, now, agent.messages());
+                taskService.handleReplies(agent.agentId(), agent.messages());
                 agentResponses.add(new AgentHeartbeatResponse(agent.agentId(), acceptedSeq, List.of()));
             }
             recomputeGroups(now);
@@ -47,15 +50,16 @@ public class CoordinatorService {
                     .map(response -> new AgentHeartbeatResponse(
                             response.agentId(),
                             response.acceptedSeq(),
-                            List.of(groupPlanMessage(response.agentId()))))
+                            responseMessages(response.agentId())))
                     .toList();
             return HeartbeatResponse.batch(coordinatorId, agentResponses);
         }
 
         AgentHeartbeat heartbeat = request.toSingleAgentHeartbeat();
         long acceptedSeq = merge(heartbeat, "direct", now, heartbeat.messages());
+        taskService.handleReplies(heartbeat.agentId(), heartbeat.messages());
         recomputeGroups(now);
-        return HeartbeatResponse.single(coordinatorId, acceptedSeq, List.of(groupPlanMessage(heartbeat.agentId())));
+        return HeartbeatResponse.single(coordinatorId, acceptedSeq, responseMessages(heartbeat.agentId()));
     }
 
     public HeartbeatForwardResponse handleForward(HeartbeatForwardRequest request) {
@@ -96,6 +100,22 @@ public class CoordinatorService {
                 .toList();
     }
 
+    public TaskSnapshot taskSnapshot(String agentId) {
+        return taskService.snapshot(agentId);
+    }
+
+    public TaskSnapshot enqueueTask(String agentId, String taskType) {
+        return taskService.enqueue(agentId, taskType);
+    }
+
+    public TaskSnapshot keepCompletion(String agentId, String taskId) {
+        return taskService.keepCompletion(agentId, taskId);
+    }
+
+    public TaskSnapshot popCompletion(String agentId, String taskId) {
+        return taskService.popCompletion(agentId, taskId);
+    }
+
     private AgentGroupPlan agentPlan(String agentId) {
         if (agentId == null || agentId.isBlank()) {
             throw new IllegalArgumentException("agent_id is required");
@@ -121,6 +141,13 @@ public class CoordinatorService {
                         "cluster", plan.cluster(),
                         "area", plan.area(),
                         "size_limit", plan.sizeLimit()));
+    }
+
+    private List<PulseMessage> responseMessages(String agentId) {
+        List<PulseMessage> messages = new ArrayList<>();
+        messages.add(groupPlanMessage(agentId));
+        taskService.nextCommand(agentId).ifPresent(messages::add);
+        return messages;
     }
 
     private long merge(AgentHeartbeat heartbeat, String source, long observedAtMs, List<PulseMessage> messages) {

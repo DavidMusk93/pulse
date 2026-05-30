@@ -25,6 +25,9 @@ public final class PulseAgentApp {
         long intervalMs = Long.parseLong(System.getenv().getOrDefault("PULSE_HEARTBEAT_INTERVAL_MS", "5000"));
         Duration timeout = Duration.ofMillis(Long.parseLong(System.getenv().getOrDefault("PULSE_AGENT_TIMEOUT_MS", "2000")));
         AgentHeartbeatFactory heartbeatFactory = AgentHeartbeatFactory.fromEnvironment(Clock.systemUTC());
+        AgentTaskRunner taskRunner = new AgentTaskRunner(
+                System.getenv().getOrDefault("PULSE_AGENT_ID", System.getenv().getOrDefault("PULSE_AGENT_HOST", "unknown")),
+                Clock.systemUTC());
         HeartbeatClient client = new HeartbeatClient(coordinatorUrls, timeout);
         String groupMode = System.getenv().getOrDefault("PULSE_GROUP_MODE", "dynamic");
 
@@ -34,25 +37,28 @@ public final class PulseAgentApp {
                 intervalMs,
                 groupMode);
         if ("leader".equalsIgnoreCase(groupMode)) {
-            runLeader(intervalMs, heartbeatFactory, client);
+            runLeader(intervalMs, heartbeatFactory, taskRunner, client);
             return;
         }
         if ("follower".equalsIgnoreCase(groupMode)) {
-            runFollower(intervalMs, timeout, heartbeatFactory);
+            runFollower(intervalMs, timeout, heartbeatFactory, taskRunner);
             return;
         }
         if ("dynamic".equalsIgnoreCase(groupMode)) {
-            runDynamic(intervalMs, heartbeatFactory, client);
+            runDynamic(intervalMs, heartbeatFactory, taskRunner, client);
             return;
         }
         while (!Thread.currentThread().isInterrupted()) {
-            HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat();
-            client.send("/heartbeat", heartbeat);
+            HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat(taskRunner.drainReplies());
+            HeartbeatResponse response = client.sendForResponse("/heartbeat", heartbeat);
+            if (response != null) {
+                taskRunner.handleMessages(response.messages());
+            }
             Thread.sleep(intervalMs);
         }
     }
 
-    private static void runLeader(long intervalMs, AgentHeartbeatFactory heartbeatFactory, HeartbeatClient client)
+    private static void runLeader(long intervalMs, AgentHeartbeatFactory heartbeatFactory, AgentTaskRunner taskRunner, HeartbeatClient client)
             throws Exception {
         String groupId = System.getenv().getOrDefault("PULSE_GROUP_ID", "unknown/unknown/000");
         int sizeLimit = Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_SIZE_LIMIT", "7"));
@@ -64,14 +70,21 @@ public final class PulseAgentApp {
         receiver.start();
         System.out.printf("Pulse group leader started group_id=%s size_limit=%d port=%d%n", groupId, sizeLimit, port);
         while (!Thread.currentThread().isInterrupted()) {
-            HeartbeatRequest leaderHeartbeat = heartbeatFactory.nextHeartbeat();
+            HeartbeatRequest leaderHeartbeat = heartbeatFactory.nextHeartbeat(taskRunner.drainReplies());
             HeartbeatRequest batch = collector.batch(groupId, leaderHeartbeat, Clock.systemUTC().millis(), sizeLimit);
-            client.send("/heartbeat", batch);
+            HeartbeatResponse response = client.sendForResponse("/heartbeat", batch);
+            if (response != null) {
+                receiver.updatePlans(response);
+                response.agents().stream()
+                        .filter(agent -> leaderHeartbeat.agentId().equals(agent.agentId()))
+                        .findFirst()
+                        .ifPresent(agent -> taskRunner.handleMessages(agent.messages()));
+            }
             Thread.sleep(intervalMs);
         }
     }
 
-    private static void runFollower(long intervalMs, Duration timeout, AgentHeartbeatFactory heartbeatFactory)
+    private static void runFollower(long intervalMs, Duration timeout, AgentHeartbeatFactory heartbeatFactory, AgentTaskRunner taskRunner)
             throws Exception {
         String leaderUrl = System.getenv().getOrDefault("PULSE_GROUP_LEADER_URL", "");
         if (leaderUrl.isBlank()) {
@@ -80,13 +93,16 @@ public final class PulseAgentApp {
         HeartbeatClient leaderClient = new HeartbeatClient(List.of(leaderUrl), timeout);
         System.out.printf("Pulse group follower started leader_url=%s%n", leaderUrl);
         while (!Thread.currentThread().isInterrupted()) {
-            HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat();
-            leaderClient.send("/group/heartbeat", heartbeat);
+            HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat(taskRunner.drainReplies());
+            HeartbeatResponse response = leaderClient.sendForResponse("/group/heartbeat", heartbeat);
+            if (response != null) {
+                taskRunner.handleMessages(response.messages());
+            }
             Thread.sleep(intervalMs);
         }
     }
 
-    private static void runDynamic(long intervalMs, AgentHeartbeatFactory heartbeatFactory, HeartbeatClient client)
+    private static void runDynamic(long intervalMs, AgentHeartbeatFactory heartbeatFactory, AgentTaskRunner taskRunner, HeartbeatClient client)
             throws Exception {
         int port = Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_PORT", "9977"));
         String bindHost = System.getenv().getOrDefault("PULSE_GROUP_BIND_HOST", "::");
@@ -96,7 +112,7 @@ public final class PulseAgentApp {
         AgentGroupPlan currentPlan = AgentGroupPlan.direct("unknown", Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_SIZE_LIMIT", "7")));
         System.out.printf("Pulse dynamic group receiver started port=%d%n", port);
         while (!Thread.currentThread().isInterrupted()) {
-            HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat();
+            HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat(taskRunner.drainReplies());
             if ("unknown".equals(currentPlan.agentId())) {
                 currentPlan = AgentGroupPlan.direct(heartbeat.agentId(), currentPlan.sizeLimit());
             }
@@ -107,12 +123,13 @@ public final class PulseAgentApp {
                 HeartbeatResponse response = client.sendForResponse("/heartbeat", batch);
                 if (response != null) {
                     receiver.updatePlans(response);
-                    currentPlan = planFromMessages(heartbeat.agentId(), response.agents().stream()
+                    List<PulseMessage> selfMessages = response.agents().stream()
                                     .filter(agent -> heartbeat.agentId().equals(agent.agentId()))
                                     .findFirst()
                                     .map(AgentHeartbeatResponse::messages)
-                                    .orElse(List.of()))
-                            .orElse(currentPlan);
+                                    .orElse(List.of());
+                    taskRunner.handleMessages(selfMessages);
+                    currentPlan = planFromMessages(heartbeat.agentId(), selfMessages).orElse(currentPlan);
                 }
             } else if ("follower".equalsIgnoreCase(mode) && !currentPlan.leaderUrl().isBlank()) {
                 HeartbeatClient leaderClient = new HeartbeatClient(List.of(currentPlan.leaderUrl()), client.timeout);
@@ -121,11 +138,13 @@ public final class PulseAgentApp {
                     response = client.sendForResponse("/heartbeat", heartbeat);
                 }
                 if (response != null) {
+                    taskRunner.handleMessages(response.messages());
                     currentPlan = planFromMessages(heartbeat.agentId(), response.messages()).orElse(currentPlan);
                 }
             } else {
                 HeartbeatResponse response = client.sendForResponse("/heartbeat", heartbeat);
                 if (response != null) {
+                    taskRunner.handleMessages(response.messages());
                     currentPlan = planFromMessages(heartbeat.agentId(), response.messages()).orElse(currentPlan);
                 }
             }
