@@ -17,8 +17,12 @@ public class CoordinatorHttpServer {
     private final ObjectMapper mapper = JsonSupport.objectMapper();
 
     public CoordinatorHttpServer(CoordinatorService service, int port) throws IOException {
+        this(service, "127.0.0.1", port);
+    }
+
+    public CoordinatorHttpServer(CoordinatorService service, String bindHost, int port) throws IOException {
         this.service = service;
-        this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
+        this.server = HttpServer.create(new InetSocketAddress(bindHost, port), 0);
         this.server.createContext("/", this::handle);
         this.server.setExecutor(Executors.newCachedThreadPool());
     }

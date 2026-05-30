@@ -47,6 +47,14 @@ Optional runtime variables:
 ```bash
 PULSE_PORT=8080
 PULSE_COORDINATOR_ID=coordinator-local
+PULSE_BIND_HOST=127.0.0.1
+```
+
+Start the agent:
+
+```bash
+PULSE_COORDINATOR_URLS=http://127.0.0.1:8080 \
+  java -cp target/pulse-0.1.0-SNAPSHOT.jar com.bytedance.pulse.PulseAgentApp
 ```
 
 ## Coordinator Runtime
@@ -55,6 +63,32 @@ PULSE_COORDINATOR_ID=coordinator-local
 - `POST /heartbeat_fwd`: accepts peer coordinator forwarded state messages.
 - `GET /api/hosts`: returns current host state as JSON.
 - `GET /hosts`: renders host information as Windows Phone style tiles.
+
+## cdn_new Deployment
+
+Cluster deployment follows the auto-ops central runtime contract in `/Users/bytedance/Documents/gitlab/olap-toolbox/docs/skill/auto-ops.md`.
+
+- Install root: `/data24/otf/pulse`
+- Coordinator bind: IPv6 `::`
+- Coordinator port: `9966`
+- Coordinator service: `pulse-coordinator.service`
+- Agent service: `pulse-agent.service`
+- Scripts: `docs/script/pulse-cdn-new-*.sh`
+
+Coordinator runs with:
+
+```bash
+PULSE_BIND_HOST=::
+PULSE_PORT=9966
+java -jar /data24/otf/pulse/bin/pulse.jar
+```
+
+Agent runs with:
+
+```bash
+PULSE_COORDINATOR_URLS=http://[coordinator-ipv6]:9966
+java -cp /data24/otf/pulse/bin/pulse.jar com.bytedance.pulse.PulseAgentApp
+```
 
 Example heartbeat:
 

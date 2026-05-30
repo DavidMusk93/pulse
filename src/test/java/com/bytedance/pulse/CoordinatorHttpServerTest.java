@@ -28,7 +28,7 @@ class CoordinatorHttpServerTest {
         CoordinatorService service = new CoordinatorService(
                 "coordinator-a",
                 Clock.fixed(Instant.ofEpochMilli(1_710_000_000_000L), ZoneOffset.UTC));
-        server = new CoordinatorHttpServer(service, 0);
+        server = new CoordinatorHttpServer(service, "127.0.0.1", 0);
         server.start();
         baseUrl = "http://127.0.0.1:" + server.port();
     }
