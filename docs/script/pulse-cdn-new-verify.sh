@@ -32,12 +32,14 @@ echo "JAVA_BIN=${java_bin:-missing}"
 if [ -n "$java_bin" ]; then
   echo "JAVA_VERSION=$("$java_bin" -version 2>&1 | head -n 1 || true)"
 fi
+echo "AGENT_EXEC_START=$(systemctl show pulse-agent.service -p ExecStart --value 2>/dev/null || systemctl --user show pulse-agent.service -p ExecStart --value 2>/dev/null || true)"
 echo "AGENT_ACTIVE=$(systemctl is-active pulse-agent.service 2>/dev/null || systemctl --user is-active pulse-agent.service 2>/dev/null || true)"
 if [ -f "$install_root/etc/pulse-agent.env" ]; then
   grep -E '^(PULSE_AGENT_CLUSTER|PULSE_AGENT_AREA|PULSE_AGENT_ROLE|PULSE_AGENT_ZONE)=' "$install_root/etc/pulse-agent.env" || true
 fi
 echo "COORDINATOR_EXPECTED=${is_coordinator}"
 echo "COORDINATOR_ACTIVE=$(systemctl is-active pulse-coordinator.service 2>/dev/null || systemctl --user is-active pulse-coordinator.service 2>/dev/null || true)"
+echo "COORDINATOR_EXEC_START=$(systemctl show pulse-coordinator.service -p ExecStart --value 2>/dev/null || systemctl --user show pulse-coordinator.service -p ExecStart --value 2>/dev/null || true)"
 echo "PORT_9966=$(ss -ltn 2>/dev/null | awk '{print $4}' | grep -E '(:|])9966$' || true)"
 if [ "$is_coordinator" -eq 1 ]; then
   hosts_json=$(curl -g -s --max-time 2 "http://[::1]:9966/api/hosts" || true)
