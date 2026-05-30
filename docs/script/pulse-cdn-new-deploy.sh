@@ -77,6 +77,10 @@ if { [ -z "$java_bin" ] || [ ! -x "$java_bin" ]; } && [ -f "$remote_tmp/pulse-jr
   java_bin="$install_root/jre/bin/java"
 fi
 
+if { [ -z "$java_bin" ] || [ ! -x "$java_bin" ]; } && [ -x "$install_root/jre/bin/java" ]; then
+  java_bin="$install_root/jre/bin/java"
+fi
+
 if [ -z "$java_bin" ] || [ ! -x "$java_bin" ]; then
   echo "ERROR java runtime not found; pass a Linux JRE/JDK tarball as arg6 or set PULSE_JAVA_BIN" >&2
   exit 20

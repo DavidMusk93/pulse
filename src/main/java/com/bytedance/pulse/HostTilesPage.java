@@ -70,25 +70,9 @@ public final class HostTilesPage {
                       box-shadow: none;
                       isolation: isolate;
                     }
-                    .tile::before {
-                      content: "";
-                      position: absolute;
-                      left: -20%;
-                      right: -20%;
-                      bottom: -34%;
-                      height: 62%;
-                      z-index: -1;
-                      background:
-                        radial-gradient(70% 86% at 50% 100%, rgba(255,255,255,.18), transparent 66%),
-                        repeating-radial-gradient(ellipse at 50% 100%,
-                          rgba(255,255,255,.16) 0 2px,
-                          transparent 3px 18px);
-                      background-size: 220px 120px, 180px 90px;
-                      animation: water-ripple 12s linear infinite;
-                      opacity: .38;
-                    }
-                    .tile:hover::before {
-                      opacity: .48;
+                    .tile.jelly-scroll {
+                      animation: jelly-scroll .52s cubic-bezier(.2, .9, .25, 1.25);
+                      transform-origin: 50% 54%;
                     }
                     .tile.expired {
                       background: linear-gradient(135deg, #94a3b8, #64748b);
@@ -212,12 +196,15 @@ public final class HostTilesPage {
                       color: #64748b;
                       font-size: 13px;
                     }
-                    @keyframes water-ripple {
-                      from { background-position: 0 0, 0 0; }
-                      to { background-position: 220px 0, 180px 0; }
+                    @keyframes jelly-scroll {
+                      0% { transform: scale(1); }
+                      20% { transform: scaleX(1.035) scaleY(.972) skewY(-.7deg); }
+                      44% { transform: scaleX(.982) scaleY(1.024) skewY(.55deg); }
+                      68% { transform: scaleX(1.012) scaleY(.992) skewY(-.25deg); }
+                      100% { transform: scale(1); }
                     }
                     @media (prefers-reduced-motion: reduce) {
-                      .tile::before {
+                      .tile.jelly-scroll {
                         animation: none;
                       }
                     }
@@ -243,6 +230,9 @@ public final class HostTilesPage {
                       const PulseView = {
                         state: {hosts: [], loading: true, error: null, updatedAt: null},
                         scrollPositions: new Map(),
+                        jellyTimers: new Map(),
+                        jellyLastPlayedAt: new Map(),
+                        suppressJelly: false,
                         setState(patch) {
                           this.state = {...this.state, ...patch};
                           this.render();
@@ -264,6 +254,7 @@ public final class HostTilesPage {
                           status.innerHTML = renderStatus(this.state);
                           app.innerHTML = renderApp(this.state);
                           this.restoreTileScroll();
+                          this.bindJellyScroll();
                         },
                         captureTileScroll() {
                           app.querySelectorAll('[data-agent-id] .tile-scroll').forEach(scroller => {
@@ -278,6 +269,7 @@ public final class HostTilesPage {
                           });
                         },
                         restoreTileScroll() {
+                          this.suppressJelly = true;
                           app.querySelectorAll('[data-agent-id] .tile-scroll').forEach(scroller => {
                             const tile = scroller.closest('[data-agent-id]');
                             const position = tile ? this.scrollPositions.get(tile.dataset.agentId) : null;
@@ -287,6 +279,41 @@ public final class HostTilesPage {
                             scroller.scrollTop = position.top;
                             scroller.scrollLeft = position.left;
                           });
+                          window.requestAnimationFrame(() => {
+                            this.suppressJelly = false;
+                          });
+                        },
+                        bindJellyScroll() {
+                          app.querySelectorAll('[data-agent-id] .tile-scroll').forEach(scroller => {
+                            scroller.addEventListener('scroll', () => this.playJelly(scroller), {passive: true});
+                          });
+                        },
+                        playJelly(scroller) {
+                          if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                            return;
+                          }
+                          if (this.suppressJelly) {
+                            return;
+                          }
+                          const tile = scroller.closest('[data-agent-id]');
+                          if (!tile) {
+                            return;
+                          }
+                          const agentId = tile.dataset.agentId || '';
+                          const now = Date.now();
+                          const lastPlayedAt = this.jellyLastPlayedAt.get(agentId) || 0;
+                          if (now - lastPlayedAt < 180) {
+                            return;
+                          }
+                          this.jellyLastPlayedAt.set(agentId, now);
+                          tile.classList.remove('jelly-scroll');
+                          void tile.offsetWidth;
+                          tile.classList.add('jelly-scroll');
+                          window.clearTimeout(this.jellyTimers.get(agentId));
+                          this.jellyTimers.set(agentId, window.setTimeout(() => {
+                            tile.classList.remove('jelly-scroll');
+                            this.jellyTimers.delete(agentId);
+                          }, 520));
                         },
                         start() {
                           this.render();

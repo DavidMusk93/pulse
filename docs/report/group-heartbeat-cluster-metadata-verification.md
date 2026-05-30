@@ -570,3 +570,109 @@ UI check 项：
 - 不包含 `liquid-flow`
 - 不包含白色 load fill
 - `prefers-reduced-motion`
+
+## Host UI 果冻滚动纠偏
+
+问题：
+
+- 上一版把“滑动有果冻抖动效果”误解为磁贴底部持续 `water-ripple` 水波背景动态。
+- 实际需求是用户滚动磁贴内容时，当前磁贴产生短暂果冻抖动反馈。
+
+实现结果：
+
+- 移除持续播放的 `water-ripple` 背景动画与 `repeating-radial-gradient` 水波纹。
+- 新增滚动触发的 `jelly-scroll` 动画，只在 `.tile-scroll` 发生滚动时短暂作用于当前磁贴。
+- `restoreTileScroll` 恢复滚动位置时通过 `suppressJelly` 抑制动画，避免自动刷新导致磁贴自己抖动。
+- 增加 `jellyLastPlayedAt` 节流，避免连续滚动事件造成过度抖动。
+- 保留 `prefers-reduced-motion`，用户关闭动效时不触发果冻动画。
+
+本地校验：
+
+- VS Code diagnostics：`HostTilesPage.java` 与 `CoordinatorHttpServerTest.java` 无错误。
+- 代码扫描确认源码不再包含 `water-ripple`、`repeating-radial-gradient` 和 `liquid-flow` 实现。
+- 当前本机环境无 `mvn` 且项目无 `mvnw`，未能执行 Maven 单测。
+
+### Coordinator-only 升级验证
+
+升级时间：2026-05-30 22:00 CST。
+
+范围：
+
+- 仅升级 3 台 coordinator：
+  - `fdbd:dc05:11:634::45`
+  - `fdbd:dc05:13:10c::40`
+  - `fdbd:dc07:0:810::44`
+- 使用 central-runtime：`/Users/david/Documents/fleet-ops/scripts/call.sh`
+- Project 仓库：`/Users/david/Documents/projects/pulse`
+- 产物：`target/pulse-0.1.0-SNAPSHOT.jar`
+- Jar SHA256：`02c78ef4e75afbd4be97560f3d355967ae19f597bf8172b5bdd9544cc136d72a`
+
+本地准备：
+
+- 通过 Homebrew 安装 Maven 与 GNU coreutils，补齐 `setup-local-dev.sh` 和 auto-ops runtime 依赖。
+- 修复 `setup-local-dev.sh` 的 Java 版本判断，支持 `21.0.11` 这类完整版本号。
+- `bash docs/script/setup-local-dev.sh && mvn package` 通过。
+- `mvn test`：17 个测试全部通过。
+
+部署修正：
+
+- `pulse-cdn-new-deploy.sh` 增加复用远端已有 `${install_root}/jre/bin/java` 的兜底逻辑。
+- 原因：coordinator 机器已安装 bundled JRE，UI-only 升级不需要重新上传 JRE tarball。
+
+Dry-run：
+
+```bash
+PATH="/opt/homebrew/opt/coreutils/libexec/gnubin:$PATH" \
+AUTO_OPS_ARTIFACT_ROOT=/Users/david/Documents/projects/pulse/.tmp/auto-ops/coordinator-ui-jelly \
+AUTO_OPS_REPORT_DIR=/Users/david/Documents/projects/pulse/docs/report \
+  bash scripts/call.sh \
+    -f /Users/david/Documents/projects/pulse/docs/script/pulse-cdn-new-deploy.sh \
+    -t cdn_new \
+    --limit-file /Users/david/Documents/projects/pulse/.tmp/auto-ops/coordinator-ui-jelly/coordinators.txt \
+    --parallel 3 \
+    --timeout 240 \
+    --max-hosts 3 \
+    --dry-run \
+    --yes \
+    -- /Users/david/Documents/projects/pulse/target/pulse-0.1.0-SNAPSHOT.jar \
+       'fdbd:dc05:11:634::45,fdbd:dc05:13:10c::40,fdbd:dc07:0:810::44' \
+       /data24/otf/pulse - cdn_new
+```
+
+Dry-run 结果：
+
+- `total=3`
+- 选中 host：
+  - `fdbd:dc05:11:634::45`
+  - `fdbd:dc05:13:10c::40`
+  - `fdbd:dc07:0:810::44`
+
+执行结果：
+
+- 第一次执行未传 `cluster_fallback`，导致 3 台 coordinator 本机 agent env 的 `PULSE_AGENT_ROLE` 短暂变为 `unknown`。
+- 已立即用相同 3 台范围补传 `cdn_new` 重新执行，恢复 `PULSE_AGENT_ROLE=cdn_new`。
+- 最终部署结果：`summary: total=3 ok=3 failed=0`。
+- 3 台 coordinator 均使用 `/data24/otf/pulse/jre/bin/java`，Java 版本为 `17.0.19`。
+
+Service/API 验证：
+
+| Coordinator | Agent | Coordinator | Host Count | Role |
+| --- | --- | --- | ---: | --- |
+| `fdbd:dc05:11:634::45` | active | active | 63 | `cdn_new` |
+| `fdbd:dc05:13:10c::40` | active | active | 63 | `cdn_new` |
+| `fdbd:dc07:0:810::44` | active | active | 63 | `cdn_new` |
+
+Web UI 验证：
+
+| Coordinator | `jelly-scroll` | `bindJellyScroll` | `playJelly` | `suppressJelly` | Forbidden 动效 |
+| --- | --- | --- | --- | --- | --- |
+| `fdbd:dc05:11:634::45` | yes | yes | yes | yes | no |
+| `fdbd:dc05:13:10c::40` | yes | yes | yes | yes | no |
+| `fdbd:dc07:0:810::44` | yes | yes | yes | yes | no |
+
+Forbidden 动效确认不包含：
+
+- `water-ripple`
+- `repeating-radial-gradient`
+- `liquid-flow`
+- `http-equiv="refresh"`

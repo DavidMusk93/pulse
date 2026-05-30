@@ -19,14 +19,17 @@ command -v java >/dev/null 2>&1 || fail "java is required. Install JDK 17 locall
 command -v mvn >/dev/null 2>&1 || fail "maven is required. Install Maven locally and retry."
 
 JAVA_VERSION_OUTPUT="$(java -version 2>&1 | head -n 1)"
-case "${JAVA_VERSION_OUTPUT}" in
-  *\"17\"*|*\"18\"*|*\"19\"*|*\"20\"*|*\"21\"*|*\"22\"*|*\"23\"*|*\"24\"*|*\"25\"*)
-    log "java version ok: ${JAVA_VERSION_OUTPUT}"
-    ;;
-  *)
-    fail "JDK 17+ is required, current: ${JAVA_VERSION_OUTPUT}"
-    ;;
-esac
+JAVA_VERSION="$(printf '%s\n' "${JAVA_VERSION_OUTPUT}" | sed -n 's/.*version "\([^"]*\)".*/\1/p')"
+if [[ "${JAVA_VERSION}" == 1.* ]]; then
+  JAVA_MAJOR="$(printf '%s\n' "${JAVA_VERSION}" | cut -d. -f2)"
+else
+  JAVA_MAJOR="$(printf '%s\n' "${JAVA_VERSION}" | cut -d. -f1)"
+fi
+
+if [ -z "${JAVA_MAJOR}" ] || [ "${JAVA_MAJOR}" -lt 17 ]; then
+  fail "JDK 17+ is required, current: ${JAVA_VERSION_OUTPUT}"
+fi
+log "java version ok: ${JAVA_VERSION_OUTPUT}"
 
 mkdir -p "${DEV_DIR}/logs" "${DEV_DIR}/tmp"
 
