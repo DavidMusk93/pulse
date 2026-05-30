@@ -1,6 +1,6 @@
 # Debug Session: heartbeat-group-expiry
 
-Status: OPEN
+Status: CLOSED
 
 ## Hypotheses
 
@@ -25,3 +25,17 @@ Status: OPEN
 - Continue returning `cmd.group_plan` through heartbeat responses.
 - Broadcast leader batch heartbeat to all coordinators.
 - Increase deployed agent TTL from 15s to 30s to avoid coordinator fanout timing edge.
+
+## Resolution
+
+- H3 was confirmed as a partial cause: leader batch heartbeat must broadcast to all coordinators because coordinators do not replicate state.
+- A second issue was found: every dynamic agent listened on `/group/heartbeat`, so non-leader nodes could accept follower heartbeats and return stale cached plans.
+- Fixes:
+  - leader batch heartbeat broadcasts to all coordinators.
+  - agents prefer the primary coordinator response as the group plan decision source.
+  - non-leader agents reject follower `/group/heartbeat` with `not_group_leader`.
+  - deployed TTL is 30s.
+- Final verification:
+  - all three coordinators report `total=63 alive=63 expired=0 direct=0`.
+  - max group source count is `7`.
+  - deployment verify passes for `cdn_new=50/50`, `doubao=8/8`, `tlbmirror=5/5`.

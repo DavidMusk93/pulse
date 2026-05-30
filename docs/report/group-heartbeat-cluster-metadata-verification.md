@@ -33,7 +33,7 @@ mvn package
 
 结果：
 
-- `mvn test`：8 个测试全部通过。
+- `mvn test`：13 个测试全部通过。
 - `mvn package`：构建成功。
 - 脚本语法检查：通过。
 
@@ -248,9 +248,85 @@ API 验证：
 - 修复 Web/API 缺少顶层 `cluster`、`area` 问题。
 - 修复 Web 页面未按 cluster 分组问题。
 
+## Dynamic Group 最终验证
+
+验证时间：2026-05-30 16:55 CST。
+
+设计约束：
+
+- 不新增 `/api/groups` 或 `/api/agent-plan`。
+- coordinator 通过 `/heartbeat` response message 下发 `cmd.group_plan`。
+- group leader 监听 `/group/heartbeat`，接收 follower heartbeat。
+- agent 优先采纳主 coordinator 返回的 `cmd.group_plan`。
+- leader batch heartbeat 广播到全部 coordinator。
+- 非 leader 节点拒绝 follower `/group/heartbeat`，避免旧 plan 缓存继续传播。
+
+部署结果：
+
+| 集群 | 结果 |
+| --- | --- |
+| `cdn_new` | `summary: total=50 ok=50 failed=0` |
+| `doubao` | `summary: total=8 ok=8 failed=0` |
+| `tlbmirror` | `summary: total=5 ok=5 failed=0` |
+
+Service verify：
+
+| 集群 | 结果 |
+| --- | --- |
+| `cdn_new` | `summary: total=50 ok=50 failed=0` |
+| `doubao` | `summary: total=8 ok=8 failed=0` |
+| `tlbmirror` | `summary: total=5 ok=5 failed=0` |
+
+Coordinator 收敛结果：
+
+| Coordinator | Total | Alive | Expired | Direct | Groups | Max Group Source Count |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `fdbd:dc05:11:634::45` | 63 | 63 | 0 | 0 | 16 | 7 |
+| `fdbd:dc05:13:10c::40` | 63 | 63 | 0 | 0 | 16 | 7 |
+| `fdbd:dc07:0:810::44` | 63 | 63 | 0 | 0 | 16 | 7 |
+
+Cluster 分布：
+
+| Cluster | Count |
+| --- | ---: |
+| `cdn2` | 49 |
+| `cdn_new` | 1 |
+| `doubao` | 8 |
+| `tlbmirror` | 1 |
+| `tlbmirror2` | 4 |
+
+Group source 分布：
+
+| Source | Count |
+| --- | ---: |
+| `cdn2/hl/000` | 7 |
+| `cdn2/yg/000` | 7 |
+| `cdn2/yg/001` | 7 |
+| `cdn2/yg/002` | 7 |
+| `cdn2/yg/003` | 7 |
+| `cdn2/yg/004` | 7 |
+| `doubao/hl/000` | 6 |
+| `cdn2/hl/001` | 3 |
+| `cdn2/yg/005` | 3 |
+| 其余小 group | 1-2 |
+
+Web 验证：
+
+| Coordinator | `/hosts` 验证 |
+| --- | --- |
+| `fdbd:dc05:11:634::45` | 包含 `cluster-section`、`cdn2`、`doubao`、`tlbmirror`、`Area` |
+| `fdbd:dc05:13:10c::40` | 包含 `cluster-section`、`cdn2`、`doubao`、`tlbmirror`、`Area` |
+| `fdbd:dc07:0:810::44` | 包含 `cluster-section`、`cdn2`、`doubao`、`tlbmirror`、`Area` |
+
+最终结论：
+
+- `cdn_new`、`doubao`、`tlbmirror` 共 63 台 agent 全部 alive。
+- 三台 coordinator 视图一致，均无 expired 和 direct。
+- 最大 group source count 为 7，符合 group size 上限。
+- group plan 获取链路完全走 heartbeat message，未新增 agent plan API。
+
 ## 后续建议
 
 - verify 脚本增加 systemd `ExecStart` 输出，避免 PATH Java 与实际运行 Java 混淆。
-- coordinator 增加 `/healthz`，供部署脚本和负载均衡健康检查使用。
 - 对 group heartbeat 增加压测，观察单请求大批量 `agents[]` 的延迟和内存占用。
 - 后续如需更细分聚合，可在 `cluster -> area -> IPv6 prefix` 三层维度扩展。
