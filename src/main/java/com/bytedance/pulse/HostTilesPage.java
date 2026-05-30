@@ -70,10 +70,6 @@ public final class HostTilesPage {
                       box-shadow: none;
                       isolation: isolate;
                     }
-                    .tile.jelly-scroll {
-                      animation: jelly-scroll .52s cubic-bezier(.2, .9, .25, 1.25);
-                      transform-origin: 50% 54%;
-                    }
                     .tile.expired {
                       background: linear-gradient(135deg, #94a3b8, #64748b);
                       filter: grayscale(.2);
@@ -196,24 +192,12 @@ public final class HostTilesPage {
                       color: #64748b;
                       font-size: 13px;
                     }
-                    @keyframes jelly-scroll {
-                      0% { transform: scale(1); }
-                      20% { transform: scaleX(1.035) scaleY(.972) skewY(-.7deg); }
-                      44% { transform: scaleX(.982) scaleY(1.024) skewY(.55deg); }
-                      68% { transform: scaleX(1.012) scaleY(.992) skewY(-.25deg); }
-                      100% { transform: scale(1); }
-                    }
-                    @media (prefers-reduced-motion: reduce) {
-                      .tile.jelly-scroll {
-                        animation: none;
-                      }
-                    }
                   </style>
                 </head>
                 <body data-coordinator-id="__COORDINATOR_ID__">
                   <header>
                     <h1>Pulse Hosts</h1>
-                    <div class="subtitle">Coordinator __COORDINATOR_ID__ · PulseView reactive dashboard · JSON refresh 5s</div>
+                    <div class="subtitle">Coordinator __COORDINATOR_ID__ · PulseView keyed dashboard · JSON refresh 5s</div>
                   </header>
                   <div id="pulse-status" class="app-status"></div>
                   <main id="pulse-app" data-framework="PulseView">
@@ -229,10 +213,8 @@ public final class HostTilesPage {
 
                       const PulseView = {
                         state: {hosts: [], loading: true, error: null, updatedAt: null},
-                        scrollPositions: new Map(),
-                        jellyTimers: new Map(),
-                        jellyLastPlayedAt: new Map(),
-                        suppressJelly: false,
+                        clusterSections: new Map(),
+                        tiles: new Map(),
                         setState(patch) {
                           this.state = {...this.state, ...patch};
                           this.render();
@@ -250,70 +232,113 @@ public final class HostTilesPage {
                           }
                         },
                         render() {
-                          this.captureTileScroll();
+                          const viewport = {left: window.scrollX, top: window.scrollY};
                           status.innerHTML = renderStatus(this.state);
-                          app.innerHTML = renderApp(this.state);
-                          this.restoreTileScroll();
-                          this.bindJellyScroll();
+                          this.renderApp();
+                          this.restoreViewportScroll(viewport);
                         },
-                        captureTileScroll() {
-                          app.querySelectorAll('[data-agent-id] .tile-scroll').forEach(scroller => {
-                            const tile = scroller.closest('[data-agent-id]');
-                            if (!tile) {
-                              return;
-                            }
-                            this.scrollPositions.set(tile.dataset.agentId, {
-                              top: scroller.scrollTop,
-                              left: scroller.scrollLeft
-                            });
-                          });
-                        },
-                        restoreTileScroll() {
-                          this.suppressJelly = true;
-                          app.querySelectorAll('[data-agent-id] .tile-scroll').forEach(scroller => {
-                            const tile = scroller.closest('[data-agent-id]');
-                            const position = tile ? this.scrollPositions.get(tile.dataset.agentId) : null;
-                            if (!position) {
-                              return;
-                            }
-                            scroller.scrollTop = position.top;
-                            scroller.scrollLeft = position.left;
-                          });
+                        restoreViewportScroll(viewport) {
                           window.requestAnimationFrame(() => {
-                            this.suppressJelly = false;
+                            window.scrollTo(viewport.left, viewport.top);
                           });
                         },
-                        bindJellyScroll() {
-                          app.querySelectorAll('[data-agent-id] .tile-scroll').forEach(scroller => {
-                            scroller.addEventListener('scroll', () => this.playJelly(scroller), {passive: true});
+                        renderApp() {
+                          if (this.state.error) {
+                            this.renderMessage('error', 'Failed to refresh /api/hosts: ' + this.state.error);
+                            return;
+                          }
+                          if (this.state.loading) {
+                            this.renderMessage('empty', 'Loading hosts from /api/hosts...');
+                            return;
+                          }
+                          if (!this.state.hosts.length) {
+                            this.renderMessage('empty', 'No hosts yet. POST /heartbeat to light up the board.');
+                            return;
+                          }
+                          this.ensureDashboardMode();
+                          this.updateClusters(groupByCluster(this.state.hosts));
+                        },
+                        renderMessage(className, text) {
+                          if (app.dataset.mode !== className) {
+                            this.clusterSections.clear();
+                            this.tiles.clear();
+                            app.replaceChildren();
+                            const section = document.createElement('section');
+                            section.className = className;
+                            app.appendChild(section);
+                            app.dataset.mode = className;
+                          }
+                          app.firstElementChild.textContent = text;
+                        },
+                        ensureDashboardMode() {
+                          if (app.dataset.mode !== 'dashboard') {
+                            app.replaceChildren();
+                            this.clusterSections.clear();
+                            this.tiles.clear();
+                            app.dataset.mode = 'dashboard';
+                          }
+                        },
+                        updateClusters(groups) {
+                          const activeClusters = new Set();
+                          groups.forEach(([cluster, hosts], index) => {
+                            activeClusters.add(cluster);
+                            const section = this.getOrCreateClusterSection(cluster);
+                            const hue = clusterHue(cluster, index);
+                            section.style.setProperty('--cluster-hue', String(hue));
+                            section.dataset.cluster = cluster;
+                            section.querySelector('[data-cluster-name]').textContent = cluster;
+                            section.querySelector('[data-cluster-count]').textContent =
+                              hosts.length + ' host' + (hosts.length === 1 ? '' : 's');
+                            this.updateTiles(section.querySelector('.tile-grid'), hosts);
+                            placeChild(app, section, index);
+                          });
+                          [...this.clusterSections.entries()].forEach(([cluster, section]) => {
+                            if (!activeClusters.has(cluster)) {
+                              section.querySelectorAll('[data-agent-id]').forEach(tile => {
+                                this.tiles.delete(tile.dataset.agentId || '');
+                              });
+                              section.remove();
+                              this.clusterSections.delete(cluster);
+                            }
                           });
                         },
-                        playJelly(scroller) {
-                          if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-                            return;
+                        getOrCreateClusterSection(cluster) {
+                          let section = this.clusterSections.get(cluster);
+                          if (section) {
+                            return section;
                           }
-                          if (this.suppressJelly) {
-                            return;
+                          section = document.createElement('section');
+                          section.className = 'cluster-section';
+                          section.innerHTML = '<div class="cluster-title"><h2 data-cluster-name></h2><span data-cluster-count></span></div><div class="tile-grid"></div>';
+                          this.clusterSections.set(cluster, section);
+                          return section;
+                        },
+                        updateTiles(grid, hosts) {
+                          const sortedHosts = sortHosts(hosts);
+                          const maxLoad = Math.max(0, ...sortedHosts.map(loadValue));
+                          const activeAgents = new Set();
+                          sortedHosts.forEach((host, rank) => {
+                            const agentId = host.agent_id || '';
+                            activeAgents.add(agentId);
+                            const tile = this.getOrCreateTile(agentId);
+                            updateTile(tile, host, rank, maxLoad);
+                            placeChild(grid, tile, rank);
+                          });
+                          grid.querySelectorAll('[data-agent-id]').forEach(tile => {
+                            if (!activeAgents.has(tile.dataset.agentId || '')) {
+                              tile.remove();
+                              this.tiles.delete(tile.dataset.agentId || '');
+                            }
+                          });
+                        },
+                        getOrCreateTile(agentId) {
+                          let tile = this.tiles.get(agentId);
+                          if (tile) {
+                            return tile;
                           }
-                          const tile = scroller.closest('[data-agent-id]');
-                          if (!tile) {
-                            return;
-                          }
-                          const agentId = tile.dataset.agentId || '';
-                          const now = Date.now();
-                          const lastPlayedAt = this.jellyLastPlayedAt.get(agentId) || 0;
-                          if (now - lastPlayedAt < 180) {
-                            return;
-                          }
-                          this.jellyLastPlayedAt.set(agentId, now);
-                          tile.classList.remove('jelly-scroll');
-                          void tile.offsetWidth;
-                          tile.classList.add('jelly-scroll');
-                          window.clearTimeout(this.jellyTimers.get(agentId));
-                          this.jellyTimers.set(agentId, window.setTimeout(() => {
-                            tile.classList.remove('jelly-scroll');
-                            this.jellyTimers.delete(agentId);
-                          }, 520));
+                          tile = createTile(agentId);
+                          this.tiles.set(agentId, tile);
+                          return tile;
                         },
                         start() {
                           this.render();
@@ -321,6 +346,13 @@ public final class HostTilesPage {
                           window.setInterval(() => this.refresh(), refreshMs);
                         }
                       };
+
+                      function placeChild(parent, child, index) {
+                        const current = parent.children[index] || null;
+                        if (current !== child) {
+                          parent.insertBefore(child, current);
+                        }
+                      }
 
                       function renderStatus(state) {
                         const alive = state.hosts.filter(host => host.status === 'alive').length;
@@ -332,23 +364,8 @@ public final class HostTilesPage {
                           <span>Alive <strong>${alive}</strong></span>
                           <span>Expired <strong>${expired}</strong></span>
                           <span>Updated <strong>${escapeHtml(updated)}</strong></span>
-                          <span>Mode <strong>JSON diff refresh</strong></span>
+                          <span>Mode <strong>Keyed DOM refresh</strong></span>
                         `;
-                      }
-
-                      function renderApp(state) {
-                        if (state.error) {
-                          return `<section class="error">Failed to refresh /api/hosts: ${escapeHtml(state.error)}</section>`;
-                        }
-                        if (state.loading) {
-                          return '<section class="empty">Loading hosts from /api/hosts...</section>';
-                        }
-                        if (!state.hosts.length) {
-                          return '<section class="empty">No hosts yet. POST /heartbeat to light up the board.</section>';
-                        }
-                        return groupByCluster(state.hosts)
-                          .map(([cluster, hosts], index) => renderCluster(cluster, hosts, index))
-                          .join('');
                       }
 
                       function groupByCluster(hosts) {
@@ -363,54 +380,65 @@ public final class HostTilesPage {
                         return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right));
                       }
 
-                      function renderCluster(cluster, hosts, index) {
-                        const sortedHosts = [...hosts].sort((left, right) =>
+                      function sortHosts(hosts) {
+                        return [...hosts].sort((left, right) =>
                           loadValue(right) - loadValue(left)
                           || String(left.host || '').localeCompare(String(right.host || ''))
                           || String(left.agent_id || '').localeCompare(String(right.agent_id || '')));
-                        const maxLoad = Math.max(0, ...sortedHosts.map(loadValue));
-                        const hue = clusterHue(cluster, index);
-                        return `
-                          <section class="cluster-section" data-cluster="${escapeHtml(cluster)}" style="--cluster-hue:${hue};">
-                            <div class="cluster-title">
-                              <h2>${escapeHtml(cluster)}</h2>
-                              <span>${hosts.length} host${hosts.length === 1 ? '' : 's'}</span>
-                            </div>
-                            <div class="tile-grid">
-                              ${sortedHosts.map((host, rank) => renderTile(host, rank, maxLoad)).join('')}
-                            </div>
-                          </section>
-                        `;
                       }
 
-                      function renderTile(host, rank, maxLoad) {
+                      function createTile(agentId) {
+                        const tile = document.createElement('section');
+                        tile.className = 'tile';
+                        tile.dataset.agentId = agentId;
+                        tile.innerHTML = `
+                          <div class="tile-scroll">
+                            <div class="tile-head">
+                              <div class="tile-agent" data-field="agent"></div>
+                              <div class="status" data-field="status"></div>
+                            </div>
+                            <div class="tile-host" data-field="host"></div>
+                            <div class="tile-meta">
+                              <div><span>Load</span><span data-field="load"></span></div>
+                              <div><span>IP</span><span data-field="ip"></span></div>
+                              <div><span>Area</span><span data-field="area"></span></div>
+                              <div><span>Role</span><span data-field="role"></span></div>
+                              <div><span>Zone</span><span data-field="zone"></span></div>
+                              <div><span>Seq</span><span data-field="seq"></span></div>
+                              <div><span>Source</span><span data-field="source"></span></div>
+                              <div><span>Seen</span><span data-field="seen"></span></div>
+                              <div><span>Rank</span><span data-field="rank"></span></div>
+                            </div>
+                          </div>
+                          <div class="load-bar" aria-hidden="true"></div>
+                        `;
+                        return tile;
+                      }
+
+                      function updateTile(tile, host, rank, maxLoad) {
                         const load = loadValue(host);
                         const level = maxLoad <= 0 ? 0 : Math.max(0, Math.min(1, load / maxLoad));
                         const statusClass = host.status === 'expired' ? 'expired' : 'alive';
                         const agentId = host.agent_id || '';
-                        return `
-                          <section class="tile ${statusClass}" data-agent-id="${escapeHtml(agentId)}" style="--load-level:${level.toFixed(3)};">
-                            <div class="tile-scroll">
-                              <div class="tile-head">
-                                <div class="tile-agent">${escapeHtml(agentId)}</div>
-                                <div class="status">${escapeHtml(host.status || '')}</div>
-                              </div>
-                              <div class="tile-host">${escapeHtml(host.host || '')}</div>
-                              <div class="tile-meta">
-                                <div><span>Load</span>${escapeHtml(host.load || '')}</div>
-                                <div><span>IP</span>${escapeHtml(host.ip || '')}</div>
-                                <div><span>Area</span>${escapeHtml(host.area || '')}</div>
-                                <div><span>Role</span>${escapeHtml(host.role || '')}</div>
-                                <div><span>Zone</span>${escapeHtml(host.zone || '')}</div>
-                                <div><span>Seq</span>${escapeHtml(String(host.seq || 0))}</div>
-                                <div><span>Source</span>${escapeHtml(host.source || '')}</div>
-                                <div><span>Seen</span>${escapeHtml(formatSeen(host.observed_at_ms))}</div>
-                                <div><span>Rank</span>#${String(rank + 1).padStart(2, '0')}</div>
-                              </div>
-                            </div>
-                            <div class="load-bar" aria-hidden="true"></div>
-                          </section>
-                        `;
+                        tile.dataset.agentId = agentId;
+                        tile.className = 'tile ' + statusClass;
+                        tile.style.setProperty('--load-level', level.toFixed(3));
+                        setText(tile, 'agent', agentId);
+                        setText(tile, 'status', host.status || '');
+                        setText(tile, 'host', host.host || '');
+                        setText(tile, 'load', host.load || '');
+                        setText(tile, 'ip', host.ip || '');
+                        setText(tile, 'area', host.area || '');
+                        setText(tile, 'role', host.role || '');
+                        setText(tile, 'zone', host.zone || '');
+                        setText(tile, 'seq', String(host.seq || 0));
+                        setText(tile, 'source', host.source || '');
+                        setText(tile, 'seen', formatSeen(host.observed_at_ms));
+                        setText(tile, 'rank', '#' + String(rank + 1).padStart(2, '0'));
+                      }
+
+                      function setText(root, field, value) {
+                        root.querySelector('[data-field="' + field + '"]').textContent = value;
                       }
 
                       function clusterHue(cluster, index) {

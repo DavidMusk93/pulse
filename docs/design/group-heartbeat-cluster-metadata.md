@@ -451,15 +451,15 @@ Web 页面按 `cluster` 进行一级分组：
 - 组标题展示 cluster 名称与 host 数。
 - 组内使用 `ui-ux-pro-max-skill` 推荐的 Flat Design + Real-Time Monitoring 风格，避免高阴影和厚重拟物。
 - `/hosts` 必须是现代前端应用 shell，禁止使用 `<meta http-equiv="refresh">` 或整页刷新。
-- 前端使用内嵌轻量 reactive runtime `PulseView`，避免远端环境依赖外部 CDN。
-- `PulseView` 每 5s fetch `/api/hosts`，仅更新 app DOM 区域，保留页面、CSS、JS runtime 和磁贴内部滚动 cursor。
+- 前端使用内嵌轻量 keyed runtime `PulseView`，避免远端环境依赖外部 CDN；当前不引入 React，除非后续需要复杂组件状态、路由或构建链路。
+- `PulseView` 每 5s fetch `/api/hosts`，按 `cluster` 和 `agent_id` 复用 DOM 节点，只更新文字、状态、排序和样式；刷新前后必须恢复 viewport scroll，保留页面、CSS、JS runtime 和磁贴内部滚动 cursor。
 - 磁贴必须为正方形，使用 `aspect-ratio: 1 / 1` 保持密度一致。
 - 每个 cluster 使用不同主色相，便于跨集群快速扫视。
 - cluster 调色板必须使用低饱和冷静色，禁止紫色、红色等高刺激亮色。
 - 组内 host 按 `load` 从高到低排序。
 - 同一 cluster 内，`load` 越高磁贴色彩越深，并提供底部 load bar；load bar 必须使用深色轨道和深色/cluster 色填充，禁止白底白条。
 - 磁贴内容超过可视区域时，必须在磁贴内部滚动，文字使用 `overflow-wrap`，禁止覆盖和溢出。
-- 动效必须是用户滚动磁贴内容时触发的短暂果冻抖动反馈，禁止持续播放的水波、扫光或背景动态；必须遵守 `prefers-reduced-motion`，用户关闭动效时不播放动画。
+- 磁贴不做额外交互动效，保持自然滚动；禁止持续播放的水波、扫光、果冻抖动或背景动态。
 - 磁贴展示 `IP`、`Area`、`Role`、`Zone`、`Load`、`Seq`、`Source`、`Seen`。
 
 UI 开发门禁：
@@ -467,11 +467,12 @@ UI 开发门禁：
 - 禁止整页刷新作为数据更新手段。
 - 禁止为 UI 引入必须访问公网 CDN 的依赖。
 - `/api/hosts` 是 UI 数据源，`/hosts` 只负责前端 app shell。
-- 自动刷新必须是 JSON 增量数据流的客户端更新，不能重新下载整页 HTML。
-- 自动刷新必须保留每个磁贴内部 `.tile-scroll` 的 scrollTop/scrollLeft。
+- 自动刷新必须是 JSON 增量数据流的客户端更新，不能重新下载整页 HTML，也不能整块重建 `#pulse-app`。
+- 自动刷新必须通过 keyed DOM 复用保留每个磁贴内部 `.tile-scroll` 的 scrollTop/scrollLeft。
+- 自动刷新必须保留页面级 `window.scrollX/scrollY`，禁止刷新后回到页面顶部。
 - UI 调色板不得使用刺眼亮色，尤其避免紫色和红色作为 cluster 主色。
 - load 比例条必须在浅色和深色磁贴上都具备可读对比度。
-- 磁贴动效不得抢占视觉焦点，只允许滚动触发的 `jelly-scroll` 短反馈，禁止 `water-ripple` 一类持续背景动画。
+- 磁贴动效不得抢占视觉焦点，当前禁止 `jelly-scroll`、`water-ripple`、`liquid-flow` 一类额外动效。
 
 ## 部署设计
 

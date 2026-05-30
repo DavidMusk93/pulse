@@ -676,3 +676,107 @@ Forbidden 动效确认不包含：
 - `repeating-radial-gradient`
 - `liquid-flow`
 - `http-equiv="refresh"`
+
+## Host UI 去动效与 Keyed DOM 刷新
+
+问题：
+
+- 果冻滚动反馈实际交互体验不自然，滚动时额外抖动会干扰监控阅读。
+- 旧 `PulseView` 每轮刷新使用 `app.innerHTML = renderApp(...)` 重建 `#pulse-app`，即使保存并恢复 `scrollTop/scrollLeft`，仍会重新创建 `.tile-scroll`，导致滚动条和滚动状态有明显刷新感。
+- 直接引入 React 会带来前端构建链路或内嵌大体积运行时代码；当前页面只需要 keyed DOM 复用，不需要复杂组件生态。
+
+实现结果：
+
+- 删除 `jelly-scroll` 果冻动画、滚动监听、动画节流和 `prefers-reduced-motion` 相关逻辑。
+- 保留无额外交互动效的自然滚动。
+- `PulseView` 改为 keyed DOM refresh：
+  - `clusterSections: new Map()` 按 cluster 复用 section。
+  - `tiles: new Map()` 按 `agent_id` 复用 host tile。
+  - `updateClusters` 只移动、增删 cluster section，不整块重建 app。
+  - `updateTiles` 只移动、增删 tile，不重建已有 `.tile-scroll`。
+  - `updateTile` 只更新文字、状态 class、load style 和 rank。
+- 增加 `placeChild`，只有节点顺序确实变化时才移动 DOM，避免每轮 refresh 重复 append 已有 section/tile。
+- 增加 `restoreViewportScroll`，每次 render 前记录 `window.scrollX/scrollY`，DOM 更新后通过 `window.scrollTo` 恢复页面级滚动位置，避免刷新后回到顶部。
+- `.tile-scroll` DOM 节点持续存在，因此滚动条和滚动 cursor 由浏览器自然保留。
+- `.tmp/` 已加入 `.gitignore`，auto-ops 临时产物不再显示为未跟踪文件。
+
+本地校验：
+
+- VS Code diagnostics：`HostTilesPage.java` 与 `CoordinatorHttpServerTest.java` 无错误。
+- 单元测试需覆盖：
+  - 包含 `PulseView keyed dashboard`。
+  - 包含 `Keyed DOM refresh`。
+  - 包含 `clusterSections: new Map()`、`tiles: new Map()`、`updateClusters`、`updateTiles`、`getOrCreateTile`、`placeChild`、`restoreViewportScroll`。
+  - 不包含 `jelly-scroll`、`playJelly`、`water-ripple`、`repeating-radial-gradient`、`liquid-flow`、整页 refresh。
+
+补充纠偏：
+
+- 线上验证发现 keyed DOM 版本仍会在自动刷新后滚到页面顶部。
+- 原因是刷新过程中仍对已有 section/tile 执行 `appendChild`，触发浏览器滚动锚点变化；同时没有保护页面级 viewport scroll。
+- 已补充 `placeChild` 与 `restoreViewportScroll` 解决该问题。
+
+Coordinator-only 升级验证：
+
+- 升级时间：2026-05-30 22:12 CST。
+- Jar SHA256：`4f352e17967dc84d3eb83ad64df0ef10bfe327a2e505915724b8980472d4a9d8`。
+- Dry-run 结果：`total=3`，仅包含 3 台 coordinator。
+- 部署结果：`summary: total=3 ok=3 failed=0`。
+- Service/API 验证：3 台 `pulse-coordinator.service` 均 active，`HOST_COUNT=63`。
+- Web 内容验证：
+  - 3 台均包含 `restoreViewportScroll`、`window.scrollTo(viewport.left, viewport.top)`、`placeChild`、`Keyed DOM refresh`。
+  - 3 台均不包含 `jelly-scroll`、`playJelly`、`water-ripple`、`repeating-radial-gradient`、`liquid-flow`、`http-equiv="refresh"`。
+
+### Coordinator-only 升级验证
+
+升级时间：2026-05-30 22:09 CST。
+
+范围：
+
+- 仅升级 3 台 coordinator：
+  - `fdbd:dc05:11:634::45`
+  - `fdbd:dc05:13:10c::40`
+  - `fdbd:dc07:0:810::44`
+- 产物：`target/pulse-0.1.0-SNAPSHOT.jar`
+- Jar SHA256：`4c717dd0a80335deac446d7722882f463742ff6e4ccd6146823a9e3c70f05533`
+
+本地验证：
+
+- `mvn test`：17 个测试全部通过。
+- `mvn package`：构建成功。
+
+Dry-run 结果：
+
+- 使用 `--limit-file .tmp/auto-ops/coordinator-ui-keyed/coordinators.txt`。
+- 选中 host 数：`total=3`。
+- 选中 host 与预期 3 台 coordinator 一致。
+
+部署结果：
+
+- `summary: total=3 ok=3 failed=0`
+- 3 台 coordinator 均使用 `/data24/otf/pulse/jre/bin/java`。
+- Java 版本：`openjdk version "17.0.19" 2026-04-21`。
+
+Service/API 验证：
+
+| Coordinator | Agent | Coordinator | Host Count | Role |
+| --- | --- | --- | ---: | --- |
+| `fdbd:dc05:11:634::45` | active | active | 63 | `cdn_new` |
+| `fdbd:dc05:13:10c::40` | active | active | 63 | `cdn_new` |
+| `fdbd:dc07:0:810::44` | active | active | 63 | `cdn_new` |
+
+Web UI 验证：
+
+| Coordinator | Keyed Title | Keyed Mode | Clusters Map | Tiles Map | `updateTiles` | Forbidden 动效 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `fdbd:dc05:11:634::45` | yes | yes | yes | yes | yes | no |
+| `fdbd:dc05:13:10c::40` | yes | yes | yes | yes | yes | no |
+| `fdbd:dc07:0:810::44` | yes | yes | yes | yes | yes | no |
+
+Forbidden 动效确认不包含：
+
+- `jelly-scroll`
+- `playJelly`
+- `water-ripple`
+- `repeating-radial-gradient`
+- `liquid-flow`
+- `http-equiv="refresh"`

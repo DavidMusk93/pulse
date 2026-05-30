@@ -31,14 +31,15 @@
   - 磁贴增加 `Area` 展示。
   - UI 重构为 `ui-ux-pro-max-skill` 取向的扁平化实时监控风格。
   - `/hosts` 改为前端 app shell，禁止 `<meta refresh>` 整页刷新。
-  - 内嵌轻量 reactive runtime `PulseView`，不依赖公网 CDN。
-  - `PulseView` 每 5s fetch `/api/hosts`，仅更新 app DOM 区域。
-  - `PulseView` 在 render 前后按 `agent_id` 保存并恢复磁贴内部滚动 cursor。
+  - 内嵌轻量 keyed runtime `PulseView`，不依赖公网 CDN；当前不引入 React。
+  - `PulseView` 每 5s fetch `/api/hosts`，按 `cluster` 和 `agent_id` 复用 DOM 节点，仅更新文字、状态、排序和样式。
+  - `PulseView` 每次刷新前后恢复 `window.scrollX/scrollY`，禁止刷新后页面滚到顶部。
+  - `PulseView` 通过 DOM 节点复用自然保留磁贴内部滚动 cursor，禁止整块重建 `#pulse-app`。
   - 磁贴改为正方形，内部支持滚动，禁止文字覆盖。
   - 不同 cluster 使用不同低饱和冷静色，避免紫色、红色等高刺激亮色。
   - cluster 内按机器 `load` 降序排序。
   - `load` 越高磁贴色彩越重，并展示深色轨道和 cluster 深色填充的 load bar。
-  - 动效改为滚动磁贴内容时触发的短暂 `jelly-scroll` 果冻抖动反馈，禁止持续水波或扫光背景动态，并支持 `prefers-reduced-motion`。
+  - 去掉额外交互动效，保持自然滚动，禁止 `jelly-scroll`、持续水波或扫光背景动态。
 
 ## 阶段 2.1：减压型分组策略设计补充
 
@@ -102,11 +103,11 @@
   - 保持 group heartbeat per-agent `accepted_seq` 测试。
 - 更新 `CoordinatorHttpServerTest`：
   - 验证 `/hosts` 包含 `cluster-section` 和 cluster 名称。
-  - 验证 `/hosts` 包含正方形磁贴、内部滚动、load 排序和滚动触发的果冻抖动动效相关 CSS/JS。
+  - 验证 `/hosts` 包含正方形磁贴、内部滚动、load 排序和 keyed DOM refresh 相关 CSS/JS。
   - 验证 `/hosts` 不包含 `http-equiv="refresh"`。
-  - 验证 `/hosts` 包含 `PulseView`、`fetch('/api/hosts'` 和 JSON refresh 文案。
-  - 验证 `/hosts` 包含 `captureTileScroll`、`restoreTileScroll` 和低饱和 palette。
-  - 验证 `/hosts` 不包含 `liquid-flow`、`water-ripple`、`repeating-radial-gradient` 和白色 load bar 填充。
+  - 验证 `/hosts` 包含 `PulseView`、`fetch('/api/hosts'` 和 Keyed DOM refresh 文案。
+  - 验证 `/hosts` 包含 `clusterSections`、`tiles`、`updateClusters`、`updateTiles`、`placeChild`、`restoreViewportScroll` 和低饱和 palette。
+  - 验证 `/hosts` 不包含 `jelly-scroll`、`liquid-flow`、`water-ripple`、`repeating-radial-gradient` 和白色 load bar 填充。
 - 执行：
 
 ```bash
