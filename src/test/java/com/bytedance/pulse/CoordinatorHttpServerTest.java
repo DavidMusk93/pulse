@@ -5,7 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -13,6 +15,11 @@ import java.net.http.HttpResponse;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -162,6 +169,91 @@ class CoordinatorHttpServerTest {
         assertEquals("agent-1", payload.get("leader_agent_id").asText());
     }
 
+    @Test
+    void heartbeatEndpointForwardsStateToPeers() throws Exception {
+        server.stop();
+        RecordingPeerForwarder forwarder = new RecordingPeerForwarder();
+        CoordinatorService service = new CoordinatorService(
+                "coordinator-a",
+                Clock.fixed(Instant.ofEpochMilli(1_710_000_000_000L), ZoneOffset.UTC));
+        server = new CoordinatorHttpServer(service, "127.0.0.1", 0, forwarder);
+        server.start();
+        baseUrl = "http://127.0.0.1:" + server.port();
+
+        HttpResponse<String> response = postJson("/heartbeat", """
+                {
+                  "agent_id": "agent-1",
+                  "epoch": 1,
+                  "seq": 42,
+                  "ttl_ms": 15000,
+                  "messages": [
+                    {
+                      "message_id": "msg-agent-1-42",
+                      "type": "state.heartbeat",
+                      "version": 1,
+                      "payload": {"host": "host-a"}
+                    }
+                  ]
+                }
+                """);
+
+        assertEquals(200, response.statusCode());
+        assertEquals(1, forwarder.requests.size());
+        assertEquals("agent-1", forwarder.requests.get(0).agentId());
+    }
+
+    @Test
+    void peerForwarderOnlyBuildsStateMessages() {
+        CoordinatorHttpServer.HttpPeerForwarder forwarder = new CoordinatorHttpServer.HttpPeerForwarder(
+                "coordinator-a",
+                List.of("http://127.0.0.1:1"),
+                java.time.Duration.ofMillis(1));
+        HeartbeatRequest request = new HeartbeatRequest(
+                null,
+                "agent-1",
+                1L,
+                42L,
+                15_000L,
+                List.of(
+                        new PulseMessage("state-1", "state.heartbeat", 1, null, null, Map.of("host", "host-a")),
+                        new PulseMessage("cmd-1", "cmd.group_plan", 1, null, null, Map.of("ignored", true))),
+                List.of());
+
+        HeartbeatForwardRequest forwardRequest = forwarder.toForwardRequest(request);
+
+        assertEquals("coordinator-a", forwardRequest.sourceCoordinatorId());
+        assertEquals(1, forwardRequest.states().size());
+        assertEquals(1, forwardRequest.states().get(0).messages().size());
+        assertEquals("state.heartbeat", forwardRequest.states().get(0).messages().get(0).type());
+    }
+
+    @Test
+    void agentHeartbeatClientWritesOnlyOneCoordinator() throws Exception {
+        AtomicInteger firstHits = new AtomicInteger();
+        AtomicInteger secondHits = new AtomicInteger();
+        HttpServer first = heartbeatStub(firstHits);
+        HttpServer second = heartbeatStub(secondHits);
+        first.start();
+        second.start();
+        try {
+            PulseAgentApp.HeartbeatClient heartbeatClient = new PulseAgentApp.HeartbeatClient(
+                    List.of(
+                            "http://127.0.0.1:" + first.getAddress().getPort(),
+                            "http://127.0.0.1:" + second.getAddress().getPort()),
+                    Duration.ofSeconds(1));
+
+            HeartbeatResponse response = heartbeatClient.sendForResponse(
+                    "/heartbeat",
+                    new HeartbeatRequest(null, "agent-1", 1L, 42L, 15_000L, List.of(), List.of()));
+
+            assertTrue(response.ok());
+            assertEquals(1, firstHits.get() + secondHits.get());
+        } finally {
+            first.stop(0);
+            second.stop(0);
+        }
+    }
+
     private HttpResponse<String> get(String path) throws Exception {
         HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path)).GET().build();
         return client.send(request, HttpResponse.BodyHandlers.ofString());
@@ -173,5 +265,30 @@ class CoordinatorHttpServerTest {
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
         return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpServer heartbeatStub(AtomicInteger hits) throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/heartbeat", exchange -> {
+            hits.incrementAndGet();
+            byte[] body = """
+                    {"ok":true,"coordinator_id":"stub","accepted_seq":42,"messages":[],"agents":[]}
+                    """.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("content-type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            try (var output = exchange.getResponseBody()) {
+                output.write(body);
+            }
+        });
+        return server;
+    }
+
+    private static final class RecordingPeerForwarder implements CoordinatorHttpServer.PeerForwarder {
+        private final List<HeartbeatRequest> requests = new ArrayList<>();
+
+        @Override
+        public void forward(HeartbeatRequest request) {
+            requests.add(request);
+        }
     }
 }

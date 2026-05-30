@@ -257,8 +257,9 @@ API 验证：
 - 不新增 `/api/groups` 或 `/api/agent-plan`。
 - coordinator 通过 `/heartbeat` response message 下发 `cmd.group_plan`。
 - group leader 监听 `/group/heartbeat`，接收 follower heartbeat。
-- agent 优先采纳主 coordinator 返回的 `cmd.group_plan`。
-- leader batch heartbeat 广播到全部 coordinator。
+- agent/group 每轮 heartbeat 只写一个 coordinator。
+- coordinator 通过 `/heartbeat_fwd` 将 `state.*` lazy 同步给 peers。
+- `/heartbeat_fwd` 不转发 `cmd.group_plan`。
 - 非 leader 节点拒绝 follower `/group/heartbeat`，避免旧 plan 缓存继续传播。
 
 部署结果：
@@ -324,6 +325,7 @@ Web 验证：
 - 三台 coordinator 视图一致，均无 expired 和 direct。
 - 最大 group source count 为 7，符合 group size 上限。
 - group plan 获取链路完全走 heartbeat message，未新增 agent plan API。
+- 更正：曾使用 leader batch heartbeat 广播到全部 coordinator 作为临时修复方向；该方向已废弃，正确设计是单点写入一个 coordinator，再由 coordinator 通过 `/heartbeat_fwd` 做最终一致同步。
 
 ## 后续建议
 

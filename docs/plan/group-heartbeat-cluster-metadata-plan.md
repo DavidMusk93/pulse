@@ -67,11 +67,18 @@
   - 每轮先生成 heartbeat，再从 heartbeat response 中解析 `cmd.group_plan`。
   - plan 为 `leader` 时聚合 follower 并批量上报。
   - plan 为 `follower` 时上报给 leader。
+  - 非 leader 节点拒绝 `/group/heartbeat`，避免旧 leader 缓存 plan 继续传播。
   - leader 将 batch heartbeat response 中的 `agents[].messages[]` 转发给 follower。
+  - agent 和 group leader 每轮 heartbeat 只写一个 coordinator，禁止向所有 coordinator 广播 `/heartbeat`。
   - plan 不存在或请求失败时 fallback 到 direct。
+- `CoordinatorHttpServer`：
+  - 在 `/heartbeat` 成功合并状态后，异步调用 peer `/heartbeat_fwd`。
+  - `/heartbeat_fwd` 只发送 `state.*`，不发送 `cmd.group_plan`。
 - 部署脚本：
   - 不再依赖静态 group CSV。
   - 默认写入 `PULSE_GROUP_MODE=dynamic`。
+  - 默认写入 `PULSE_TTL_MS=30000`。
+  - coordinator 写入 `PULSE_COORDINATOR_PEERS`，内容为除自身外的 peer coordinator URL。
   - 保留静态配置仅作为回滚或本地验证能力。
 
 ## 阶段 3：测试驱动

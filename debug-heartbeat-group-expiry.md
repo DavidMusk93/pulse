@@ -23,16 +23,16 @@ Status: CLOSED
 - Keep group assignment inside coordinator heartbeat processing.
 - Do not add new API.
 - Continue returning `cmd.group_plan` through heartbeat responses.
-- Broadcast leader batch heartbeat to all coordinators.
+- Superseded: broadcasting leader batch heartbeat to all coordinators was a temporary workaround and violates the design core.
 - Increase deployed agent TTL from 15s to 30s to avoid coordinator fanout timing edge.
 
 ## Resolution
 
-- H3 was confirmed as a partial cause: leader batch heartbeat must broadcast to all coordinators because coordinators do not replicate state.
+- H3 identified missing peer state propagation, but the correct fix is coordinator `/heartbeat_fwd`, not agent or leader fanout.
 - A second issue was found: every dynamic agent listened on `/group/heartbeat`, so non-leader nodes could accept follower heartbeats and return stale cached plans.
 - Fixes:
-  - leader batch heartbeat broadcasts to all coordinators.
-  - agents prefer the primary coordinator response as the group plan decision source.
+  - coordinator forwards `state.*` to peers through `/heartbeat_fwd`.
+  - agent and group leader write one coordinator per heartbeat.
   - non-leader agents reject follower `/group/heartbeat` with `not_group_leader`.
   - deployed TTL is 30s.
 - Final verification:

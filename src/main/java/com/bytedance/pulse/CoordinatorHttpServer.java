@@ -7,7 +7,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 
@@ -15,13 +22,19 @@ public class CoordinatorHttpServer {
     private final CoordinatorService service;
     private final HttpServer server;
     private final ObjectMapper mapper = JsonSupport.objectMapper();
+    private final PeerForwarder peerForwarder;
 
     public CoordinatorHttpServer(CoordinatorService service, int port) throws IOException {
         this(service, "127.0.0.1", port);
     }
 
     public CoordinatorHttpServer(CoordinatorService service, String bindHost, int port) throws IOException {
+        this(service, bindHost, port, PeerForwarder.fromEnvironment(service.coordinatorId()));
+    }
+
+    CoordinatorHttpServer(CoordinatorService service, String bindHost, int port, PeerForwarder peerForwarder) throws IOException {
         this.service = service;
+        this.peerForwarder = peerForwarder;
         this.server = HttpServer.create(new InetSocketAddress(bindHost, port), 0);
         this.server.createContext("/", this::handle);
         this.server.setExecutor(Executors.newCachedThreadPool());
@@ -45,7 +58,13 @@ public class CoordinatorHttpServer {
             String path = exchange.getRequestURI().getPath();
             if ("POST".equals(method) && "/heartbeat".equals(path)) {
                 HeartbeatRequest request = readJson(exchange, HeartbeatRequest.class);
-                writeJson(exchange, 200, service.handleHeartbeat(request));
+                HeartbeatResponse response = service.handleHeartbeat(request);
+                try {
+                    peerForwarder.forward(request);
+                } catch (Exception exception) {
+                    System.err.printf("heartbeat_fwd status=unexpected_error error=%s%n", exception.getMessage());
+                }
+                writeJson(exchange, 200, response);
                 return;
             }
             if ("POST".equals(method) && "/heartbeat_fwd".equals(path)) {
@@ -92,6 +111,107 @@ public class CoordinatorHttpServer {
         exchange.sendResponseHeaders(status, bytes.length);
         try (OutputStream output = exchange.getResponseBody()) {
             output.write(bytes);
+        }
+    }
+
+    interface PeerForwarder {
+        void forward(HeartbeatRequest request);
+
+        static PeerForwarder noop() {
+            return request -> {};
+        }
+
+        static PeerForwarder fromEnvironment(String coordinatorId) {
+            String rawPeers = System.getenv().getOrDefault("PULSE_COORDINATOR_PEERS", "");
+            List<String> peers = Arrays.stream(rawPeers.split(","))
+                    .map(String::trim)
+                    .filter(value -> !value.isEmpty())
+                    .toList();
+            if (peers.isEmpty()) {
+                return noop();
+            }
+            Duration timeout = Duration.ofMillis(Long.parseLong(System.getenv().getOrDefault("PULSE_PEER_TIMEOUT_MS", "1000")));
+            return new HttpPeerForwarder(coordinatorId, peers, timeout);
+        }
+    }
+
+    static final class HttpPeerForwarder implements PeerForwarder {
+        private final String coordinatorId;
+        private final List<String> peerUrls;
+        private final Duration timeout;
+        private final HttpClient httpClient = HttpClient.newHttpClient();
+        private final ObjectMapper mapper = JsonSupport.objectMapper();
+
+        HttpPeerForwarder(String coordinatorId, List<String> peerUrls, Duration timeout) {
+            this.coordinatorId = coordinatorId;
+            this.peerUrls = List.copyOf(peerUrls);
+            this.timeout = timeout;
+        }
+
+        @Override
+        public void forward(HeartbeatRequest request) {
+            HeartbeatForwardRequest forwardRequest = toForwardRequest(request);
+            if (forwardRequest.states().isEmpty()) {
+                return;
+            }
+            for (String peerUrl : peerUrls) {
+                HttpRequest httpRequest;
+                try {
+                    httpRequest = HttpRequest.newBuilder(URI.create(peerUrl + "/heartbeat_fwd"))
+                            .timeout(timeout)
+                            .header("content-type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(forwardRequest)))
+                            .build();
+                } catch (Exception exception) {
+                    System.err.printf("heartbeat_fwd status=build_failed peer=%s error=%s%n", peerUrl, exception.getMessage());
+                    continue;
+                }
+                httpClient.sendAsync(httpRequest, HttpResponse.BodyHandlers.ofString())
+                        .thenAccept(response -> {
+                            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                                System.err.printf(
+                                        "heartbeat_fwd status=bad_response peer=%s code=%d body=%s%n",
+                                        peerUrl,
+                                        response.statusCode(),
+                                        response.body());
+                            }
+                        })
+                        .exceptionally(exception -> {
+                            System.err.printf(
+                                    "heartbeat_fwd status=failed peer=%s error=%s%n",
+                                    peerUrl,
+                                    exception.getMessage());
+                            return null;
+                        });
+            }
+        }
+
+        HeartbeatForwardRequest toForwardRequest(HeartbeatRequest request) {
+            if (request.isBatch()) {
+                return new HeartbeatForwardRequest(
+                        coordinatorId,
+                        request.agents().stream()
+                                .map(this::toForwardState)
+                                .filter(state -> !state.messages().isEmpty())
+                                .toList());
+            }
+            AgentHeartbeat heartbeat = request.toSingleAgentHeartbeat();
+            ForwardState state = toForwardState(heartbeat);
+            return new HeartbeatForwardRequest(
+                    coordinatorId,
+                    state.messages().isEmpty() ? List.of() : List.of(state));
+        }
+
+        private ForwardState toForwardState(AgentHeartbeat heartbeat) {
+            return new ForwardState(
+                    heartbeat.agentId(),
+                    heartbeat.epoch(),
+                    heartbeat.seq(),
+                    heartbeat.ttlMs(),
+                    System.currentTimeMillis(),
+                    heartbeat.messages().stream()
+                            .filter(PulseMessage::isStateMessage)
+                            .toList());
         }
     }
 }

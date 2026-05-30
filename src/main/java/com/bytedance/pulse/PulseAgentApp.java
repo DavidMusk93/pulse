@@ -102,11 +102,10 @@ public final class PulseAgentApp {
             receiver.setAcceptingFollowers("leader".equalsIgnoreCase(mode));
             if ("leader".equalsIgnoreCase(mode)) {
                 HeartbeatRequest batch = collector.batch(currentPlan.groupId(), heartbeat, Clock.systemUTC().millis(), currentPlan.sizeLimit());
-                List<HeartbeatResponse> responses = client.sendToAllForResponses("/heartbeat", batch);
-                if (!responses.isEmpty()) {
-                    HeartbeatResponse planResponse = responses.get(0);
-                    receiver.updatePlans(planResponse);
-                    currentPlan = planFromMessages(heartbeat.agentId(), planResponse.agents().stream()
+                HeartbeatResponse response = client.sendForResponse("/heartbeat", batch);
+                if (response != null) {
+                    receiver.updatePlans(response);
+                    currentPlan = planFromMessages(heartbeat.agentId(), response.agents().stream()
                                     .filter(agent -> heartbeat.agentId().equals(agent.agentId()))
                                     .findFirst()
                                     .map(AgentHeartbeatResponse::messages)
@@ -117,13 +116,13 @@ public final class PulseAgentApp {
                 HeartbeatClient leaderClient = new HeartbeatClient(List.of(currentPlan.leaderUrl()), client.timeout);
                 HeartbeatResponse response = leaderClient.sendForResponse("/group/heartbeat", heartbeat);
                 if (response == null) {
-                    response = client.sendToPrimaryForResponse("/heartbeat", heartbeat);
+                    response = client.sendForResponse("/heartbeat", heartbeat);
                 }
                 if (response != null) {
                     currentPlan = planFromMessages(heartbeat.agentId(), response.messages()).orElse(currentPlan);
                 }
             } else {
-                HeartbeatResponse response = client.sendToPrimaryForResponse("/heartbeat", heartbeat);
+                HeartbeatResponse response = client.sendForResponse("/heartbeat", heartbeat);
                 if (response != null) {
                     currentPlan = planFromMessages(heartbeat.agentId(), response.messages()).orElse(currentPlan);
                 }
@@ -242,80 +241,6 @@ public final class PulseAgentApp {
             return null;
         }
 
-        HeartbeatResponse sendToPrimaryForResponse(String path, HeartbeatRequest heartbeat) {
-            for (String baseUrl : coordinatorUrls) {
-                try {
-                    HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path))
-                            .timeout(timeout)
-                            .header("content-type", "application/json")
-                            .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(heartbeat)))
-                            .build();
-                    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-                    if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                        if (heartbeat.isBatch()) {
-                            System.out.printf(
-                                    "heartbeat status=ok target=%s group=%s agents=%d%n",
-                                    baseUrl,
-                                    heartbeat.groupId(),
-                                    heartbeat.agents().size());
-                        } else {
-                            System.out.printf(
-                                    "heartbeat status=ok target=%s seq=%d%n",
-                                    baseUrl,
-                                    heartbeat.seq());
-                        }
-                        return mapper.readValue(response.body(), HeartbeatResponse.class);
-                    }
-                    System.err.printf(
-                            "heartbeat status=bad_response coordinator=%s code=%d body=%s%n",
-                            baseUrl,
-                            response.statusCode(),
-                            response.body());
-                } catch (Exception exception) {
-                    System.err.printf(
-                            "heartbeat status=failed coordinator=%s error=%s%n",
-                            baseUrl,
-                            exception.getMessage());
-                }
-            }
-            return null;
-        }
-
-        List<HeartbeatResponse> sendToAllForResponses(String path, HeartbeatRequest heartbeat) {
-            List<HeartbeatResponse> responses = new java.util.ArrayList<>();
-            for (String baseUrl : coordinatorUrls) {
-                try {
-                    HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path))
-                            .timeout(timeout)
-                            .header("content-type", "application/json")
-                            .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(heartbeat)))
-                            .build();
-                    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-                    if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                        responses.add(mapper.readValue(response.body(), HeartbeatResponse.class));
-                        if (heartbeat.isBatch()) {
-                            System.out.printf(
-                                    "heartbeat status=ok target=%s group=%s agents=%d%n",
-                                    baseUrl,
-                                    heartbeat.groupId(),
-                                    heartbeat.agents().size());
-                        }
-                    } else {
-                        System.err.printf(
-                                "heartbeat status=bad_response coordinator=%s code=%d body=%s%n",
-                                baseUrl,
-                                response.statusCode(),
-                                response.body());
-                    }
-                } catch (Exception exception) {
-                    System.err.printf(
-                            "heartbeat status=failed coordinator=%s error=%s%n",
-                            baseUrl,
-                            exception.getMessage());
-                }
-            }
-            return responses;
-        }
     }
 
     static final class GroupHeartbeatReceiver {

@@ -247,10 +247,11 @@ agent 行为：
 coordinator 一致性约束：
 
 - 当前阶段不实现 coordinator 间强一致复制。
-- agent 按 `PULSE_COORDINATOR_URLS` 的顺序优先采纳主 coordinator 返回的 `cmd.group_plan`，避免不同 coordinator 基于局部状态返回的 plan 互相覆盖。
-- 为避免某个 coordinator 长时间收不到 group 内 host 更新，leader 每轮 batch heartbeat 必须广播到全部 coordinator，但只使用主 coordinator 或主 coordinator 故障后的第一个成功响应更新本地 plan。
-- follower 不直接打 coordinator，因此 coordinator 侧请求数从 `N * coordinator_count` 收敛为 `group_count * coordinator_count`。
-- 默认 heartbeat interval 为 5s，TTL 调整为 30s，避免多 coordinator fanout、网络抖动和部署重启时踩 15s 过期边界。
+- agent 或 group leader 每轮 heartbeat 只写入一个 coordinator。
+- coordinator 收到 `/heartbeat` 并合并本地状态后，通过 `/heartbeat_fwd` 将 `state.*` lazy 同步给 peers。
+- `/heartbeat_fwd` 只传播状态，不传播 `cmd.group_plan` 或其他控制指令。
+- follower 不直接打 coordinator，因此 coordinator 侧请求数从 `N` 收敛为 `group_count`，peer 同步由 coordinator 内部承担。
+- 默认 heartbeat interval 为 5s，TTL 为 30s，允许 peer lazy 同步、网络抖动和部署重启的最终一致窗口。
 
 废弃项：
 
@@ -313,10 +314,23 @@ coordinator 可选配置：
 仍需验证和增强：
 
 - 线上多 coordinator 场景需要确认所有 coordinator 都能稳定看到完整 alive host。
-- group leader 需要持续广播 batch heartbeat 到全部 coordinator，同时保持主 coordinator plan 的单一决策源。
+- coordinator 需要持续通过 `/heartbeat_fwd` lazy 同步 peer 状态，agent/group 不承担 peer fanout。
 - 后续可补充 group 健康指标和 Web 只读展示，但不作为 agent 获取 plan 的接口。
 
 这些缺口不影响已验证的 group heartbeat 服务端协议，但会影响“通过分组降低 coordinator heartbeat read/write 压力”这一最终目标。
+
+## 开发门禁
+
+这些规则是实现层硬约束，任何需求开发、修复和测试都必须先检查：
+
+- agent 和 group leader 每轮 heartbeat 只能写一个 coordinator，禁止向所有 coordinator 广播 `/heartbeat`。
+- coordinator 间状态收敛只能通过 `/heartbeat_fwd`，禁止把 peer 同步责任下沉到 agent 或 group。
+- `/heartbeat_fwd` 只能转发 `state.*`，禁止转发 `cmd.*`、`reply.*` 和 group plan。
+- group 只负责接收 follower `/heartbeat`、聚合 `agents[]`、转发 response message，禁止调用 `/heartbeat_fwd`。
+- group plan 获取只能通过 `/heartbeat` response 中的 `cmd.group_plan`，禁止新增 agent plan API。
+- 新增 API 前必须证明不能通过 `PulseMessage` 表达，否则拒绝新增。
+- 多 coordinator 验证必须覆盖“单点写入一个 coordinator，其他 coordinator 通过 `/heartbeat_fwd` 最终收敛”。
+- 单元测试必须覆盖上述不变量，至少包含 agent 不 fanout、coordinator forward state-only、非 leader 拒绝 follower heartbeat。
 
 ## 协议设计
 

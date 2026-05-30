@@ -89,6 +89,7 @@ echo "JAVA_VERSION=${java_version}"
 is_coordinator=0
 IFS=',' read -r -a coordinators <<< "$coordinators_csv"
 coordinator_urls=""
+coordinator_peer_urls=""
 for coordinator in "${coordinators[@]}"; do
   coordinator_trimmed=$(echo "$coordinator" | xargs)
   [ -z "$coordinator_trimmed" ] && continue
@@ -104,6 +105,13 @@ for coordinator in "${coordinators[@]}"; do
     coordinator_urls="$url"
   else
     coordinator_urls="${coordinator_urls},${url}"
+  fi
+  if [ "$coordinator_trimmed" != "$host" ]; then
+    if [ -z "$coordinator_peer_urls" ]; then
+      coordinator_peer_urls="$url"
+    else
+      coordinator_peer_urls="${coordinator_peer_urls},${url}"
+    fi
   fi
 done
 
@@ -164,6 +172,8 @@ PULSE_BIND_HOST=::
 PULSE_PORT=9966
 PULSE_GROUP_SIZE_LIMIT=7
 PULSE_GROUP_PORT=9977
+PULSE_COORDINATOR_PEERS=${coordinator_peer_urls}
+PULSE_PEER_TIMEOUT_MS=1000
 ENV
 
 install_system_unit() {
