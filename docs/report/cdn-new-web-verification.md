@@ -3,7 +3,7 @@
 ## 摘要
 
 - 验证时间：2026-05-30
-- 访问方式：SOCKS5 代理 `127.0.01:6699`
+- 访问方式：SOCKS5 代理 `127.0.0.1:6699`
 - 验证对象：3 台 coordinator 的 `/hosts` 与 `/api/hosts`
 - 验证结论：符合预期
 - 主要证据：3 个 coordinator 均返回 HTTP 200，API 均包含 50 台 host 且全部 `alive`，Web 页面均渲染 50 个 Windows Phone 风格磁贴。
@@ -20,7 +20,7 @@
 for h in 'fdbd:dc05:11:634::45' 'fdbd:dc05:13:10c::40' 'fdbd:dc07:0:810::44'; do
   safe=$(printf '%s' "$h" | tr ':' '_')
   curl -g -sS \
-    --proxy socks5h://127.0.01:6699 \
+    --proxy socks5h://127.0.0.1:6699 \
     --max-time 10 \
     -D ".tmp/web-verify/${safe}-hosts.headers" \
     -o ".tmp/web-verify/${safe}-hosts.html" \
@@ -28,7 +28,7 @@ for h in 'fdbd:dc05:11:634::45' 'fdbd:dc05:13:10c::40' 'fdbd:dc07:0:810::44'; do
     "http://[$h]:9966/hosts"
 
   curl -g -sS \
-    --proxy socks5h://127.0.01:6699 \
+    --proxy socks5h://127.0.0.1:6699 \
     --max-time 10 \
     -D ".tmp/web-verify/${safe}-api.headers" \
     -o ".tmp/web-verify/${safe}-api.json" \
