@@ -10,6 +10,7 @@ call() {
   local install_root=${5:-/data24/otf/pulse}
   local jre_tarball=${6:-}
   local cluster_fallback=${7:-unknown}
+  local group_plan_path=${8:-}
   local scp_host
   local remote_tmp
 
@@ -21,6 +22,9 @@ call() {
   scp "$jar_path" "${scp_host}:${remote_tmp}/pulse.jar"
   if [ -n "$jre_tarball" ] && [ "$jre_tarball" != "-" ]; then
     scp "$jre_tarball" "${scp_host}:${remote_tmp}/pulse-jre.tar.gz"
+  fi
+  if [ -n "$group_plan_path" ] && [ "$group_plan_path" != "-" ] && [ -f "$group_plan_path" ]; then
+    scp "$group_plan_path" "${scp_host}:${remote_tmp}/pulse-group-plan.csv"
   fi
   ssh "$host" 'bash -s' -- "$host" "$coordinators_csv" "$install_root" "$remote_tmp" "$cluster_fallback" <<'REMOTE'
 set -euo pipefail
@@ -119,6 +123,22 @@ fi
 [ -n "$tide_area" ] || tide_area="unknown"
 [ -n "$tide_cluster" ] || tide_cluster="unknown"
 
+group_id="${cluster_fallback}/unknown/000"
+group_mode="direct"
+group_leader_url=""
+group_members=""
+if [ -f "$remote_tmp/pulse-group-plan.csv" ]; then
+  group_row=$(awk -F, -v target="$host" '$1 == target {print; exit}' "$remote_tmp/pulse-group-plan.csv" || true)
+  if [ -n "$group_row" ]; then
+    group_id=$(printf '%s\n' "$group_row" | awk -F, '{print $2}')
+    group_mode=$(printf '%s\n' "$group_row" | awk -F, '{print $3}')
+    group_leader_url=$(printf '%s\n' "$group_row" | awk -F, '{print $4}')
+    group_members=$(printf '%s\n' "$group_row" | awk -F, '{print $5}')
+  fi
+fi
+[ -n "$group_id" ] || group_id="${cluster_fallback}/unknown/000"
+[ -n "$group_mode" ] || group_mode="direct"
+
 cat > "$install_root/etc/pulse-agent.env" <<ENV
 PULSE_COORDINATOR_URLS=${coordinator_urls}
 PULSE_AGENT_ID=${hostname_value}
@@ -130,6 +150,12 @@ PULSE_AGENT_ROLE=${cluster_fallback}
 PULSE_AGENT_ZONE=${tide_area}
 PULSE_HEARTBEAT_INTERVAL_MS=5000
 PULSE_TTL_MS=15000
+PULSE_GROUP_ID=${group_id}
+PULSE_GROUP_MODE=${group_mode}
+PULSE_GROUP_LEADER_URL=${group_leader_url}
+PULSE_GROUP_MEMBERS=${group_members}
+PULSE_GROUP_SIZE_LIMIT=7
+PULSE_GROUP_PORT=9977
 ENV
 
 cat > "$install_root/etc/pulse-coordinator.env" <<ENV
@@ -233,7 +259,7 @@ else
 fi
 
 rm -rf "$remote_tmp"
-echo "ROLE agent=1 coordinator=${is_coordinator} cluster=${tide_cluster} area=${tide_area} urls=${coordinator_urls}"
+echo "ROLE agent=1 coordinator=${is_coordinator} cluster=${tide_cluster} area=${tide_area} group=${group_id} mode=${group_mode} urls=${coordinator_urls}"
 REMOTE
   echo "EVENT phase=deploy host=${host} index=${index} status=ok"
 }

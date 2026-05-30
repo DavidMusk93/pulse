@@ -35,7 +35,7 @@ fi
 echo "AGENT_EXEC_START=$(systemctl show pulse-agent.service -p ExecStart --value 2>/dev/null || systemctl --user show pulse-agent.service -p ExecStart --value 2>/dev/null || true)"
 echo "AGENT_ACTIVE=$(systemctl is-active pulse-agent.service 2>/dev/null || systemctl --user is-active pulse-agent.service 2>/dev/null || true)"
 if [ -f "$install_root/etc/pulse-agent.env" ]; then
-  grep -E '^(PULSE_AGENT_CLUSTER|PULSE_AGENT_AREA|PULSE_AGENT_ROLE|PULSE_AGENT_ZONE)=' "$install_root/etc/pulse-agent.env" || true
+  grep -E '^(PULSE_AGENT_CLUSTER|PULSE_AGENT_AREA|PULSE_AGENT_ROLE|PULSE_AGENT_ZONE|PULSE_GROUP_ID|PULSE_GROUP_MODE|PULSE_GROUP_LEADER_URL|PULSE_GROUP_SIZE_LIMIT)=' "$install_root/etc/pulse-agent.env" || true
 fi
 echo "COORDINATOR_EXPECTED=${is_coordinator}"
 echo "COORDINATOR_ACTIVE=$(systemctl is-active pulse-coordinator.service 2>/dev/null || systemctl --user is-active pulse-coordinator.service 2>/dev/null || true)"

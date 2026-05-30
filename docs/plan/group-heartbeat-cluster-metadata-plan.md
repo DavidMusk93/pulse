@@ -37,8 +37,8 @@
   - 真正缺少的是 group assignment、leader/follower 模式和 follower 到 leader 的 state 传递。
 - 分组目标：
   - 同一集群内按 group 批量化心跳。
-  - 每组最多 13 个 agent。
-  - coordinator 请求数从 `N` 降为 `ceil(N / 13)`。
+  - 每组最多 7 个 agent。
+  - coordinator 请求数从 `N` 降为 `ceil(N / 7)`。
 - 分组策略：
   - 一级边界：`cluster`。
   - 二级边界：`area`。
@@ -170,8 +170,8 @@ curl -g -sS --proxy socks5h://127.0.0.1:6699 \
   - 部署后未重启旧服务，已改为显式 restart。
 - 已补充减压型分组策略设计：
   - 当前实现缺少 group assignment 和 agent leader/follower 模式。
-  - 后续应按最多 13 个 agent 一组推进批量化心跳上报。
+  - 后续应按最多 7 个 agent 一组推进批量化心跳上报。
 - 下一步：
   - 设计并实现部署侧静态分组脚本。
   - 实现 agent leader/follower 模式。
-  - 验证 coordinator 请求量是否从 `N` 收敛到 `ceil(N / 13)`。
+  - 验证 coordinator 请求量是否从 `N` 收敛到 `ceil(N / 7)`。

@@ -1,7 +1,11 @@
 package com.bytedance.pulse;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
+import java.io.IOException;
 import java.net.URI;
+import java.net.InetSocketAddress;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -19,11 +23,57 @@ public final class PulseAgentApp {
         Duration timeout = Duration.ofMillis(Long.parseLong(System.getenv().getOrDefault("PULSE_AGENT_TIMEOUT_MS", "2000")));
         AgentHeartbeatFactory heartbeatFactory = AgentHeartbeatFactory.fromEnvironment(Clock.systemUTC());
         HeartbeatClient client = new HeartbeatClient(coordinatorUrls, timeout);
+        String groupMode = System.getenv().getOrDefault("PULSE_GROUP_MODE", "direct");
 
-        System.out.printf("Pulse agent started coordinators=%s interval_ms=%d%n", coordinatorUrls, intervalMs);
+        System.out.printf(
+                "Pulse agent started coordinators=%s interval_ms=%d group_mode=%s%n",
+                coordinatorUrls,
+                intervalMs,
+                groupMode);
+        if ("leader".equalsIgnoreCase(groupMode)) {
+            runLeader(intervalMs, heartbeatFactory, client);
+            return;
+        }
+        if ("follower".equalsIgnoreCase(groupMode)) {
+            runFollower(intervalMs, timeout, heartbeatFactory);
+            return;
+        }
         while (!Thread.currentThread().isInterrupted()) {
             HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat();
-            client.send(heartbeat);
+            client.send("/heartbeat", heartbeat);
+            Thread.sleep(intervalMs);
+        }
+    }
+
+    private static void runLeader(long intervalMs, AgentHeartbeatFactory heartbeatFactory, HeartbeatClient client)
+            throws Exception {
+        String groupId = System.getenv().getOrDefault("PULSE_GROUP_ID", "unknown/unknown/000");
+        int sizeLimit = Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_SIZE_LIMIT", "7"));
+        int port = Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_PORT", "9977"));
+        String bindHost = System.getenv().getOrDefault("PULSE_GROUP_BIND_HOST", "::");
+        GroupHeartbeatCollector collector = new GroupHeartbeatCollector();
+        GroupHeartbeatReceiver receiver = new GroupHeartbeatReceiver(bindHost, port, collector);
+        receiver.start();
+        System.out.printf("Pulse group leader started group_id=%s size_limit=%d port=%d%n", groupId, sizeLimit, port);
+        while (!Thread.currentThread().isInterrupted()) {
+            HeartbeatRequest leaderHeartbeat = heartbeatFactory.nextHeartbeat();
+            HeartbeatRequest batch = collector.batch(groupId, leaderHeartbeat, Clock.systemUTC().millis(), sizeLimit);
+            client.send("/heartbeat", batch);
+            Thread.sleep(intervalMs);
+        }
+    }
+
+    private static void runFollower(long intervalMs, Duration timeout, AgentHeartbeatFactory heartbeatFactory)
+            throws Exception {
+        String leaderUrl = System.getenv().getOrDefault("PULSE_GROUP_LEADER_URL", "");
+        if (leaderUrl.isBlank()) {
+            throw new IllegalArgumentException("PULSE_GROUP_LEADER_URL must be set in follower mode");
+        }
+        HeartbeatClient leaderClient = new HeartbeatClient(List.of(leaderUrl), timeout);
+        System.out.printf("Pulse group follower started leader_url=%s%n", leaderUrl);
+        while (!Thread.currentThread().isInterrupted()) {
+            HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat();
+            leaderClient.send("/group/heartbeat", heartbeat);
             Thread.sleep(intervalMs);
         }
     }
@@ -51,11 +101,11 @@ public final class PulseAgentApp {
             this.timeout = timeout;
         }
 
-        void send(HeartbeatRequest heartbeat) {
+        void send(String path, HeartbeatRequest heartbeat) {
             for (int attempt = 0; attempt < coordinatorUrls.size(); attempt++) {
                 String baseUrl = coordinatorUrls.get((nextCoordinatorIndex + attempt) % coordinatorUrls.size());
                 try {
-                    HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/heartbeat"))
+                    HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path))
                             .timeout(timeout)
                             .header("content-type", "application/json")
                             .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(heartbeat)))
@@ -63,10 +113,18 @@ public final class PulseAgentApp {
                     HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
                     if (response.statusCode() >= 200 && response.statusCode() < 300) {
                         nextCoordinatorIndex = (nextCoordinatorIndex + attempt + 1) % coordinatorUrls.size();
-                        System.out.printf(
-                                "heartbeat status=ok coordinator=%s seq=%d%n",
-                                baseUrl,
-                                heartbeat.seq());
+                        if (heartbeat.isBatch()) {
+                            System.out.printf(
+                                    "heartbeat status=ok target=%s group=%s agents=%d%n",
+                                    baseUrl,
+                                    heartbeat.groupId(),
+                                    heartbeat.agents().size());
+                        } else {
+                            System.out.printf(
+                                    "heartbeat status=ok target=%s seq=%d%n",
+                                    baseUrl,
+                                    heartbeat.seq());
+                        }
                         return;
                     }
                     System.err.printf(
@@ -80,6 +138,49 @@ public final class PulseAgentApp {
                             baseUrl,
                             exception.getMessage());
                 }
+            }
+        }
+    }
+
+    static final class GroupHeartbeatReceiver {
+        private final HttpServer server;
+        private final GroupHeartbeatCollector collector;
+        private final ObjectMapper mapper = JsonSupport.objectMapper();
+
+        GroupHeartbeatReceiver(String bindHost, int port, GroupHeartbeatCollector collector) throws IOException {
+            this.collector = collector;
+            this.server = HttpServer.create(new InetSocketAddress(bindHost, port), 0);
+            this.server.createContext("/group/heartbeat", this::handleHeartbeat);
+        }
+
+        void start() {
+            server.start();
+        }
+
+        private void handleHeartbeat(HttpExchange exchange) throws IOException {
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                send(exchange, 405, "method not allowed");
+                return;
+            }
+            try {
+                HeartbeatRequest request = mapper.readValue(exchange.getRequestBody(), HeartbeatRequest.class);
+                if (request.isBatch()) {
+                    send(exchange, 400, "group receiver accepts single agent heartbeat only");
+                    return;
+                }
+                collector.record(request);
+                send(exchange, 200, "{\"ok\":true}");
+            } catch (Exception exception) {
+                send(exchange, 400, "{\"ok\":false,\"error\":\"" + exception.getMessage() + "\"}");
+            }
+        }
+
+        private static void send(HttpExchange exchange, int statusCode, String body) throws IOException {
+            byte[] bytes = body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("content-type", "application/json");
+            exchange.sendResponseHeaders(statusCode, bytes.length);
+            try (var output = exchange.getResponseBody()) {
+                output.write(bytes);
             }
         }
     }

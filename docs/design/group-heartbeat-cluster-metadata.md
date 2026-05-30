@@ -49,7 +49,7 @@ Pulse coordinator 已支持单机 agent 心跳和批量 `agents[]` group heartbe
 分组的核心目标不是 UI 展示，而是降低 coordinator 处理心跳的请求放大：
 
 - 将同一集群内的 agent 切分为多个 heartbeat group。
-- 每个 group 至多包含 13 个 agent。
+- 每个 group 至多包含 7 个 agent。
 - 每个 group 内只由一个 group leader 向 coordinator 批量上报 `agents[]`。
 - follower agent 将本机 heartbeat state 交给 group leader，由 leader 聚合后批量提交。
 - coordinator 从每台机器一个请求，收敛为每个 group 一个请求。
@@ -57,10 +57,10 @@ Pulse coordinator 已支持单机 agent 心跳和批量 `agents[]` group heartbe
 
 ### 规模估算
 
-假设一个集群有 `N` 台 agent，group size 上限为 `13`：
+假设一个集群有 `N` 台 agent，group size 上限为 `7`：
 
 ```text
-group_count = ceil(N / 13)
+group_count = ceil(N / 7)
 coordinator_requests_per_interval = group_count
 ```
 
@@ -68,9 +68,9 @@ coordinator_requests_per_interval = group_count
 
 | Agent 数 | 不分组请求数 | 分组后请求数 | 降幅 |
 | ---: | ---: | ---: | ---: |
-| 50 | 50 | 4 | 92% |
-| 500 | 500 | 39 | 92.2% |
-| 5000 | 5000 | 385 | 92.3% |
+| 50 | 50 | 8 | 84% |
+| 500 | 500 | 72 | 85.6% |
+| 5000 | 5000 | 715 | 85.7% |
 
 ## 分组策略设计
 
@@ -91,7 +91,7 @@ coordinator 或部署侧进行分组时使用以下输入：
 
 - 不跨 `cluster`。
 - 优先不跨 `area`。
-- 单组 agent 数不超过 `13`。
+- 单组 agent 数不超过 `7`。
 - `cluster=unknown` 的 agent 单独进入 `unknown` 集合，不与已知 cluster 混组。
 - `area=unknown` 的 agent 可以在同 cluster 内组成 `unknown` area group。
 
@@ -107,7 +107,7 @@ sort_key = normalized_ipv6_prefix(ip) + "/" + agent_id
 
 - IPv6 地址可解析时，优先按 IPv6 数值或前缀排序。
 - IPv6 缺失或不可解析时，按 `agent_id` 排序。
-- 排序后每 13 台切一个 group。
+- 排序后每 7 台切一个 group。
 
 ### Group ID
 
@@ -182,7 +182,7 @@ coordinator 收到 group heartbeat 后：
 
 当前推荐路径：
 
-- 第一阶段：部署侧静态分组，快速把 `cdn_new`、`doubao`、`tlbmirror` 切成最多 13 台一组。
+- 第一阶段：部署侧静态分组，快速把 `cdn_new`、`doubao`、`tlbmirror` 切成最多 7 台一组。
 - 第二阶段：coordinator 增加 group plan API，让 agent 周期拉取分组与 leader 信息。
 - 第三阶段：根据线上规模和故障模型评估是否需要更复杂的自组织能力。
 
@@ -195,14 +195,14 @@ agent 环境变量：
 | `PULSE_GROUP_ID` | 当前 agent 所属 group | `cdn2/yg/000` |
 | `PULSE_GROUP_LEADER` | 当前 group leader agent id | `dc05-p11-t636-n012.byted.org` |
 | `PULSE_GROUP_MEMBERS` | 当前 group 成员列表 | `agent-a,agent-b` |
-| `PULSE_GROUP_SIZE_LIMIT` | group size 上限 | `13` |
+| `PULSE_GROUP_SIZE_LIMIT` | group size 上限 | `7` |
 | `PULSE_GROUP_MODE` | `direct` 或 `leader` | `leader` |
 
 coordinator 可选配置：
 
 | 变量 | 含义 | 默认 |
 | --- | --- | --- |
-| `PULSE_GROUP_SIZE_LIMIT` | 分组大小上限 | `13` |
+| `PULSE_GROUP_SIZE_LIMIT` | 分组大小上限 | `7` |
 | `PULSE_GROUP_STRATEGY` | 分组策略 | `cluster_area_ipv6` |
 
 ## 后续实现建议
@@ -211,7 +211,7 @@ coordinator 可选配置：
 
 - auto-ops 获取目标机器列表。
 - 对每个集群按 `cluster -> area -> ipv6/agent_id` 排序。
-- 每 13 台切一个 group。
+- 每 7 台切一个 group。
 - 部署时写入 `PULSE_GROUP_*` 环境变量。
 - 暂时保留 direct heartbeat 作为兜底开关。
 
@@ -240,7 +240,7 @@ coordinator 可选配置：
 - 缺少 agent leader/follower 运行模式。
 - 缺少 follower 到 leader 的本地 state 传递协议。
 - 缺少 group plan 展示与健康检查。
-- 缺少 group size 上限 `13` 的测试与部署验证。
+- 缺少 group size 上限 `7` 的测试与部署验证。
 
 这些缺口不影响已验证的 group heartbeat 服务端协议，但会影响“通过分组降低 coordinator heartbeat read/write 压力”这一最终目标。
 
