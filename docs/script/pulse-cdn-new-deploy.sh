@@ -8,6 +8,7 @@ call() {
   local jar_path=$3
   local coordinators_csv=$4
   local install_root=${5:-/data24/otf/pulse}
+  local jre_tarball=${6:-}
   local scp_host
   local remote_tmp
 
@@ -17,6 +18,9 @@ call() {
   echo "EVENT phase=deploy host=${host} index=${index} status=start root=${install_root}"
   ssh "$host" "mkdir -p '$remote_tmp'"
   scp "$jar_path" "${scp_host}:${remote_tmp}/pulse.jar"
+  if [ -n "$jre_tarball" ] && [ "$jre_tarball" != "-" ]; then
+    scp "$jre_tarball" "${scp_host}:${remote_tmp}/pulse-jre.tar.gz"
+  fi
   ssh "$host" 'bash -s' -- "$host" "$coordinators_csv" "$install_root" "$remote_tmp" <<'REMOTE'
 set -euo pipefail
 
@@ -26,14 +30,34 @@ install_root=$3
 remote_tmp=$4
 
 java_bin="${PULSE_JAVA_BIN:-$(command -v java || true)}"
-if [ -z "$java_bin" ] || [ ! -x "$java_bin" ]; then
-  echo "ERROR java runtime not found; set PULSE_JAVA_BIN or install Java 17+" >&2
-  exit 20
-fi
 
 mkdir -p "$install_root/bin" "$install_root/etc" "$install_root/logs"
 cp "$remote_tmp/pulse.jar" "$install_root/bin/pulse.jar"
 chmod 0644 "$install_root/bin/pulse.jar"
+
+if { [ -z "$java_bin" ] || [ ! -x "$java_bin" ]; } && [ -f "$remote_tmp/pulse-jre.tar.gz" ]; then
+  rm -rf "$install_root/jre" "$install_root/jre.tmp"
+  mkdir -p "$install_root/jre.tmp"
+  tar -xzf "$remote_tmp/pulse-jre.tar.gz" -C "$install_root/jre.tmp"
+  bundled_java=$(find "$install_root/jre.tmp" -type f -path '*/bin/java' -perm -111 | head -n 1 || true)
+  if [ -z "$bundled_java" ]; then
+    echo "ERROR bundled JRE tarball does not contain executable bin/java" >&2
+    exit 21
+  fi
+  bundled_root=$(cd "$(dirname "$bundled_java")/.." && pwd)
+  mv "$bundled_root" "$install_root/jre"
+  rm -rf "$install_root/jre.tmp"
+  java_bin="$install_root/jre/bin/java"
+fi
+
+if [ -z "$java_bin" ] || [ ! -x "$java_bin" ]; then
+  echo "ERROR java runtime not found; pass a Linux JRE/JDK tarball as arg6 or set PULSE_JAVA_BIN" >&2
+  exit 20
+fi
+
+java_version=$("$java_bin" -version 2>&1 | head -n 1 || true)
+echo "JAVA_BIN=${java_bin}"
+echo "JAVA_VERSION=${java_version}"
 
 is_coordinator=0
 IFS=',' read -r -a coordinators <<< "$coordinators_csv"
