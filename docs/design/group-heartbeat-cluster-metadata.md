@@ -438,10 +438,10 @@ pgrep -f tide_worker | head -n 1
 ### 兜底策略
 
 - `tide_worker` 不存在时：
-  - `cluster` 使用部署参数，例如 `doubao` 或 `tlbmirror`
-  - 如果部署参数为空，则为 `unknown`
+  - `cluster` 必须为 `unknown`
   - `area` 为 `unknown`
 - 读取 `/proc/$pid/environ` 失败时，按不存在处理。
+- host 所属集群以 agent 环境变量 `PULSE_AGENT_CLUSTER` 为准；如果该变量不存在或为空，统一视为 `unknown`。
 
 ## Web 分组展示
 
@@ -460,7 +460,10 @@ Web 页面按 `cluster` 进行一级分组：
 - 同一 cluster 内，`load` 越高磁贴色彩越深，并提供底部 load bar；load bar 必须使用深色轨道和深色/cluster 色填充，禁止白底白条。
 - 磁贴内容超过可视区域时，必须在磁贴内部滚动，文字使用 `overflow-wrap`，禁止覆盖和溢出。
 - 磁贴不做额外交互动效，保持自然滚动；禁止持续播放的水波、扫光、果冻抖动或背景动态。
-- 磁贴展示 `IP`、`Area`、`Role`、`Zone`、`Load`、`Seq`、`Source`、`Seen`。
+- cluster 只用于 section/group 表达，不在单个 agent 磁贴中重复展示。
+- 磁贴不展示 hostname，不展示 `Seq` 和 `Rank`。
+- 磁贴展示 `IP`、`Area`、`Role`、`Zone`、`Load`、`Confirm`、`Source`、`Seen`。
+- 磁贴展示每个 `tide_worker` 的 `pid`、`cpu_percent`、`mem_percent`、`PORT1`、`TIDELET_COMPONENT_VERSION`；`pid` 变化用于判断进程重启。
 
 UI 开发门禁：
 

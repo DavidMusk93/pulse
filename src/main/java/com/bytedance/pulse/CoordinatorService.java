@@ -11,6 +11,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class CoordinatorService {
+    private static final long ALIVE_CONFIRMATION_WINDOW_MS = 20_000;
+    private static final int ALIVE_CONFIRMATION_THRESHOLD = 3;
+
     private final String coordinatorId;
     private final Clock clock;
     private final Map<String, NodeState> states = new ConcurrentHashMap<>();
@@ -229,6 +232,7 @@ public class CoordinatorService {
         private final long ttlMs;
         private final long observedAtMs;
         private final long expireAtMs;
+        private final List<HeartbeatConfirmation> confirmations;
         private final String source;
         private final Map<String, Object> state;
 
@@ -238,6 +242,7 @@ public class CoordinatorService {
                 long seq,
                 long ttlMs,
                 long observedAtMs,
+                List<HeartbeatConfirmation> confirmations,
                 String source,
                 Map<String, Object> state) {
             this.agentId = agentId;
@@ -246,6 +251,7 @@ public class CoordinatorService {
             this.ttlMs = ttlMs;
             this.observedAtMs = observedAtMs;
             this.expireAtMs = observedAtMs + ttlMs;
+            this.confirmations = List.copyOf(confirmations);
             this.source = source;
             this.state = Map.copyOf(state);
         }
@@ -261,6 +267,7 @@ public class CoordinatorService {
                     heartbeat.seq(),
                     heartbeat.ttlMs(),
                     observedAtMs,
+                    List.of(new HeartbeatConfirmation(heartbeat.epoch(), heartbeat.seq(), observedAtMs)),
                     source,
                     extractState(messages));
         }
@@ -275,22 +282,28 @@ public class CoordinatorService {
                     state.seq(),
                     state.ttlMs(),
                     state.observedAtMs(),
+                    List.of(new HeartbeatConfirmation(state.epoch(), state.seq(), state.observedAtMs())),
                     source,
                     extractState(messages));
         }
 
         private static NodeState newer(NodeState left, NodeState right) {
+            NodeState selected = left;
             if (right.epoch > left.epoch) {
-                return right;
+                selected = right;
+            } else if (right.epoch == left.epoch && right.seq > left.seq) {
+                selected = right;
             }
-            if (right.epoch == left.epoch && right.seq > left.seq) {
-                return right;
-            }
-            return left;
+            return selected.withConfirmations(mergeConfirmations(left.confirmations, right.confirmations, selected.observedAtMs));
+        }
+
+        private NodeState withConfirmations(List<HeartbeatConfirmation> nextConfirmations) {
+            return new NodeState(agentId, epoch, seq, ttlMs, observedAtMs, nextConfirmations, source, state);
         }
 
         private HostView toHostView(long now) {
-            String status = now <= expireAtMs ? "alive" : "expired";
+            int confirmations = recentConfirmations(now);
+            String status = now > expireAtMs ? "expired" : confirmations >= ALIVE_CONFIRMATION_THRESHOLD ? "alive" : "warming";
             return new HostView(
                     agentId,
                     epoch,
@@ -298,6 +311,7 @@ public class CoordinatorService {
                     ttlMs,
                     observedAtMs,
                     expireAtMs,
+                    confirmations,
                     status,
                     source,
                     value("host", agentId),
@@ -308,6 +322,15 @@ public class CoordinatorService {
                     value("role", "-"),
                     value("load", "-"),
                     state);
+        }
+
+        private int recentConfirmations(long now) {
+            long cutoff = now - ALIVE_CONFIRMATION_WINDOW_MS;
+            return (int) confirmations.stream()
+                    .filter(confirmation -> confirmation.observedAtMs() >= cutoff && confirmation.observedAtMs() <= now)
+                    .map(HeartbeatConfirmation::key)
+                    .distinct()
+                    .count();
         }
 
         private String value(String key, String fallback) {
@@ -326,6 +349,33 @@ public class CoordinatorService {
                 }
             }
             return merged;
+        }
+
+        private static List<HeartbeatConfirmation> mergeConfirmations(
+                List<HeartbeatConfirmation> left,
+                List<HeartbeatConfirmation> right,
+                long referenceMs) {
+            long cutoff = referenceMs - ALIVE_CONFIRMATION_WINDOW_MS;
+            Map<String, HeartbeatConfirmation> merged = new LinkedHashMap<>();
+            for (HeartbeatConfirmation confirmation : left) {
+                if (confirmation.observedAtMs() >= cutoff) {
+                    merged.put(confirmation.key(), confirmation);
+                }
+            }
+            for (HeartbeatConfirmation confirmation : right) {
+                if (confirmation.observedAtMs() >= cutoff) {
+                    merged.put(confirmation.key(), confirmation);
+                }
+            }
+            return merged.values().stream()
+                    .sorted(Comparator.comparingLong(HeartbeatConfirmation::observedAtMs))
+                    .toList();
+        }
+    }
+
+    private record HeartbeatConfirmation(long epoch, long seq, long observedAtMs) {
+        private String key() {
+            return epoch + "/" + seq;
         }
     }
 }

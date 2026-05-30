@@ -677,6 +677,62 @@ Forbidden 动效确认不包含：
 - `liquid-flow`
 - `http-equiv="refresh"`
 
+## Tide Worker 指标与三次确认存活
+
+需求：
+
+- agent 磁贴不展示 hostname、`Seq`、`Rank`。
+- cluster 只作为 section/group 表达，不在单个 agent 磁贴中重复展示。
+- `PULSE_AGENT_CLUSTER` 是 cluster 唯一来源；缺失或空值统一为 `unknown`。
+- agent 上报每个 `tide_worker` 的 `pid`、`cpu_percent`、`mem_percent`、`PORT1`、`TIDELET_COMPONENT_VERSION`。
+- `pid` 变化作为 `tide_worker` 进程重启/替换信号。
+- host 存活判断改为最近 `20s` 内至少收到 `3` 个不同 `epoch/seq` 心跳确认。
+
+本地验证：
+
+```bash
+mvn test
+mvn package
+```
+
+结果：
+
+- `mvn test`：`18 tests, 0 failures, 0 errors`。
+- `mvn package`：构建成功。
+- Jar SHA256：`25528f5bc9dee26a0f50782b6cc0f5861cd6f022cd5b0d89ef53139147055cc1`。
+
+部署范围：
+
+| 集群 | 范围 | Dry-run | 部署结果 | Verify |
+| --- | ---: | --- | --- | --- |
+| `cdn_new` | 50 | `total=50` | `summary: total=50 ok=50 failed=0` | `summary: total=50 ok=50 failed=0` |
+| `doubao` | 8 | `total=8` | `summary: total=8 ok=8 failed=0` | `summary: total=8 ok=8 failed=0` |
+| `tlbmirror` | 5 | `total=5` | `summary: total=5 ok=5 failed=0` | `summary: total=5 ok=5 failed=0` |
+
+三台 coordinator API 验证：
+
+| Coordinator | Total | Alive | Warming | Expired | Unknown Cluster | Confirmations | Tide Workers | Workers With PID |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: |
+| `fdbd:dc05:11:634::45` | 63 | 63 | 0 | 0 | 2 | `3..4` | 291 | 291 |
+| `fdbd:dc05:13:10c::40` | 63 | 63 | 0 | 0 | 2 | `3..4` | 291 | 291 |
+| `fdbd:dc07:0:810::44` | 63 | 63 | 0 | 0 | 2 | `3..4` | 291 | 291 |
+
+Web UI 验证：
+
+- 包含：`tide_worker`。
+- 包含：`pid ${escapeHtml(worker.pid`。
+- 包含：`host.heartbeat_confirmations`。
+- 包含：`data-field="ip_title"`。
+- 不包含：`data-field="host"`。
+- 不包含：`<span>Seq</span>`。
+- 不包含：`<span>Rank</span>`。
+- 不包含：`jelly-scroll`、`water-ripple`、`http-equiv="refresh"`。
+
+说明：
+
+- 本次改动包含 agent 侧采集逻辑、coordinator 侧 alive 规则和 UI 展示，因此已全量同步 3 个集群的 coordinator & agent。
+- `.tmp/verify_tide_worker_alive.py` 是本次手工验证脚本，位于已忽略的 `.tmp/` 下，不纳入提交。
+
 ## Host UI 去动效与 Keyed DOM 刷新
 
 问题：

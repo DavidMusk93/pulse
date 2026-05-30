@@ -127,7 +127,7 @@ fi
 
 tide_pid=$(pgrep -f tide_worker | head -n 1 || true)
 tide_area="unknown"
-tide_cluster="$cluster_fallback"
+tide_cluster="unknown"
 if [ -n "$tide_pid" ] && [ -r "/proc/$tide_pid/environ" ]; then
   tide_area=$(tr '\0' '\n' < "/proc/$tide_pid/environ" | awk -F= '$1=="_TIDELET_AREA"{print $2; exit}')
   tide_cluster=$(tr '\0' '\n' < "/proc/$tide_pid/environ" | awk -F= '$1=="_TIDELET_CLUSTER_ID"{print $2; exit}')

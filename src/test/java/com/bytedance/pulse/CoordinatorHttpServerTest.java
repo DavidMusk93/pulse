@@ -136,8 +136,14 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("restoreViewportScroll"));
         assertTrue(response.body().contains("window.scrollTo(viewport.left, viewport.top)"));
         assertTrue(response.body().contains("placeChild"));
+        assertTrue(response.body().contains("tide_worker"));
+        assertTrue(response.body().contains("pid ${escapeHtml(worker.pid || '')}"));
+        assertTrue(response.body().contains("host.heartbeat_confirmations"));
         assertTrue(response.body().contains("background: rgba(15, 23, 42, .24)"));
         assertTrue(response.body().contains("background: hsl(var(--cluster-hue) 48% 24%)"));
+        assertTrue(!response.body().contains("data-field=\"host\""));
+        assertTrue(!response.body().contains("<span>Seq</span>"));
+        assertTrue(!response.body().contains("<span>Rank</span>"));
         assertTrue(!response.body().contains("background: rgba(255,255,255,.86)"));
         assertTrue(!response.body().contains("liquid-flow"));
         assertTrue(!response.body().contains("water-ripple"));
@@ -154,38 +160,8 @@ class CoordinatorHttpServerTest {
 
     @Test
     void heartbeatResponseCarriesGroupPlanMessage() throws Exception {
-        postJson("/heartbeat", """
-                {
-                  "agent_id": "agent-1",
-                  "epoch": 1,
-                  "seq": 42,
-                  "ttl_ms": 15000,
-                  "messages": [
-                    {
-                      "message_id": "msg-agent-1-42",
-                      "type": "state.heartbeat",
-                      "version": 1,
-                      "payload": {"host": "host-1", "ip": "10.0.0.1", "cluster": "cluster-a", "area": "area-a"}
-                    }
-                  ]
-                }
-                """);
-        postJson("/heartbeat", """
-                {
-                  "agent_id": "agent-2",
-                  "epoch": 1,
-                  "seq": 43,
-                  "ttl_ms": 15000,
-                  "messages": [
-                    {
-                      "message_id": "msg-agent-2-43",
-                      "type": "state.heartbeat",
-                      "version": 1,
-                      "payload": {"host": "host-2", "ip": "10.0.0.2", "cluster": "cluster-a", "area": "area-a"}
-                    }
-                  ]
-                }
-                """);
+        postAlive("agent-1", "host-1", "10.0.0.1");
+        postAlive("agent-2", "host-2", "10.0.0.2");
 
         HttpResponse<String> response = postJson("/heartbeat", """
                 {
@@ -341,6 +317,31 @@ class CoordinatorHttpServerTest {
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
         return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private void postAlive(String agentId, String host, String ip) throws Exception {
+        for (int seq = 1; seq <= 3; seq++) {
+            postJson("/heartbeat", """
+                    {
+                      "agent_id": "__AGENT_ID__",
+                      "epoch": 1,
+                      "seq": __SEQ__,
+                      "ttl_ms": 15000,
+                      "messages": [
+                        {
+                          "message_id": "msg-__AGENT_ID__-__SEQ__",
+                          "type": "state.heartbeat",
+                          "version": 1,
+                          "payload": {"host": "__HOST__", "ip": "__IP__", "cluster": "cluster-a", "area": "area-a"}
+                        }
+                      ]
+                    }
+                    """
+                    .replace("__AGENT_ID__", agentId)
+                    .replace("__HOST__", host)
+                    .replace("__IP__", ip)
+                    .replace("__SEQ__", String.valueOf(seq)));
+        }
     }
 
     private static HttpServer heartbeatStub(AtomicInteger hits) throws IOException {

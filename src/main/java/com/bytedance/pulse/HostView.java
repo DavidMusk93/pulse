@@ -9,6 +9,7 @@ public record HostView(
         long ttlMs,
         long observedAtMs,
         long expireAtMs,
+        int heartbeatConfirmations,
         String status,
         String source,
         String host,

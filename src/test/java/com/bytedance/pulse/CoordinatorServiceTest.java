@@ -17,6 +17,8 @@ class CoordinatorServiceTest {
     void heartbeatStoresHostState() {
         CoordinatorService service = new CoordinatorService("coordinator-a", clock);
 
+        service.handleHeartbeat(singleHeartbeat("agent-1", 1, 40, "host-a", "10.0.0.1"));
+        service.handleHeartbeat(singleHeartbeat("agent-1", 1, 41, "host-a", "10.0.0.1"));
         HeartbeatResponse response = service.handleHeartbeat(singleHeartbeat("agent-1", 1, 42, "host-a", "10.0.0.1"));
 
         assertTrue(response.ok());
@@ -28,7 +30,19 @@ class CoordinatorServiceTest {
         assertEquals("cluster-a", host.cluster());
         assertEquals("area-a", host.area());
         assertEquals("alive", host.status());
+        assertEquals(3, host.heartbeatConfirmations());
         assertEquals("cmd.group_plan", response.messages().get(0).type());
+    }
+
+    @Test
+    void heartbeatRequiresThreeConfirmationsWithinWindowToBeAlive() {
+        CoordinatorService service = new CoordinatorService("coordinator-a", clock);
+
+        service.handleHeartbeat(singleHeartbeat("agent-1", 1, 42, "host-a", "10.0.0.1"));
+
+        HostView host = service.hosts().get(0);
+        assertEquals("warming", host.status());
+        assertEquals(1, host.heartbeatConfirmations());
     }
 
     @Test
@@ -83,7 +97,7 @@ class CoordinatorServiceTest {
     void coordinatorMaintainsDynamicGroupPlansWithLimitSeven() {
         CoordinatorService service = new CoordinatorService("coordinator-a", clock);
         for (int i = 1; i <= 8; i++) {
-            service.handleHeartbeat(singleHeartbeat("agent-" + i, 1, i, "host-" + i, "10.0.0." + i));
+            confirmAlive(service, "agent-" + i, "host-" + i, "10.0.0." + i);
         }
 
         List<GroupView> groups = service.groups();
@@ -155,6 +169,12 @@ class CoordinatorServiceTest {
                 heartbeat.ttlMs(),
                 heartbeat.messages(),
                 List.of());
+    }
+
+    private static void confirmAlive(CoordinatorService service, String agentId, String host, String ip) {
+        service.handleHeartbeat(singleHeartbeat(agentId, 1, 1, host, ip));
+        service.handleHeartbeat(singleHeartbeat(agentId, 1, 2, host, ip));
+        service.handleHeartbeat(singleHeartbeat(agentId, 1, 3, host, ip));
     }
 
     private static AgentHeartbeat agent(String agentId, long epoch, long seq, String host, String ip) {

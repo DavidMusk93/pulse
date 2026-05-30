@@ -122,6 +122,38 @@ public final class HostTilesPage {
                       letter-spacing: -.04em;
                       overflow-wrap: anywhere;
                     }
+                    .worker-list {
+                      display: grid;
+                      gap: 8px;
+                      margin-top: 14px;
+                    }
+                    .worker-card {
+                      padding: 9px;
+                      border: 1px solid rgba(255,255,255,.24);
+                      background: rgba(15,23,42,.16);
+                    }
+                    .worker-title {
+                      display: flex;
+                      justify-content: space-between;
+                      gap: 8px;
+                      font-size: 12px;
+                      font-weight: 750;
+                    }
+                    .worker-grid {
+                      display: grid;
+                      grid-template-columns: 1fr 1fr;
+                      gap: 6px 8px;
+                      margin-top: 7px;
+                      font-size: 11px;
+                    }
+                    .worker-grid span {
+                      display: block;
+                      opacity: .72;
+                      font-size: 9px;
+                      line-height: 1.5;
+                      text-transform: uppercase;
+                      letter-spacing: .08em;
+                    }
                     .tile-meta {
                       display: grid;
                       grid-template-columns: 1fr;
@@ -383,7 +415,7 @@ public final class HostTilesPage {
                       function sortHosts(hosts) {
                         return [...hosts].sort((left, right) =>
                           loadValue(right) - loadValue(left)
-                          || String(left.host || '').localeCompare(String(right.host || ''))
+                          || String(left.ip || '').localeCompare(String(right.ip || ''))
                           || String(left.agent_id || '').localeCompare(String(right.agent_id || '')));
                       }
 
@@ -394,21 +426,21 @@ public final class HostTilesPage {
                         tile.innerHTML = `
                           <div class="tile-scroll">
                             <div class="tile-head">
-                              <div class="tile-agent" data-field="agent"></div>
+                              <div class="tile-agent" data-field="identity"></div>
                               <div class="status" data-field="status"></div>
                             </div>
-                            <div class="tile-host" data-field="host"></div>
+                            <div class="tile-host" data-field="ip_title"></div>
                             <div class="tile-meta">
                               <div><span>Load</span><span data-field="load"></span></div>
                               <div><span>IP</span><span data-field="ip"></span></div>
                               <div><span>Area</span><span data-field="area"></span></div>
                               <div><span>Role</span><span data-field="role"></span></div>
                               <div><span>Zone</span><span data-field="zone"></span></div>
-                              <div><span>Seq</span><span data-field="seq"></span></div>
+                              <div><span>Confirm</span><span data-field="confirmations"></span></div>
                               <div><span>Source</span><span data-field="source"></span></div>
                               <div><span>Seen</span><span data-field="seen"></span></div>
-                              <div><span>Rank</span><span data-field="rank"></span></div>
                             </div>
+                            <div class="worker-list" data-field="workers"></div>
                           </div>
                           <div class="load-bar" aria-hidden="true"></div>
                         `;
@@ -423,18 +455,44 @@ public final class HostTilesPage {
                         tile.dataset.agentId = agentId;
                         tile.className = 'tile ' + statusClass;
                         tile.style.setProperty('--load-level', level.toFixed(3));
-                        setText(tile, 'agent', agentId);
+                        setText(tile, 'identity', [host.role, host.area].filter(Boolean).join(' · ') || 'agent');
                         setText(tile, 'status', host.status || '');
-                        setText(tile, 'host', host.host || '');
+                        setText(tile, 'ip_title', host.ip || 'unknown ip');
                         setText(tile, 'load', host.load || '');
                         setText(tile, 'ip', host.ip || '');
                         setText(tile, 'area', host.area || '');
                         setText(tile, 'role', host.role || '');
                         setText(tile, 'zone', host.zone || '');
-                        setText(tile, 'seq', String(host.seq || 0));
+                        setText(tile, 'confirmations', String(host.heartbeat_confirmations || 0) + '/3 in 20s');
                         setText(tile, 'source', host.source || '');
                         setText(tile, 'seen', formatSeen(host.observed_at_ms));
-                        setText(tile, 'rank', '#' + String(rank + 1).padStart(2, '0'));
+                        renderWorkers(tile.querySelector('[data-field="workers"]'), tideWorkers(host));
+                      }
+
+                      function tideWorkers(host) {
+                        const workers = host.state && Array.isArray(host.state.tide_workers) ? host.state.tide_workers : [];
+                        return workers.filter(Boolean);
+                      }
+
+                      function renderWorkers(container, workers) {
+                        if (!workers.length) {
+                          container.innerHTML = '<div class="worker-card">No tide_worker detected</div>';
+                          return;
+                        }
+                        container.innerHTML = workers.map(worker => `
+                          <div class="worker-card">
+                            <div class="worker-title">
+                              <span>tide_worker</span>
+                              <span>pid ${escapeHtml(worker.pid || '')}</span>
+                            </div>
+                            <div class="worker-grid">
+                              <div><span>CPU</span>${escapeHtml(percent(worker.cpu_percent))}</div>
+                              <div><span>MEM</span>${escapeHtml(percent(worker.mem_percent))}</div>
+                              <div><span>PORT1</span>${escapeHtml(worker.port1 || '-')}</div>
+                              <div><span>Version</span>${escapeHtml(worker.component_version || '-')}</div>
+                            </div>
+                          </div>
+                        `).join('');
                       }
 
                       function setText(root, field, value) {
@@ -461,6 +519,11 @@ public final class HostTilesPage {
                       function formatSeen(value) {
                         const millis = Number(value);
                         return Number.isFinite(millis) ? new Date(millis).toLocaleString() : '';
+                      }
+
+                      function percent(value) {
+                        const number = Number.parseFloat(value);
+                        return Number.isFinite(number) ? number.toFixed(2) + '%' : '-';
                       }
 
                       function escapeHtml(value) {

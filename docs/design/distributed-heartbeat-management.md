@@ -424,6 +424,7 @@ NodeState {
   ttl_ms: uint64
   observed_at_ms: int64
   expire_at_ms: int64
+  heartbeat_confirmations: uint32
   source: string          // "direct" | "group" | peer coordinator_id
   state: map<string, any>
 }
@@ -439,10 +440,52 @@ MessageLedger {
 }
 ```
 
-- `now <= expire_at_ms`：`Alive`
-- `now > expire_at_ms`：`Suspect` / `Expired`
+- `now <= expire_at_ms` 且最近 `20s` 内至少收到 `3` 个不同 `epoch/seq` 心跳确认：`Alive`
+- `now <= expire_at_ms` 但最近 `20s` 内确认数不足 `3`：`Warming`
+- `now > expire_at_ms`：`Expired`
 - `state.*` 更新 `NodeState`
 - `cmd.*` 和 `reply.*` 更新 `MessageLedger`
+
+存活确认规则：
+
+- coordinator 必须按 `agent_id` 维护最近 `20s` 的心跳确认窗口。
+- 确认以不同 `epoch/seq` 去重，避免重放、peer 重试或重复转发把单次心跳计为多次。
+- 只有确认数达到 `3` 后，host 才能进入 `alive`，用于 group plan 计算和 `/api/hosts` 展示。
+- 确认数不足时仍保存最新 `state.*`，但状态显示为 `warming`，不参与 group plan 选组。
+- `heartbeat_confirmations` 暴露当前 `20s` 窗口内确认数，便于 UI 和调试解释状态变化。
+
+Agent 上报的 `state.heartbeat.payload`：
+
+```json
+{
+  "status": "alive",
+  "host": "host-a",
+  "ip": "fdbd:...",
+  "cluster": "cluster-from-PULSE_AGENT_CLUSTER",
+  "area": "area-a",
+  "zone": "area-a",
+  "role": "cdn_new",
+  "load": "0.42",
+  "tide_workers": [
+    {
+      "pid": 12345,
+      "cpu_percent": "1.25",
+      "mem_percent": "0.42",
+      "port1": "8080",
+      "component_version": "v1.2.3"
+    }
+  ],
+  "agent_time_ms": 1710000000000
+}
+```
+
+`tide_workers[]` 采集规则：
+
+- agent 在本机 `/proc` 扫描命令行包含 `tide_worker` 的进程。
+- 每个进程上报 `pid`、进程 CPU 百分比、内存百分比、`PORT1`、`TIDELET_COMPONENT_VERSION`。
+- `pid` 是重启识别信号；同一 agent 的 `tide_worker.pid` 变化表示进程重启或替换。
+- `PORT1` 与 `TIDELET_COMPONENT_VERSION` 来自 `/proc/<pid>/environ`，读取失败时置空，不影响心跳。
+- 非 Linux 或 `/proc` 不可读时，`tide_workers` 为空数组。
 
 ## 心跳流程
 
