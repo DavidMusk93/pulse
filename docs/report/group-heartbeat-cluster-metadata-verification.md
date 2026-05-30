@@ -519,3 +519,54 @@ UI check 项：
 - 不包含旧紫/红 hue
 - 不包含红色错误提示
 - 不包含 `http-equiv="refresh"`
+
+## Host UI 水波动效与 Load Bar 可读性验证
+
+验证时间：2026-05-30 19:15 CST。
+
+问题：
+
+- 旧 `liquid-flow` 扫光式高光会抢占视觉焦点。
+- 旧 load bar 使用白色填充，在浅色磁贴或白色视觉背景下对比度不足。
+
+实现结果：
+
+- 移除 `liquid-flow` 扫光式高光。
+- 改为低透明度 `water-ripple` 水波滚动纹理。
+- 水波纹基于 `repeating-radial-gradient`，只在磁贴底部低透明度滚动。
+- load bar 轨道改为 `rgba(15, 23, 42, .24)`。
+- load bar 填充改为 `hsl(var(--cluster-hue) 48% 24%)`，不再使用白色填充。
+- 保留 `prefers-reduced-motion`，关闭动效时不播放水波动画。
+
+本地验证：
+
+- `mvn test`：17 个测试全部通过。
+- `mvn package`：构建成功。
+- 代码扫描确认不再包含 `liquid-flow`。
+- 代码扫描确认不再包含白色 load 填充 `rgba(255,255,255,.86)`。
+
+部署结果：
+
+| 集群 | 并发 | 结果 |
+| --- | ---: | --- |
+| `cdn_new` | 8 | `summary: total=50 ok=50 failed=0` |
+| `doubao` | 8 | `summary: total=8 ok=8 failed=0` |
+| `tlbmirror` | 8 | `summary: total=5 ok=5 failed=0` |
+
+Coordinator 收敛与 UI 验证：
+
+| Coordinator | Total | Alive | Expired | Direct | Groups | Max Group Source Count | UI Checks |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `fdbd:dc05:11:634::45` | 63 | 63 | 0 | 0 | 16 | 7 | pass |
+| `fdbd:dc05:13:10c::40` | 63 | 63 | 0 | 0 | 16 | 7 | pass |
+| `fdbd:dc07:0:810::44` | 63 | 63 | 0 | 0 | 16 | 7 | pass |
+
+UI check 项：
+
+- `water-ripple`
+- `repeating-radial-gradient`
+- 深色 load track
+- 深色 cluster load fill
+- 不包含 `liquid-flow`
+- 不包含白色 load fill
+- `prefers-reduced-motion`
