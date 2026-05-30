@@ -29,6 +29,27 @@
   - 按 `cluster` 渲染 `cluster-section`。
   - 磁贴增加 `Area` 展示。
 
+## 阶段 2.1：减压型分组策略设计补充
+
+- 明确当前缺口：
+  - Web 展示分组已实现，但不能降低 coordinator 压力。
+  - `/heartbeat` 的 `agents[]` 协议已实现，但线上 agent 尚未按 group 批量上报。
+  - 真正缺少的是 group assignment、leader/follower 模式和 follower 到 leader 的 state 传递。
+- 分组目标：
+  - 同一集群内按 group 批量化心跳。
+  - 每组最多 13 个 agent。
+  - coordinator 请求数从 `N` 降为 `ceil(N / 13)`。
+- 分组策略：
+  - 一级边界：`cluster`。
+  - 二级边界：`area`。
+  - 组内排序：IPv6 近似度优先，缺失时按 `agent_id`。
+  - `group_id` 格式：`cluster/area/shard_index`。
+  - leader：组内排序后的第一个 alive agent。
+- 演进路径：
+  - 第一阶段用 auto-ops 静态生成 `PULSE_GROUP_*` 环境变量。
+  - 第二阶段 agent 支持 leader/follower 模式，由 leader 批量上报 `agents[]`。
+  - 第三阶段 coordinator 提供 `/api/groups` 和动态 group plan。
+
 ## 阶段 3：测试驱动
 
 - 更新 `AgentHeartbeatFactoryTest`：
@@ -147,7 +168,10 @@ curl -g -sS --proxy socks5h://127.0.0.1:6699 \
 - 已发现并修复两个部署问题：
   - 系统 Java 11 被误用，已改为 Java 17+ 检测与 bundled JRE 兜底。
   - 部署后未重启旧服务，已改为显式 restart。
+- 已补充减压型分组策略设计：
+  - 当前实现缺少 group assignment 和 agent leader/follower 模式。
+  - 后续应按最多 13 个 agent 一组推进批量化心跳上报。
 - 下一步：
-  - 重新部署三组机器。
-  - 再次验证 `/api/hosts` 与 `/hosts`。
-  - 生成报告并提交推送。
+  - 设计并实现部署侧静态分组脚本。
+  - 实现 agent leader/follower 模式。
+  - 验证 coordinator 请求量是否从 `N` 收敛到 `ceil(N / 13)`。
