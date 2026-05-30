@@ -459,3 +459,63 @@ UI check 项：
 部署约束：
 
 - 后续 auto-ops 部署和验证统一使用 `--parallel 8`。
+
+## Host UI 滚动保持与柔和配色验证
+
+验证时间：2026-05-30 18:59 CST。
+
+问题：
+
+- `PulseView` 每轮 JSON refresh 后重绘磁贴区域，导致用户在某个磁贴内部滚动时 cursor 回到顶部。
+- 旧 palette 包含紫色、红色等高刺激色，长时间观察容易晃眼。
+
+实现结果：
+
+- `PulseView` 增加 `scrollPositions: new Map()`。
+- render 前通过 `captureTileScroll` 按 `data-agent-id` 记录 `.tile-scroll` 的 `scrollTop/scrollLeft`。
+- render 后通过 `restoreTileScroll` 恢复对应磁贴内部滚动 cursor。
+- cluster palette 调整为低饱和冷静色：`[205, 188, 168, 146, 126, 95, 48, 215, 200, 178]`。
+- 磁贴 HSL 饱和度从高饱和降为 `42%~44%`。
+- 错误提示色从红色改为柔和琥珀/石板色。
+
+本地验证：
+
+- `mvn test`：17 个测试全部通过。
+- `mvn package`：构建成功。
+- 代码扫描确认不再包含旧紫/红 hue：`265`、`338`。
+- 代码扫描确认不再包含红色错误提示：`#fee2e2`、`#7f1d1d`、`#fecaca`。
+
+部署结果：
+
+| 集群 | 并发 | 结果 |
+| --- | ---: | --- |
+| `cdn_new` | 8 | `summary: total=50 ok=50 failed=0` |
+| `doubao` | 8 | `summary: total=8 ok=8 failed=0` |
+| `tlbmirror` | 8 | `summary: total=5 ok=5 failed=0` |
+
+Service verify：
+
+| 集群 | 并发 | 结果 |
+| --- | ---: | --- |
+| `cdn_new` | 8 | `summary: total=50 ok=50 failed=0` |
+| `doubao` | 8 | `summary: total=8 ok=8 failed=0` |
+| `tlbmirror` | 8 | `summary: total=5 ok=5 failed=0` |
+
+Coordinator 收敛与 UI 验证：
+
+| Coordinator | Total | Alive | Expired | Direct | Groups | Max Group Source Count | UI Checks |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `fdbd:dc05:11:634::45` | 63 | 63 | 0 | 0 | 17 | 7 | pass |
+| `fdbd:dc05:13:10c::40` | 63 | 63 | 0 | 0 | 17 | 7 | pass |
+| `fdbd:dc07:0:810::44` | 63 | 63 | 0 | 0 | 17 | 7 | pass |
+
+UI check 项：
+
+- `scrollPositions: new Map()`
+- `captureTileScroll`
+- `restoreTileScroll`
+- `data-agent-id`
+- 低饱和 palette
+- 不包含旧紫/红 hue
+- 不包含红色错误提示
+- 不包含 `http-equiv="refresh"`
