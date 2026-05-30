@@ -200,10 +200,12 @@ if [ "$(id -u)" -eq 0 ]; then
   install_system_unit pulse-agent "$agent_exec" "$install_root/etc/pulse-agent.env"
   systemctl daemon-reload
   systemctl enable --now pulse-agent.service
+  systemctl restart pulse-agent.service
   if [ "$is_coordinator" -eq 1 ]; then
     install_system_unit pulse-coordinator "$coordinator_exec" "$install_root/etc/pulse-coordinator.env"
     systemctl daemon-reload
     systemctl enable --now pulse-coordinator.service
+    systemctl restart pulse-coordinator.service
   else
     systemctl disable --now pulse-coordinator.service >/dev/null 2>&1 || true
   fi
@@ -215,10 +217,12 @@ else
   install_user_unit pulse-agent "$agent_exec" "$install_root/etc/pulse-agent.env"
   systemctl --user daemon-reload
   systemctl --user enable --now pulse-agent.service
+  systemctl --user restart pulse-agent.service
   if [ "$is_coordinator" -eq 1 ]; then
     install_user_unit pulse-coordinator "$coordinator_exec" "$install_root/etc/pulse-coordinator.env"
     systemctl --user daemon-reload
     systemctl --user enable --now pulse-coordinator.service
+    systemctl --user restart pulse-coordinator.service
   else
     systemctl --user disable --now pulse-coordinator.service >/dev/null 2>&1 || true
   fi
