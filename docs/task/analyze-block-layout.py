@@ -61,6 +61,7 @@ Flow:
 from __future__ import annotations
 
 import argparse
+import ctypes
 import dataclasses
 import datetime as dt
 import os
@@ -193,6 +194,38 @@ def log_thread_id() -> int:
     native_id = getattr(threading, "get_native_id", None)
     if native_id is not None:
         return int(native_id())
+
+    if sys.platform.startswith("linux"):
+        libc = ctypes.CDLL(None, use_errno=True)
+        gettid = getattr(libc, "gettid", None)
+        if gettid is not None:
+            gettid.restype = ctypes.c_long
+            tid = int(gettid())
+            if tid > 0:
+                return tid
+
+        syscall = getattr(libc, "syscall", None)
+        if syscall is not None:
+            syscall.restype = ctypes.c_long
+            machine = os.uname().machine.lower()
+            sys_gettid_by_machine = {
+                "x86_64": 186,
+                "amd64": 186,
+                "i386": 224,
+                "i686": 224,
+                "aarch64": 178,
+                "arm64": 178,
+                "armv7l": 224,
+                "armv6l": 224,
+                "ppc64le": 207,
+                "s390x": 236,
+            }
+            sys_gettid = sys_gettid_by_machine.get(machine)
+            if sys_gettid is not None:
+                tid = int(syscall(ctypes.c_long(sys_gettid)))
+                if tid > 0:
+                    return tid
+
     return threading.get_ident()
 
 
