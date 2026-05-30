@@ -332,3 +332,69 @@ Web 验证：
 - verify 脚本增加 systemd `ExecStart` 输出，避免 PATH Java 与实际运行 Java 混淆。
 - 对 group heartbeat 增加压测，观察单请求大批量 `agents[]` 的延迟和内存占用。
 - 后续如需更细分聚合，可在 `cluster -> area -> IPv6 prefix` 三层维度扩展。
+
+## Host Tiles UI 重构验证
+
+验证时间：2026-05-30 18:34 CST。
+
+设计来源：
+
+- 参考 `https://github.com/nextlevelbuilder/ui-ux-pro-max-skill` 的 Flat Design、Real-Time Monitoring、Heat Map intensity、motion/reduced-motion 检查思路。
+
+实现结果：
+
+- `/hosts` 页面改为扁平化实时监控风格。
+- 磁贴改为正方形，使用 `aspect-ratio: 1 / 1`。
+- 磁贴内部使用 `tile-scroll`，内容过多时在磁贴内滚动。
+- 不同 cluster 使用不同 `--cluster-hue`。
+- cluster 内按 `load` 降序渲染。
+- `load` 越高颜色越重，并展示底部 `load-bar`。
+- 提供 `liquid-flow` 流水高光动效。
+- 支持 `prefers-reduced-motion`。
+- 页面不再包含旧的 `Windows Phone` 文案。
+
+本地验证：
+
+- `mvn test`：17 个测试全部通过。
+- `mvn package`：构建成功。
+
+部署结果：
+
+| 集群 | 结果 |
+| --- | --- |
+| `cdn_new` | `summary: total=50 ok=50 failed=0` |
+| `doubao` | `summary: total=8 ok=8 failed=0` |
+| `tlbmirror` | `summary: total=5 ok=5 failed=0` |
+
+Service verify：
+
+| 集群 | 结果 |
+| --- | --- |
+| `cdn_new` | `summary: total=50 ok=50 failed=0` |
+| `doubao` | `summary: total=8 ok=8 failed=0` |
+| `tlbmirror` | `summary: total=5 ok=5 failed=0` |
+
+Coordinator 收敛与 UI 验证：
+
+| Coordinator | Total | Alive | Expired | Direct | Groups | Max Group Source Count | UI Checks |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `fdbd:dc05:11:634::45` | 63 | 63 | 0 | 0 | 16 | 7 | pass |
+| `fdbd:dc05:13:10c::40` | 63 | 63 | 0 | 0 | 16 | 7 | pass |
+| `fdbd:dc07:0:810::44` | 63 | 63 | 0 | 0 | 16 | 7 | pass |
+
+UI check 项：
+
+- `flat square host tiles`
+- `aspect-ratio: 1 / 1`
+- `tile-scroll`
+- `load-bar`
+- `liquid-flow`
+- `prefers-reduced-motion`
+- `--cluster-hue`
+- 不包含 `Windows Phone`
+
+附带修复：
+
+- 部署验证时发现 stale follower 仍可向旧 leader 上报，导致部分 follower 被 group batch 截断。
+- 已修复为 leader 只接受当前 `cmd.group_plan.members` 内 follower。
+- 非成员返回 `not_group_member`，触发 follower fallback 到 coordinator 获取新 plan。
