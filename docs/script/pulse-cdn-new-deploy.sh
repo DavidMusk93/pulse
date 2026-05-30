@@ -8,16 +8,16 @@ call() {
   local jar_path=$3
   local coordinators_csv=$4
   local install_root=${5:-/data24/otf/pulse}
-  local ssh_host
+  local scp_host
   local remote_tmp
 
-  ssh_host=$(adapt "$host")
+  scp_host=$(adapt "$host")
   remote_tmp="/tmp/pulse-deploy.${index}.$$"
 
   echo "EVENT phase=deploy host=${host} index=${index} status=start root=${install_root}"
-  ssh "$ssh_host" "mkdir -p '$remote_tmp'"
-  scp "$jar_path" "${ssh_host}:${remote_tmp}/pulse.jar"
-  ssh "$ssh_host" 'bash -s' -- "$host" "$coordinators_csv" "$install_root" "$remote_tmp" <<'REMOTE'
+  ssh "$host" "mkdir -p '$remote_tmp'"
+  scp "$jar_path" "${scp_host}:${remote_tmp}/pulse.jar"
+  ssh "$host" 'bash -s' -- "$host" "$coordinators_csv" "$install_root" "$remote_tmp" <<'REMOTE'
 set -euo pipefail
 
 host=$1

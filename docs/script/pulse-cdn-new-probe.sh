@@ -5,11 +5,8 @@ CALL_RISK_LEVEL=read_only
 call() {
   local host=$1
   local index=$2
-  local ssh_host
-
-  ssh_host=$(adapt "$host")
   echo "EVENT phase=probe host=${host} index=${index} status=start"
-  ssh "$ssh_host" 'bash -s' <<'REMOTE'
+  ssh "$host" 'bash -s' <<'REMOTE'
 set -euo pipefail
 echo "HOST=$(hostname -f 2>/dev/null || hostname)"
 echo "WHOAMI=$(id -un)"

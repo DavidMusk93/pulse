@@ -6,11 +6,9 @@ call() {
   local host=$1
   local index=$2
   local coordinators_csv=${3:-}
-  local ssh_host
 
-  ssh_host=$(adapt "$host")
   echo "EVENT phase=verify host=${host} index=${index} status=start"
-  ssh "$ssh_host" 'bash -s' -- "$host" "$coordinators_csv" <<'REMOTE'
+  ssh "$host" 'bash -s' -- "$host" "$coordinators_csv" <<'REMOTE'
 set -euo pipefail
 
 host=$1
