@@ -99,6 +99,7 @@ public final class PulseAgentApp {
                 currentPlan = AgentGroupPlan.direct(heartbeat.agentId(), currentPlan.sizeLimit());
             }
             String mode = currentPlan.groupMode();
+            receiver.setAcceptingFollowers("leader".equalsIgnoreCase(mode));
             if ("leader".equalsIgnoreCase(mode)) {
                 HeartbeatRequest batch = collector.batch(currentPlan.groupId(), heartbeat, Clock.systemUTC().millis(), currentPlan.sizeLimit());
                 List<HeartbeatResponse> responses = client.sendToAllForResponses("/heartbeat", batch);
@@ -322,6 +323,7 @@ public final class PulseAgentApp {
         private final GroupHeartbeatCollector collector;
         private final ObjectMapper mapper = JsonSupport.objectMapper();
         private final Map<String, List<PulseMessage>> planMessages = new ConcurrentHashMap<>();
+        private volatile boolean acceptingFollowers;
 
         GroupHeartbeatReceiver(String bindHost, int port, GroupHeartbeatCollector collector) throws IOException {
             this.collector = collector;
@@ -333,9 +335,17 @@ public final class PulseAgentApp {
             server.start();
         }
 
+        void setAcceptingFollowers(boolean acceptingFollowers) {
+            this.acceptingFollowers = acceptingFollowers;
+        }
+
         private void handleHeartbeat(HttpExchange exchange) throws IOException {
             if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
                 send(exchange, 405, "method not allowed");
+                return;
+            }
+            if (!acceptingFollowers) {
+                send(exchange, 503, "{\"ok\":false,\"error\":\"not_group_leader\"}");
                 return;
             }
             try {

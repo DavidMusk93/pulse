@@ -241,6 +241,7 @@ agent 行为：
 - `leader`：启动本地 `/group/heartbeat`，聚合 follower state，并向 coordinator 批量上报。
 - `follower`：将本机 heartbeat 上报给 leader，不再直接打 coordinator。
 - follower 从 leader 的 `/group/heartbeat` 响应中获取 leader 转发的 `cmd.group_plan`。
+- 非 leader 节点虽然保持本地 receiver 进程，但必须拒绝 follower `/group/heartbeat`，避免旧 leader 缓存的 plan 继续传播。
 - plan 缺失或 leader 上报失败时，agent 可短暂 fallback 到 direct，避免 host 完全失联。
 
 coordinator 一致性约束：
