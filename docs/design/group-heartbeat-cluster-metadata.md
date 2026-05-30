@@ -450,6 +450,9 @@ Web 页面按 `cluster` 进行一级分组：
 - 每个 cluster 渲染一个 `cluster-section`。
 - 组标题展示 cluster 名称与 host 数。
 - 组内使用 `ui-ux-pro-max-skill` 推荐的 Flat Design + Real-Time Monitoring 风格，避免高阴影和厚重拟物。
+- `/hosts` 必须是现代前端应用 shell，禁止使用 `<meta http-equiv="refresh">` 或整页刷新。
+- 前端使用内嵌轻量 reactive runtime `PulseView`，避免远端环境依赖外部 CDN。
+- `PulseView` 每 5s fetch `/api/hosts`，仅更新 app DOM 区域，保留页面、CSS、JS runtime 和滚动上下文。
 - 磁贴必须为正方形，使用 `aspect-ratio: 1 / 1` 保持密度一致。
 - 每个 cluster 使用不同主色相，便于跨集群快速扫视。
 - 组内 host 按 `load` 从高到低排序。
@@ -457,6 +460,13 @@ Web 页面按 `cluster` 进行一级分组：
 - 磁贴内容超过可视区域时，必须在磁贴内部滚动，文字使用 `overflow-wrap`，禁止覆盖和溢出。
 - 滑动和 hover 使用轻量流水高光动效；必须遵守 `prefers-reduced-motion`，用户关闭动效时不播放动画。
 - 磁贴展示 `IP`、`Area`、`Role`、`Zone`、`Load`、`Seq`、`Source`、`Seen`。
+
+UI 开发门禁：
+
+- 禁止整页刷新作为数据更新手段。
+- 禁止为 UI 引入必须访问公网 CDN 的依赖。
+- `/api/hosts` 是 UI 数据源，`/hosts` 只负责前端 app shell。
+- 自动刷新必须是 JSON 增量数据流的客户端更新，不能重新下载整页 HTML。
 
 ## 部署设计
 

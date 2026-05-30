@@ -7,6 +7,7 @@
 - 每次有效改动必须及时提交并使用 `127.0.0.1:2080` 推送。
 - 访问 coordinator Web/API 必须使用 `127.0.0.1:6699`。
 - 部署前先 dry-run 确认目标机器范围。
+- auto-ops 部署和验证统一使用 `--parallel 8`，避免过高并发导致远端更新慢和服务抖动。
 
 ## 阶段 1：设计与计划
 
@@ -29,6 +30,9 @@
   - 按 `cluster` 渲染 `cluster-section`。
   - 磁贴增加 `Area` 展示。
   - UI 重构为 `ui-ux-pro-max-skill` 取向的扁平化实时监控风格。
+  - `/hosts` 改为前端 app shell，禁止 `<meta refresh>` 整页刷新。
+  - 内嵌轻量 reactive runtime `PulseView`，不依赖公网 CDN。
+  - `PulseView` 每 5s fetch `/api/hosts`，仅更新 app DOM 区域。
   - 磁贴改为正方形，内部支持滚动，禁止文字覆盖。
   - 不同 cluster 使用不同色彩。
   - cluster 内按机器 `load` 降序排序。
@@ -98,6 +102,8 @@
 - 更新 `CoordinatorHttpServerTest`：
   - 验证 `/hosts` 包含 `cluster-section` 和 cluster 名称。
   - 验证 `/hosts` 包含正方形磁贴、内部滚动、load 排序和流水动效相关 CSS。
+  - 验证 `/hosts` 不包含 `http-equiv="refresh"`。
+  - 验证 `/hosts` 包含 `PulseView`、`fetch('/api/hosts'` 和 JSON refresh 文案。
 - 执行：
 
 ```bash

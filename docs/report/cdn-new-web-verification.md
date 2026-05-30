@@ -70,7 +70,9 @@ for api in sorted(base.glob('*-api.json')):
     print('  html_tile_count=', html.count('class="tile alive"') + html.count('class="tile expired"'))
     print('  has_tile_grid=', 'tile-grid' in html)
     print('  has_windows_phone_text=', 'Windows Phone style host tiles' in html)
-    print('  has_auto_refresh=', 'http-equiv="refresh" content="5"' in html)
+    print('  has_pulse_view=', 'PulseView' in html)
+    print('  has_json_refresh=', "fetch('/api/hosts'" in html)
+    print('  has_full_page_refresh=', 'http-equiv="refresh"' in html)
 PY
 ```
 
@@ -80,9 +82,9 @@ Web 展示符合当前设计预期：
 
 - 可通过 SOCKS5 代理访问 IPv6 coordinator。
 - 页面能展示所有 50 台 agent host。
-- 页面包含 Windows Phone 风格磁贴布局所需的 `tile-grid` 和 `tile` 元素。
+- 页面包含 host 磁贴布局所需的 `tile-grid` 和 `tile` 元素。
 - 每台 host 都以 `alive` 状态渲染。
-- 页面包含 5 秒自动刷新，适合观察心跳状态变化。
+- 历史版本使用 5 秒整页刷新；当前 UI 已升级为 `PulseView` 前端 app shell，通过 `/api/hosts` 做 JSON refresh，不再整页刷新。
 - 3 个 coordinator 的 host 视图一致，均为 50 台。
 
 ## 后续建议

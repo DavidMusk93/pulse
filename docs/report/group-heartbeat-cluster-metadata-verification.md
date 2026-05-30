@@ -398,3 +398,38 @@ UI check 项：
 - 部署验证时发现 stale follower 仍可向旧 leader 上报，导致部分 follower 被 group batch 截断。
 - 已修复为 leader 只接受当前 `cmd.group_plan.members` 内 follower。
 - 非成员返回 `not_group_member`，触发 follower fallback 到 coordinator 获取新 plan。
+
+## Host UI 前端框架化刷新验证
+
+验证时间：2026-05-30 18:40 CST。
+
+问题：
+
+- 旧版 `/hosts` 使用 `<meta http-equiv="refresh" content="5">`，每 5 秒重新下载和渲染完整 HTML。
+- 该方式会丢失页面滚动上下文，也会让 coordinator 重复生成完整页面。
+
+实现结果：
+
+- `/hosts` 改为现代前端 app shell。
+- 页面内嵌轻量 reactive runtime `PulseView`，不依赖公网 CDN。
+- `PulseView` 每 5 秒 fetch `/api/hosts`。
+- 刷新只更新 `#pulse-app` 与 `#pulse-status`，不再整页刷新。
+- 保留扁平化正方形磁贴、cluster 色彩、load 排序、磁贴内滚动和 `liquid-flow` 动效。
+
+本地验证：
+
+- `mvn test`：17 个测试全部通过。
+- `mvn package`：构建成功。
+
+UI check 项：
+
+- `PulseView reactive dashboard`
+- `data-framework="PulseView"`
+- `fetch('/api/hosts'`
+- `JSON diff refresh`
+- `window.PulseView = PulseView`
+- 不包含 `http-equiv="refresh"`
+
+部署约束：
+
+- 后续 auto-ops 部署和验证统一使用 `--parallel 8`。

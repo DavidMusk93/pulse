@@ -120,14 +120,19 @@ class CoordinatorHttpServerTest {
 
         assertEquals(200, response.statusCode());
         assertTrue(response.body().contains("tile-grid"));
+        assertTrue(response.body().contains("PulseView reactive dashboard"));
+        assertTrue(response.body().contains("data-framework=\"PulseView\""));
+        assertTrue(response.body().contains("fetch('/api/hosts'"));
+        assertTrue(response.body().contains("JSON diff refresh"));
         assertTrue(response.body().contains("cluster-section"));
-        assertTrue(response.body().contains("cluster-a"));
         assertTrue(response.body().contains("aspect-ratio: 1 / 1"));
         assertTrue(response.body().contains("tile-scroll"));
         assertTrue(response.body().contains("load-bar"));
         assertTrue(response.body().contains("liquid-flow"));
         assertTrue(response.body().contains("prefers-reduced-motion"));
-        assertTrue(response.body().indexOf("high-load-host") < response.body().indexOf("low-load-host"));
+        assertTrue(response.body().contains("loadValue(right) - loadValue(left)"));
+        assertTrue(response.body().contains("window.PulseView = PulseView"));
+        assertTrue(!response.body().contains("http-equiv=\"refresh\""));
     }
 
     @Test

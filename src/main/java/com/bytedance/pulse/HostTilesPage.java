@@ -1,41 +1,17 @@
 package com.bytedance.pulse;
 
-import java.time.Instant;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
-import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.stream.Collectors;
 
 public final class HostTilesPage {
-    private static final DateTimeFormatter FORMATTER =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault());
-
     private HostTilesPage() {}
 
     public static String render(String coordinatorId, List<HostView> hosts) {
-        StringBuilder groups = new StringBuilder();
-        if (hosts.isEmpty()) {
-            groups.append("<section class=\"empty\">No hosts yet. POST /heartbeat to light up the board.</section>");
-        } else {
-            Map<String, List<HostView>> byCluster = hosts.stream()
-                    .collect(Collectors.groupingBy(HostView::cluster, LinkedHashMap::new, Collectors.toList()));
-            int clusterIndex = 0;
-            for (Map.Entry<String, List<HostView>> entry : byCluster.entrySet()) {
-                groups.append(renderCluster(entry.getKey(), entry.getValue(), clusterIndex++));
-            }
-        }
-
         return """
                 <!doctype html>
                 <html lang="en">
                 <head>
                   <meta charset="utf-8">
                   <meta name="viewport" content="width=device-width, initial-scale=1">
-                  <meta http-equiv="refresh" content="5">
                   <title>Pulse Coordinator Hosts</title>
                   <style>
                     :root {
@@ -62,6 +38,17 @@ public final class HostTilesPage {
                       margin-top: 8px;
                       color: #64748b;
                       font-size: 15px;
+                    }
+                    .app-status {
+                      display: flex;
+                      flex-wrap: wrap;
+                      gap: 10px;
+                      padding: 0 clamp(18px, 4vw, 56px) 18px;
+                      color: #64748b;
+                      font-size: 13px;
+                    }
+                    .app-status strong {
+                      color: #172033;
                     }
                     .tile-grid {
                       display: grid;
@@ -194,6 +181,13 @@ public final class HostTilesPage {
                       border: 1px dashed #94a3b8;
                       color: #64748b;
                     }
+                    .error {
+                      margin: 0 clamp(18px, 4vw, 56px) 20px;
+                      padding: 14px 16px;
+                      color: #7f1d1d;
+                      background: #fee2e2;
+                      border: 1px solid #fecaca;
+                    }
                     .cluster-section {
                       padding: 0 clamp(18px, 4vw, 56px) 34px;
                     }
@@ -225,106 +219,181 @@ public final class HostTilesPage {
                     }
                   </style>
                 </head>
-                <body>
+                <body data-coordinator-id="__COORDINATOR_ID__">
                   <header>
                     <h1>Pulse Hosts</h1>
-                    <div class="subtitle">Coordinator __COORDINATOR_ID__ · flat square host tiles · load-sorted · auto refresh 5s</div>
+                    <div class="subtitle">Coordinator __COORDINATOR_ID__ · PulseView reactive dashboard · JSON refresh 5s</div>
                   </header>
-                  <main>__GROUPS__</main>
+                  <div id="pulse-status" class="app-status"></div>
+                  <main id="pulse-app" data-framework="PulseView">
+                    <section class="empty">Loading hosts from /api/hosts...</section>
+                  </main>
+                  <script>
+                    (() => {
+                      const refreshMs = 5000;
+                      const palette = [205, 176, 148, 28, 265, 338, 118, 12, 232, 296];
+                      const app = document.getElementById('pulse-app');
+                      const status = document.getElementById('pulse-status');
+                      const coordinatorId = document.body.dataset.coordinatorId || 'unknown';
+
+                      const PulseView = {
+                        state: {hosts: [], loading: true, error: null, updatedAt: null},
+                        setState(patch) {
+                          this.state = {...this.state, ...patch};
+                          this.render();
+                        },
+                        async refresh() {
+                          try {
+                            const response = await fetch('/api/hosts', {cache: 'no-store'});
+                            if (!response.ok) {
+                              throw new Error(`HTTP ${response.status}`);
+                            }
+                            const hosts = await response.json();
+                            this.setState({hosts, loading: false, error: null, updatedAt: new Date()});
+                          } catch (error) {
+                            this.setState({loading: false, error: error.message || String(error)});
+                          }
+                        },
+                        render() {
+                          status.innerHTML = renderStatus(this.state);
+                          app.innerHTML = renderApp(this.state);
+                        },
+                        start() {
+                          this.render();
+                          this.refresh();
+                          window.setInterval(() => this.refresh(), refreshMs);
+                        }
+                      };
+
+                      function renderStatus(state) {
+                        const alive = state.hosts.filter(host => host.status === 'alive').length;
+                        const expired = state.hosts.filter(host => host.status === 'expired').length;
+                        const updated = state.updatedAt ? state.updatedAt.toLocaleTimeString() : 'pending';
+                        return `
+                          <span><strong>${escapeHtml(coordinatorId)}</strong></span>
+                          <span>Total <strong>${state.hosts.length}</strong></span>
+                          <span>Alive <strong>${alive}</strong></span>
+                          <span>Expired <strong>${expired}</strong></span>
+                          <span>Updated <strong>${escapeHtml(updated)}</strong></span>
+                          <span>Mode <strong>JSON diff refresh</strong></span>
+                        `;
+                      }
+
+                      function renderApp(state) {
+                        if (state.error) {
+                          return `<section class="error">Failed to refresh /api/hosts: ${escapeHtml(state.error)}</section>`;
+                        }
+                        if (state.loading) {
+                          return '<section class="empty">Loading hosts from /api/hosts...</section>';
+                        }
+                        if (!state.hosts.length) {
+                          return '<section class="empty">No hosts yet. POST /heartbeat to light up the board.</section>';
+                        }
+                        return groupByCluster(state.hosts)
+                          .map(([cluster, hosts], index) => renderCluster(cluster, hosts, index))
+                          .join('');
+                      }
+
+                      function groupByCluster(hosts) {
+                        const groups = new Map();
+                        hosts.forEach(host => {
+                          const cluster = host.cluster || 'unknown';
+                          if (!groups.has(cluster)) {
+                            groups.set(cluster, []);
+                          }
+                          groups.get(cluster).push(host);
+                        });
+                        return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right));
+                      }
+
+                      function renderCluster(cluster, hosts, index) {
+                        const sortedHosts = [...hosts].sort((left, right) =>
+                          loadValue(right) - loadValue(left)
+                          || String(left.host || '').localeCompare(String(right.host || ''))
+                          || String(left.agent_id || '').localeCompare(String(right.agent_id || '')));
+                        const maxLoad = Math.max(0, ...sortedHosts.map(loadValue));
+                        const hue = clusterHue(cluster, index);
+                        return `
+                          <section class="cluster-section" data-cluster="${escapeHtml(cluster)}" style="--cluster-hue:${hue};">
+                            <div class="cluster-title">
+                              <h2>${escapeHtml(cluster)}</h2>
+                              <span>${hosts.length} host${hosts.length === 1 ? '' : 's'}</span>
+                            </div>
+                            <div class="tile-grid">
+                              ${sortedHosts.map((host, rank) => renderTile(host, rank, maxLoad)).join('')}
+                            </div>
+                          </section>
+                        `;
+                      }
+
+                      function renderTile(host, rank, maxLoad) {
+                        const load = loadValue(host);
+                        const level = maxLoad <= 0 ? 0 : Math.max(0, Math.min(1, load / maxLoad));
+                        const statusClass = host.status === 'expired' ? 'expired' : 'alive';
+                        return `
+                          <section class="tile ${statusClass}" style="--load-level:${level.toFixed(3)};">
+                            <div class="tile-scroll">
+                              <div class="tile-head">
+                                <div class="tile-agent">${escapeHtml(host.agent_id || '')}</div>
+                                <div class="status">${escapeHtml(host.status || '')}</div>
+                              </div>
+                              <div class="tile-host">${escapeHtml(host.host || '')}</div>
+                              <div class="tile-meta">
+                                <div><span>Load</span>${escapeHtml(host.load || '')}</div>
+                                <div><span>IP</span>${escapeHtml(host.ip || '')}</div>
+                                <div><span>Area</span>${escapeHtml(host.area || '')}</div>
+                                <div><span>Role</span>${escapeHtml(host.role || '')}</div>
+                                <div><span>Zone</span>${escapeHtml(host.zone || '')}</div>
+                                <div><span>Seq</span>${escapeHtml(String(host.seq || 0))}</div>
+                                <div><span>Source</span>${escapeHtml(host.source || '')}</div>
+                                <div><span>Seen</span>${escapeHtml(formatSeen(host.observed_at_ms))}</div>
+                                <div><span>Rank</span>#${String(rank + 1).padStart(2, '0')}</div>
+                              </div>
+                            </div>
+                            <div class="load-bar" aria-hidden="true"></div>
+                          </section>
+                        `;
+                      }
+
+                      function clusterHue(cluster, index) {
+                        if (!cluster) {
+                          return palette[index % palette.length];
+                        }
+                        let hash = 0;
+                        for (let i = 0; i < cluster.length; i++) {
+                          hash = ((hash << 5) - hash) + cluster.charCodeAt(i);
+                          hash |= 0;
+                        }
+                        return palette[Math.abs(hash) % palette.length];
+                      }
+
+                      function loadValue(host) {
+                        const value = Number.parseFloat(host.load);
+                        return Number.isFinite(value) ? value : 0;
+                      }
+
+                      function formatSeen(value) {
+                        const millis = Number(value);
+                        return Number.isFinite(millis) ? new Date(millis).toLocaleString() : '';
+                      }
+
+                      function escapeHtml(value) {
+                        return String(value)
+                          .replaceAll('&', '&amp;')
+                          .replaceAll('<', '&lt;')
+                          .replaceAll('>', '&gt;')
+                          .replaceAll('"', '&quot;')
+                          .replaceAll("'", '&#39;');
+                      }
+
+                      window.PulseView = PulseView;
+                      PulseView.start();
+                    })();
+                  </script>
                 </body>
                 </html>
                 """
-                .replace("__COORDINATOR_ID__", escape(coordinatorId))
-                .replace("__GROUPS__", groups.toString());
-    }
-
-    private static String renderCluster(String cluster, List<HostView> hosts, int clusterIndex) {
-        StringBuilder tiles = new StringBuilder();
-        List<HostView> sortedHosts = hosts.stream()
-                .sorted(Comparator.comparingDouble(HostTilesPage::loadValue).reversed()
-                        .thenComparing(HostView::host)
-                        .thenComparing(HostView::agentId))
-                .toList();
-        double maxLoad = sortedHosts.stream().mapToDouble(HostTilesPage::loadValue).max().orElse(0.0);
-        int hue = clusterHue(cluster, clusterIndex);
-        for (int i = 0; i < sortedHosts.size(); i++) {
-            tiles.append(renderTile(sortedHosts.get(i), i, maxLoad));
-        }
-        return """
-                <section class="cluster-section" data-cluster="%s" style="--cluster-hue:%d;">
-                  <div class="cluster-title">
-                    <h2>%s</h2>
-                    <span>%d host%s</span>
-                  </div>
-                  <div class="tile-grid">%s</div>
-                </section>
-                """.formatted(
-                escape(cluster),
-                hue,
-                escape(cluster),
-                hosts.size(),
-                hosts.size() == 1 ? "" : "s",
-                tiles);
-    }
-
-    private static String renderTile(HostView host, int index, double maxLoad) {
-        String cssClass = "tile " + escape(host.status());
-        double load = loadValue(host);
-        double level = maxLoad <= 0.0 ? 0.0 : Math.max(0.0, Math.min(1.0, load / maxLoad));
-        String levelStyle = String.format(Locale.ROOT, "--load-level:%.3f;", level);
-        return """
-                <section class="%s" style="%s">
-                  <div class="tile-scroll">
-                    <div class="tile-head">
-                      <div class="tile-agent">%s</div>
-                      <div class="status">%s</div>
-                    </div>
-                    <div class="tile-host">%s</div>
-                    <div class="tile-meta">
-                      <div><span>Load</span>%s</div>
-                      <div><span>IP</span>%s</div>
-                      <div><span>Area</span>%s</div>
-                      <div><span>Role</span>%s</div>
-                      <div><span>Zone</span>%s</div>
-                      <div><span>Seq</span>%d</div>
-                      <div><span>Source</span>%s</div>
-                      <div><span>Seen</span>%s</div>
-                      <div><span>Rank</span>#%02d</div>
-                    </div>
-                  </div>
-                  <div class="load-bar" aria-hidden="true"></div>
-                </section>
-                """.formatted(
-                cssClass,
-                levelStyle,
-                escape(host.agentId()),
-                escape(host.status()),
-                escape(host.host()),
-                escape(host.load()),
-                escape(host.ip()),
-                escape(host.area()),
-                escape(host.role()),
-                escape(host.zone()),
-                host.seq(),
-                escape(host.source()),
-                escape(FORMATTER.format(Instant.ofEpochMilli(host.observedAtMs()))),
-                index + 1);
-    }
-
-    private static int clusterHue(String cluster, int index) {
-        int[] palette = {205, 176, 148, 28, 265, 338, 118, 12, 232, 296};
-        if (cluster == null || cluster.isBlank()) {
-            return palette[index % palette.length];
-        }
-        return palette[Math.floorMod(cluster.hashCode(), palette.length)];
-    }
-
-    private static double loadValue(HostView host) {
-        try {
-            return Double.parseDouble(host.load());
-        } catch (Exception ignored) {
-            return 0.0;
-        }
+                .replace("__COORDINATOR_ID__", escape(coordinatorId));
     }
 
     private static String escape(String value) {
