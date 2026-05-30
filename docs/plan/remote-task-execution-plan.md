@@ -64,7 +64,7 @@
   - 维护 allowlist task。
   - 固定两个 task：
     - `prepare_disk_layout_dry_run`
-    - `setup_local_dev_dry_run`
+    - `analyze_block_layout_dry_run`
   - 自动填充 `script_path` 和 `args=["--dry-run"]`。
 - `TaskQueueService`
   - `agent_id -> ExecutionQueue`
@@ -209,7 +209,7 @@ Task modal：
   - stdout/stderr
 - 下方 task selector：
   - `prepare_disk_layout_dry_run`
-  - `setup_local_dev_dry_run`
+  - `analyze_block_layout_dry_run`
 - 操作按钮：
   - `Run dry-run`
   - `Keep result`
@@ -329,7 +329,7 @@ Trace 验证：
 风险：
 
 - agent 执行脚本路径在远端不存在。
-- `setup-local-dev.sh --dry-run` 如当前未支持，需要先补脚本 dry-run 分支。
+- `analyze-block-layout.py --dry-run` 如当前未支持，需要先补脚本 dry-run 分支。
 - 输出过大影响 heartbeat payload。
 - coordinator 重启导致内存 queue 丢失。
 - group leader 重启导致 follower 下行消息延迟。
