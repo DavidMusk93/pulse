@@ -37,8 +37,8 @@
   - 磁贴改为正方形，内部支持滚动，禁止文字覆盖。
   - 不同 cluster 使用不同低饱和冷静色，避免紫色、红色等高刺激亮色。
   - cluster 内按机器 `load` 降序排序。
-  - `load` 越高磁贴色彩越重，并展示 load bar。
-  - 滑动与 hover 提供轻量流水动效，并支持 `prefers-reduced-motion`。
+  - `load` 越高磁贴色彩越重，并展示深色轨道和 cluster 深色填充的 load bar。
+  - 动效改为低透明度 `water-ripple` 水波滚动纹理，禁止扫光式高光，并支持 `prefers-reduced-motion`。
 
 ## 阶段 2.1：减压型分组策略设计补充
 
@@ -102,10 +102,11 @@
   - 保持 group heartbeat per-agent `accepted_seq` 测试。
 - 更新 `CoordinatorHttpServerTest`：
   - 验证 `/hosts` 包含 `cluster-section` 和 cluster 名称。
-  - 验证 `/hosts` 包含正方形磁贴、内部滚动、load 排序和流水动效相关 CSS。
+  - 验证 `/hosts` 包含正方形磁贴、内部滚动、load 排序和水波滚动动效相关 CSS。
   - 验证 `/hosts` 不包含 `http-equiv="refresh"`。
   - 验证 `/hosts` 包含 `PulseView`、`fetch('/api/hosts'` 和 JSON refresh 文案。
   - 验证 `/hosts` 包含 `captureTileScroll`、`restoreTileScroll` 和低饱和 palette。
+  - 验证 `/hosts` 不包含 `liquid-flow` 和白色 load bar 填充。
 - 执行：
 
 ```bash

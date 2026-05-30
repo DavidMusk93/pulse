@@ -457,9 +457,9 @@ Web 页面按 `cluster` 进行一级分组：
 - 每个 cluster 使用不同主色相，便于跨集群快速扫视。
 - cluster 调色板必须使用低饱和冷静色，禁止紫色、红色等高刺激亮色。
 - 组内 host 按 `load` 从高到低排序。
-- 同一 cluster 内，`load` 越高磁贴色彩越深，并提供底部 load bar。
+- 同一 cluster 内，`load` 越高磁贴色彩越深，并提供底部 load bar；load bar 必须使用深色轨道和深色/cluster 色填充，禁止白底白条。
 - 磁贴内容超过可视区域时，必须在磁贴内部滚动，文字使用 `overflow-wrap`，禁止覆盖和溢出。
-- 滑动和 hover 使用轻量流水高光动效；必须遵守 `prefers-reduced-motion`，用户关闭动效时不播放动画。
+- 动效必须使用克制的水波滚动纹理，禁止扫光式动态高光；必须遵守 `prefers-reduced-motion`，用户关闭动效时不播放动画。
 - 磁贴展示 `IP`、`Area`、`Role`、`Zone`、`Load`、`Seq`、`Source`、`Seen`。
 
 UI 开发门禁：
@@ -470,6 +470,8 @@ UI 开发门禁：
 - 自动刷新必须是 JSON 增量数据流的客户端更新，不能重新下载整页 HTML。
 - 自动刷新必须保留每个磁贴内部 `.tile-scroll` 的 scrollTop/scrollLeft。
 - UI 调色板不得使用刺眼亮色，尤其避免紫色和红色作为 cluster 主色。
+- load 比例条必须在浅色和深色磁贴上都具备可读对比度。
+- 磁贴动效不得抢占视觉焦点，优先使用低透明度 `water-ripple` 纹理。
 
 ## 部署设计
 

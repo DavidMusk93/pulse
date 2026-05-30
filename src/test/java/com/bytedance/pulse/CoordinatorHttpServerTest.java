@@ -128,7 +128,12 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("aspect-ratio: 1 / 1"));
         assertTrue(response.body().contains("tile-scroll"));
         assertTrue(response.body().contains("load-bar"));
-        assertTrue(response.body().contains("liquid-flow"));
+        assertTrue(response.body().contains("water-ripple"));
+        assertTrue(response.body().contains("repeating-radial-gradient"));
+        assertTrue(response.body().contains("background: rgba(15, 23, 42, .24)"));
+        assertTrue(response.body().contains("background: hsl(var(--cluster-hue) 48% 24%)"));
+        assertTrue(!response.body().contains("background: rgba(255,255,255,.86)"));
+        assertTrue(!response.body().contains("liquid-flow"));
         assertTrue(response.body().contains("prefers-reduced-motion"));
         assertTrue(response.body().contains("loadValue(right) - loadValue(left)"));
         assertTrue(response.body().contains("window.PulseView = PulseView"));

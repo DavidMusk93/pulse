@@ -73,19 +73,22 @@ public final class HostTilesPage {
                     .tile::before {
                       content: "";
                       position: absolute;
-                      inset: -36% -42%;
+                      left: -20%;
+                      right: -20%;
+                      bottom: -34%;
+                      height: 62%;
                       z-index: -1;
                       background:
-                        radial-gradient(ellipse at 15% 35%, rgba(255,255,255,.34), transparent 26%),
-                        radial-gradient(ellipse at 70% 65%, rgba(255,255,255,.18), transparent 28%),
-                        linear-gradient(115deg, transparent 28%, rgba(255,255,255,.22) 48%, transparent 68%);
-                      transform: translateX(-14%) rotate(8deg);
-                      animation: liquid-flow 7s ease-in-out infinite;
-                      opacity: .72;
+                        radial-gradient(70% 86% at 50% 100%, rgba(255,255,255,.18), transparent 66%),
+                        repeating-radial-gradient(ellipse at 50% 100%,
+                          rgba(255,255,255,.16) 0 2px,
+                          transparent 3px 18px);
+                      background-size: 220px 120px, 180px 90px;
+                      animation: water-ripple 12s linear infinite;
+                      opacity: .38;
                     }
                     .tile:hover::before {
-                      opacity: .98;
-                      animation-duration: 3.8s;
+                      opacity: .48;
                     }
                     .tile.expired {
                       background: linear-gradient(135deg, #94a3b8, #64748b);
@@ -165,15 +168,16 @@ public final class HostTilesPage {
                       left: 0;
                       right: 0;
                       bottom: 0;
-                      height: 6px;
-                      background: rgba(255,255,255,.25);
+                      height: 7px;
+                      background: rgba(15, 23, 42, .24);
                     }
                     .load-bar::after {
                       content: "";
                       display: block;
                       width: calc(18% + var(--load-level) * 82%);
                       height: 100%;
-                      background: rgba(255,255,255,.86);
+                      background: hsl(var(--cluster-hue) 48% 24%);
+                      box-shadow: 0 0 0 1px rgba(255,255,255,.26) inset;
                     }
                     .empty {
                       grid-column: 1 / -1;
@@ -208,9 +212,9 @@ public final class HostTilesPage {
                       color: #64748b;
                       font-size: 13px;
                     }
-                    @keyframes liquid-flow {
-                      0%, 100% { transform: translateX(-16%) translateY(-2%) rotate(7deg); }
-                      50% { transform: translateX(13%) translateY(4%) rotate(11deg); }
+                    @keyframes water-ripple {
+                      from { background-position: 0 0, 0 0; }
+                      to { background-position: 220px 0, 180px 0; }
                     }
                     @media (prefers-reduced-motion: reduce) {
                       .tile::before {
