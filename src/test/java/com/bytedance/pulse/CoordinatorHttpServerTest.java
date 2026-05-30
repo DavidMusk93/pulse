@@ -19,6 +19,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -272,6 +273,38 @@ class CoordinatorHttpServerTest {
         } finally {
             first.stop(0);
             second.stop(0);
+        }
+    }
+
+    @Test
+    void groupLeaderRejectsFollowersOutsideCurrentPlan() throws Exception {
+        PulseAgentApp.GroupHeartbeatReceiver receiver = new PulseAgentApp.GroupHeartbeatReceiver(
+                "127.0.0.1",
+                0,
+                new GroupHeartbeatCollector());
+        receiver.setAcceptingFollowers(true, Set.of("agent-allowed"));
+        receiver.start();
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + receiver.port() + "/group/heartbeat"))
+                    .header("content-type", "application/json")
+                    .timeout(Duration.ofSeconds(1))
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {
+                              "agent_id": "agent-stale",
+                              "epoch": 1,
+                              "seq": 42,
+                              "ttl_ms": 15000,
+                              "messages": []
+                            }
+                            """))
+                    .build();
+
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            assertEquals(409, response.statusCode());
+            assertTrue(response.body().contains("not_group_member"));
+        } finally {
+            receiver.stop();
         }
     }
 

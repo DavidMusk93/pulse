@@ -14,6 +14,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class PulseAgentApp {
@@ -59,6 +60,7 @@ public final class PulseAgentApp {
         String bindHost = System.getenv().getOrDefault("PULSE_GROUP_BIND_HOST", "::");
         GroupHeartbeatCollector collector = new GroupHeartbeatCollector();
         GroupHeartbeatReceiver receiver = new GroupHeartbeatReceiver(bindHost, port, collector);
+        receiver.setAcceptingFollowers(true, Set.of());
         receiver.start();
         System.out.printf("Pulse group leader started group_id=%s size_limit=%d port=%d%n", groupId, sizeLimit, port);
         while (!Thread.currentThread().isInterrupted()) {
@@ -99,7 +101,7 @@ public final class PulseAgentApp {
                 currentPlan = AgentGroupPlan.direct(heartbeat.agentId(), currentPlan.sizeLimit());
             }
             String mode = currentPlan.groupMode();
-            receiver.setAcceptingFollowers("leader".equalsIgnoreCase(mode));
+            receiver.setAcceptingFollowers("leader".equalsIgnoreCase(mode), Set.copyOf(currentPlan.members()));
             if ("leader".equalsIgnoreCase(mode)) {
                 HeartbeatRequest batch = collector.batch(currentPlan.groupId(), heartbeat, Clock.systemUTC().millis(), currentPlan.sizeLimit());
                 HeartbeatResponse response = client.sendForResponse("/heartbeat", batch);
@@ -249,6 +251,7 @@ public final class PulseAgentApp {
         private final ObjectMapper mapper = JsonSupport.objectMapper();
         private final Map<String, List<PulseMessage>> planMessages = new ConcurrentHashMap<>();
         private volatile boolean acceptingFollowers;
+        private volatile Set<String> acceptedMembers = Set.of();
 
         GroupHeartbeatReceiver(String bindHost, int port, GroupHeartbeatCollector collector) throws IOException {
             this.collector = collector;
@@ -260,8 +263,17 @@ public final class PulseAgentApp {
             server.start();
         }
 
-        void setAcceptingFollowers(boolean acceptingFollowers) {
+        void stop() {
+            server.stop(0);
+        }
+
+        int port() {
+            return server.getAddress().getPort();
+        }
+
+        void setAcceptingFollowers(boolean acceptingFollowers, Set<String> acceptedMembers) {
             this.acceptingFollowers = acceptingFollowers;
+            this.acceptedMembers = acceptedMembers == null ? Set.of() : Set.copyOf(acceptedMembers);
         }
 
         private void handleHeartbeat(HttpExchange exchange) throws IOException {
@@ -277,6 +289,10 @@ public final class PulseAgentApp {
                 HeartbeatRequest request = mapper.readValue(exchange.getRequestBody(), HeartbeatRequest.class);
                 if (request.isBatch()) {
                     send(exchange, 400, "group receiver accepts single agent heartbeat only");
+                    return;
+                }
+                if (!acceptedMembers.isEmpty() && !acceptedMembers.contains(request.agentId())) {
+                    send(exchange, 409, "{\"ok\":false,\"error\":\"not_group_member\"}");
                     return;
                 }
                 collector.record(request);
