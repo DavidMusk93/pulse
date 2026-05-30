@@ -62,7 +62,7 @@ PULSE_COORDINATOR_URLS=http://127.0.0.1:8080 \
 - `POST /heartbeat`: accepts single agent heartbeats or group batch heartbeats.
 - `POST /heartbeat_fwd`: accepts peer coordinator forwarded state messages.
 - `GET /api/hosts`: returns current host state as JSON.
-- `GET /hosts`: renders host information as Windows Phone style tiles.
+- `GET /hosts`: renders host information as flat square, load-sorted monitoring tiles.
 
 ## cdn_new Deployment
 

@@ -81,7 +81,7 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
-    void hostsPageRendersWindowsPhoneStyleTiles() throws Exception {
+    void hostsPageRendersFlatSquareLoadSortedTiles() throws Exception {
         postJson("/heartbeat", """
                 {
                   "agent_id": "agent-1",
@@ -93,7 +93,23 @@ class CoordinatorHttpServerTest {
                       "message_id": "msg-agent-1-42",
                       "type": "state.heartbeat",
                       "version": 1,
-                      "payload": {"host": "tile-host", "ip": "10.0.0.8", "cluster": "cluster-a", "area": "area-a", "role": "worker"}
+                      "payload": {"host": "low-load-host", "ip": "10.0.0.8", "cluster": "cluster-a", "area": "area-a", "role": "worker", "load": "0.10"}
+                    }
+                  ]
+                }
+                """);
+        postJson("/heartbeat", """
+                {
+                  "agent_id": "agent-2",
+                  "epoch": 1,
+                  "seq": 43,
+                  "ttl_ms": 15000,
+                  "messages": [
+                    {
+                      "message_id": "msg-agent-2-43",
+                      "type": "state.heartbeat",
+                      "version": 1,
+                      "payload": {"host": "high-load-host", "ip": "10.0.0.9", "cluster": "cluster-a", "area": "area-a", "role": "worker", "load": "9.90"}
                     }
                   ]
                 }
@@ -105,8 +121,12 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("tile-grid"));
         assertTrue(response.body().contains("cluster-section"));
         assertTrue(response.body().contains("cluster-a"));
-        assertTrue(response.body().contains("tile-host"));
-        assertTrue(response.body().contains("Windows Phone"));
+        assertTrue(response.body().contains("aspect-ratio: 1 / 1"));
+        assertTrue(response.body().contains("tile-scroll"));
+        assertTrue(response.body().contains("load-bar"));
+        assertTrue(response.body().contains("liquid-flow"));
+        assertTrue(response.body().contains("prefers-reduced-motion"));
+        assertTrue(response.body().indexOf("high-load-host") < response.body().indexOf("low-load-host"));
     }
 
     @Test

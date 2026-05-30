@@ -152,7 +152,7 @@ curl -g -sS --proxy socks5h://127.0.0.1:6699 \
 - 包含 `class="cluster-section"`。
 - 包含 `cdn2`、`doubao`、`tlbmirror` 文案。
 - 包含 `<span>Area</span>`。
-- 按 cluster 分组展示 Windows Phone 风格磁贴。
+- 按 cluster 分组展示 host 磁贴；该 UI 后续已重构为扁平化正方形 load-sorted 监控磁贴。
 - 自动刷新仍为 5 秒。
 
 ## Group Heartbeat 验证

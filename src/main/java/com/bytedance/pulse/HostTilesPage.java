@@ -3,8 +3,10 @@ package com.bytedance.pulse;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -21,8 +23,9 @@ public final class HostTilesPage {
         } else {
             Map<String, List<HostView>> byCluster = hosts.stream()
                     .collect(Collectors.groupingBy(HostView::cluster, LinkedHashMap::new, Collectors.toList()));
+            int clusterIndex = 0;
             for (Map.Entry<String, List<HostView>> entry : byCluster.entrySet()) {
-                groups.append(renderCluster(entry.getKey(), entry.getValue()));
+                groups.append(renderCluster(entry.getKey(), entry.getValue(), clusterIndex++));
             }
         }
 
@@ -36,108 +39,163 @@ public final class HostTilesPage {
                   <title>Pulse Coordinator Hosts</title>
                   <style>
                     :root {
-                      color-scheme: dark;
-                      font-family: "Segoe UI", Arial, sans-serif;
-                      background: #111827;
-                      color: #f8fafc;
+                      color-scheme: light;
+                      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                      background: #f6f8fb;
+                      color: #172033;
                     }
                     body {
                       margin: 0;
                       min-height: 100vh;
-                      background:
-                        radial-gradient(circle at top left, rgba(14, 165, 233, .3), transparent 30rem),
-                        linear-gradient(135deg, #0f172a 0%, #111827 52%, #020617 100%);
+                      background: linear-gradient(180deg, #fbfcff 0%, #eef3f8 100%);
                     }
                     header {
-                      padding: 32px clamp(20px, 4vw, 56px) 18px;
+                      padding: 30px clamp(18px, 4vw, 56px) 14px;
                     }
                     h1 {
                       margin: 0;
-                      font-size: clamp(34px, 6vw, 72px);
-                      font-weight: 300;
-                      letter-spacing: -0.05em;
+                      font-size: clamp(32px, 5vw, 56px);
+                      font-weight: 750;
+                      letter-spacing: -0.06em;
                     }
                     .subtitle {
                       margin-top: 8px;
-                      color: #cbd5e1;
+                      color: #64748b;
                       font-size: 15px;
                     }
                     .tile-grid {
                       display: grid;
-                      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-                      grid-auto-rows: minmax(190px, auto);
-                      gap: 16px;
-                      padding: 18px clamp(20px, 4vw, 56px) 56px;
+                      grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
+                      gap: 14px;
                     }
                     .tile {
                       position: relative;
                       overflow: hidden;
-                      min-height: 190px;
-                      padding: 20px;
+                      aspect-ratio: 1 / 1;
+                      min-height: 0;
+                      padding: 0;
                       color: white;
-                      box-shadow: 0 18px 45px rgba(0, 0, 0, .32);
+                      border-radius: 0;
+                      background:
+                        linear-gradient(135deg,
+                          hsl(var(--cluster-hue) 78% calc(64% - var(--load-level) * 20%)),
+                          hsl(var(--cluster-hue) 72% calc(48% - var(--load-level) * 14%)));
+                      box-shadow: none;
+                      isolation: isolate;
                     }
-                    .tile::after {
+                    .tile::before {
                       content: "";
                       position: absolute;
-                      inset: auto -30px -46px auto;
-                      width: 130px;
-                      height: 130px;
-                      border: 18px solid rgba(255,255,255,.16);
-                      transform: rotate(18deg);
+                      inset: -36% -42%;
+                      z-index: -1;
+                      background:
+                        radial-gradient(ellipse at 15% 35%, rgba(255,255,255,.34), transparent 26%),
+                        radial-gradient(ellipse at 70% 65%, rgba(255,255,255,.18), transparent 28%),
+                        linear-gradient(115deg, transparent 28%, rgba(255,255,255,.22) 48%, transparent 68%);
+                      transform: translateX(-14%) rotate(8deg);
+                      animation: liquid-flow 7s ease-in-out infinite;
+                      opacity: .72;
                     }
-                    .tile:nth-child(6n+1) { background: #0078d7; }
-                    .tile:nth-child(6n+2) { background: #00aba9; }
-                    .tile:nth-child(6n+3) { background: #8e24aa; }
-                    .tile:nth-child(6n+4) { background: #e67e22; }
-                    .tile:nth-child(6n+5) { background: #107c10; }
-                    .tile:nth-child(6n+6) { background: #d13438; }
+                    .tile:hover::before {
+                      opacity: .98;
+                      animation-duration: 3.8s;
+                    }
                     .tile.expired {
-                      background: #475569;
+                      background: linear-gradient(135deg, #94a3b8, #64748b);
                       filter: grayscale(.2);
                     }
+                    .tile-scroll {
+                      height: 100%;
+                      box-sizing: border-box;
+                      overflow: auto;
+                      padding: 14px;
+                      scrollbar-width: thin;
+                      scrollbar-color: rgba(255,255,255,.55) transparent;
+                    }
+                    .tile-scroll::-webkit-scrollbar {
+                      width: 6px;
+                    }
+                    .tile-scroll::-webkit-scrollbar-thumb {
+                      background: rgba(255,255,255,.5);
+                      border-radius: 999px;
+                    }
+                    .tile-head {
+                      display: flex;
+                      align-items: flex-start;
+                      justify-content: space-between;
+                      gap: 8px;
+                      min-width: 0;
+                    }
+                    .status {
+                      flex: 0 0 auto;
+                      border: 1px solid rgba(255,255,255,.6);
+                      padding: 3px 7px;
+                      font-size: 11px;
+                      font-weight: 750;
+                      letter-spacing: .04em;
+                      text-transform: uppercase;
+                      background: rgba(255,255,255,.14);
+                    }
                     .tile-agent {
+                      min-width: 0;
                       font-size: 13px;
-                      opacity: .86;
+                      opacity: .9;
                       text-transform: uppercase;
                       letter-spacing: .08em;
+                      overflow-wrap: anywhere;
                     }
                     .tile-host {
-                      margin-top: 18px;
-                      font-size: 30px;
-                      line-height: 1.05;
-                      font-weight: 300;
-                      word-break: break-word;
+                      margin-top: 16px;
+                      font-size: 21px;
+                      line-height: 1.08;
+                      font-weight: 800;
+                      letter-spacing: -.04em;
+                      overflow-wrap: anywhere;
                     }
                     .tile-meta {
                       display: grid;
-                      grid-template-columns: repeat(2, minmax(0, 1fr));
-                      gap: 8px 12px;
-                      margin-top: 22px;
-                      font-size: 13px;
+                      grid-template-columns: 1fr;
+                      gap: 8px;
+                      margin-top: 14px;
+                      font-size: 12px;
+                    }
+                    .tile-meta div {
+                      min-width: 0;
+                      overflow-wrap: anywhere;
+                      padding-bottom: 7px;
+                      border-bottom: 1px solid rgba(255,255,255,.2);
                     }
                     .tile-meta span {
                       display: block;
                       opacity: .72;
-                      font-size: 11px;
+                      font-size: 10px;
+                      line-height: 1.5;
                       text-transform: uppercase;
+                      letter-spacing: .08em;
                     }
-                    .status {
+                    .load-bar {
                       position: absolute;
-                      right: 16px;
-                      top: 16px;
-                      border: 1px solid rgba(255,255,255,.5);
-                      padding: 4px 8px;
-                      font-size: 12px;
+                      left: 0;
+                      right: 0;
+                      bottom: 0;
+                      height: 6px;
+                      background: rgba(255,255,255,.25);
+                    }
+                    .load-bar::after {
+                      content: "";
+                      display: block;
+                      width: calc(18% + var(--load-level) * 82%);
+                      height: 100%;
+                      background: rgba(255,255,255,.86);
                     }
                     .empty {
                       grid-column: 1 / -1;
                       padding: 36px;
-                      border: 1px dashed rgba(255,255,255,.35);
-                      color: #cbd5e1;
+                      border: 1px dashed #94a3b8;
+                      color: #64748b;
                     }
                     .cluster-section {
-                      padding: 0 clamp(20px, 4vw, 56px) 34px;
+                      padding: 0 clamp(18px, 4vw, 56px) 34px;
                     }
                     .cluster-title {
                       display: flex;
@@ -148,18 +206,29 @@ public final class HostTilesPage {
                     .cluster-title h2 {
                       margin: 0;
                       font-size: 26px;
-                      font-weight: 300;
+                      font-weight: 800;
+                      letter-spacing: -.04em;
+                      color: hsl(var(--cluster-hue) 72% 36%);
                     }
                     .cluster-title span {
-                      color: #94a3b8;
+                      color: #64748b;
                       font-size: 13px;
+                    }
+                    @keyframes liquid-flow {
+                      0%, 100% { transform: translateX(-16%) translateY(-2%) rotate(7deg); }
+                      50% { transform: translateX(13%) translateY(4%) rotate(11deg); }
+                    }
+                    @media (prefers-reduced-motion: reduce) {
+                      .tile::before {
+                        animation: none;
+                      }
                     }
                   </style>
                 </head>
                 <body>
                   <header>
                     <h1>Pulse Hosts</h1>
-                    <div class="subtitle">Coordinator __COORDINATOR_ID__ · Windows Phone style host tiles · auto refresh 5s</div>
+                    <div class="subtitle">Coordinator __COORDINATOR_ID__ · flat square host tiles · load-sorted · auto refresh 5s</div>
                   </header>
                   <main>__GROUPS__</main>
                 </body>
@@ -169,13 +238,20 @@ public final class HostTilesPage {
                 .replace("__GROUPS__", groups.toString());
     }
 
-    private static String renderCluster(String cluster, List<HostView> hosts) {
+    private static String renderCluster(String cluster, List<HostView> hosts, int clusterIndex) {
         StringBuilder tiles = new StringBuilder();
-        for (int i = 0; i < hosts.size(); i++) {
-            tiles.append(renderTile(hosts.get(i), i));
+        List<HostView> sortedHosts = hosts.stream()
+                .sorted(Comparator.comparingDouble(HostTilesPage::loadValue).reversed()
+                        .thenComparing(HostView::host)
+                        .thenComparing(HostView::agentId))
+                .toList();
+        double maxLoad = sortedHosts.stream().mapToDouble(HostTilesPage::loadValue).max().orElse(0.0);
+        int hue = clusterHue(cluster, clusterIndex);
+        for (int i = 0; i < sortedHosts.size(); i++) {
+            tiles.append(renderTile(sortedHosts.get(i), i, maxLoad));
         }
         return """
-                <section class="cluster-section" data-cluster="%s">
+                <section class="cluster-section" data-cluster="%s" style="--cluster-hue:%d;">
                   <div class="cluster-title">
                     <h2>%s</h2>
                     <span>%d host%s</span>
@@ -184,45 +260,71 @@ public final class HostTilesPage {
                 </section>
                 """.formatted(
                 escape(cluster),
+                hue,
                 escape(cluster),
                 hosts.size(),
                 hosts.size() == 1 ? "" : "s",
                 tiles);
     }
 
-    private static String renderTile(HostView host, int index) {
+    private static String renderTile(HostView host, int index, double maxLoad) {
         String cssClass = "tile " + escape(host.status());
+        double load = loadValue(host);
+        double level = maxLoad <= 0.0 ? 0.0 : Math.max(0.0, Math.min(1.0, load / maxLoad));
+        String levelStyle = String.format(Locale.ROOT, "--load-level:%.3f;", level);
         return """
-                <section class="%s">
-                  <div class="status">%s</div>
-                  <div class="tile-agent">%s</div>
-                  <div class="tile-host">%s</div>
-                  <div class="tile-meta">
-                    <div><span>IP</span>%s</div>
-                    <div><span>Area</span>%s</div>
-                    <div><span>Role</span>%s</div>
-                    <div><span>Zone</span>%s</div>
-                    <div><span>Load</span>%s</div>
-                    <div><span>Seq</span>%d</div>
-                    <div><span>Source</span>%s</div>
-                    <div><span>Seen</span>%s</div>
-                    <div><span>Tile</span>#%02d</div>
+                <section class="%s" style="%s">
+                  <div class="tile-scroll">
+                    <div class="tile-head">
+                      <div class="tile-agent">%s</div>
+                      <div class="status">%s</div>
+                    </div>
+                    <div class="tile-host">%s</div>
+                    <div class="tile-meta">
+                      <div><span>Load</span>%s</div>
+                      <div><span>IP</span>%s</div>
+                      <div><span>Area</span>%s</div>
+                      <div><span>Role</span>%s</div>
+                      <div><span>Zone</span>%s</div>
+                      <div><span>Seq</span>%d</div>
+                      <div><span>Source</span>%s</div>
+                      <div><span>Seen</span>%s</div>
+                      <div><span>Rank</span>#%02d</div>
+                    </div>
                   </div>
+                  <div class="load-bar" aria-hidden="true"></div>
                 </section>
                 """.formatted(
                 cssClass,
-                escape(host.status()),
+                levelStyle,
                 escape(host.agentId()),
+                escape(host.status()),
                 escape(host.host()),
+                escape(host.load()),
                 escape(host.ip()),
                 escape(host.area()),
                 escape(host.role()),
                 escape(host.zone()),
-                escape(host.load()),
                 host.seq(),
                 escape(host.source()),
                 escape(FORMATTER.format(Instant.ofEpochMilli(host.observedAtMs()))),
                 index + 1);
+    }
+
+    private static int clusterHue(String cluster, int index) {
+        int[] palette = {205, 176, 148, 28, 265, 338, 118, 12, 232, 296};
+        if (cluster == null || cluster.isBlank()) {
+            return palette[index % palette.length];
+        }
+        return palette[Math.floorMod(cluster.hashCode(), palette.length)];
+    }
+
+    private static double loadValue(HostView host) {
+        try {
+            return Double.parseDouble(host.load());
+        } catch (Exception ignored) {
+            return 0.0;
+        }
     }
 
     private static String escape(String value) {

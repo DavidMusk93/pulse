@@ -448,7 +448,13 @@ Web 页面按 `cluster` 进行一级分组：
 
 - 每个 cluster 渲染一个 `cluster-section`。
 - 组标题展示 cluster 名称与 host 数。
-- 组内继续使用 Windows Phone 风格磁贴。
+- 组内使用 `ui-ux-pro-max-skill` 推荐的 Flat Design + Real-Time Monitoring 风格，避免高阴影和厚重拟物。
+- 磁贴必须为正方形，使用 `aspect-ratio: 1 / 1` 保持密度一致。
+- 每个 cluster 使用不同主色相，便于跨集群快速扫视。
+- 组内 host 按 `load` 从高到低排序。
+- 同一 cluster 内，`load` 越高磁贴色彩越深，并提供底部 load bar。
+- 磁贴内容超过可视区域时，必须在磁贴内部滚动，文字使用 `overflow-wrap`，禁止覆盖和溢出。
+- 滑动和 hover 使用轻量流水高光动效；必须遵守 `prefers-reduced-motion`，用户关闭动效时不播放动画。
 - 磁贴展示 `IP`、`Area`、`Role`、`Zone`、`Load`、`Seq`、`Source`、`Seen`。
 
 ## 部署设计
