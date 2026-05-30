@@ -8,6 +8,7 @@ public record ForwardState(
         long seq,
         long ttlMs,
         long observedAtMs,
+        String source,
         List<PulseMessage> messages) {
     public ForwardState {
         messages = messages == null ? List.of() : List.copyOf(messages);

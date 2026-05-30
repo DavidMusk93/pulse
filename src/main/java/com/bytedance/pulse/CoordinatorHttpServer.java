@@ -188,27 +188,29 @@ public class CoordinatorHttpServer {
 
         HeartbeatForwardRequest toForwardRequest(HeartbeatRequest request) {
             if (request.isBatch()) {
+                String source = request.groupId() == null || request.groupId().isBlank() ? "group" : request.groupId();
                 return new HeartbeatForwardRequest(
                         coordinatorId,
                         request.agents().stream()
-                                .map(this::toForwardState)
+                                .map(agent -> toForwardState(agent, source))
                                 .filter(state -> !state.messages().isEmpty())
                                 .toList());
             }
             AgentHeartbeat heartbeat = request.toSingleAgentHeartbeat();
-            ForwardState state = toForwardState(heartbeat);
+            ForwardState state = toForwardState(heartbeat, "direct");
             return new HeartbeatForwardRequest(
                     coordinatorId,
                     state.messages().isEmpty() ? List.of() : List.of(state));
         }
 
-        private ForwardState toForwardState(AgentHeartbeat heartbeat) {
+        private ForwardState toForwardState(AgentHeartbeat heartbeat, String source) {
             return new ForwardState(
                     heartbeat.agentId(),
                     heartbeat.epoch(),
                     heartbeat.seq(),
                     heartbeat.ttlMs(),
                     System.currentTimeMillis(),
+                    source,
                     heartbeat.messages().stream()
                             .filter(PulseMessage::isStateMessage)
                             .toList());

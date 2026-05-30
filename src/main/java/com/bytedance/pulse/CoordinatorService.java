@@ -58,7 +58,7 @@ public class CoordinatorService {
     public HeartbeatForwardResponse handleForward(HeartbeatForwardRequest request) {
         int accepted = 0;
         int merged = 0;
-        String source = request.sourceCoordinatorId() == null ? "peer" : request.sourceCoordinatorId();
+        String fallbackSource = request.sourceCoordinatorId() == null ? "peer" : request.sourceCoordinatorId();
         for (ForwardState state : request.states()) {
             List<PulseMessage> stateMessages = state.messages().stream()
                     .filter(PulseMessage::isStateMessage)
@@ -67,6 +67,7 @@ public class CoordinatorService {
                 continue;
             }
             accepted++;
+            String source = state.source() == null || state.source().isBlank() ? fallbackSource : state.source();
             boolean changed = mergeForwardState(state, source, stateMessages);
             if (changed) {
                 merged++;

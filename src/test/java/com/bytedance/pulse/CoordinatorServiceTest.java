@@ -128,6 +128,7 @@ class CoordinatorServiceTest {
                 10,
                 15_000,
                 clock.millis(),
+                "cdn2/yg/000",
                 List.of(
                         new PulseMessage("state-1", "state.heartbeat", 1, null, null, Map.of("host", "host-1")),
                         new PulseMessage("cmd-1", "cmd.update_config", 1, null, null, Map.of("ignored", true))));
@@ -140,7 +141,7 @@ class CoordinatorServiceTest {
         assertEquals(1, response.merged());
         HostView host = service.hosts().get(0);
         assertEquals("host-1", host.host());
-        assertEquals("coordinator-a", host.source());
+        assertEquals("cdn2/yg/000", host.source());
         assertEquals(1, host.state().size());
     }
 

@@ -223,6 +223,7 @@ class CoordinatorHttpServerTest {
 
         assertEquals("coordinator-a", forwardRequest.sourceCoordinatorId());
         assertEquals(1, forwardRequest.states().size());
+        assertEquals("direct", forwardRequest.states().get(0).source());
         assertEquals(1, forwardRequest.states().get(0).messages().size());
         assertEquals("state.heartbeat", forwardRequest.states().get(0).messages().get(0).type());
     }
