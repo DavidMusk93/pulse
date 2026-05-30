@@ -6,15 +6,15 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.URI;
 import java.net.InetSocketAddress;
-import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class PulseAgentApp {
     private PulseAgentApp() {}
@@ -91,23 +91,84 @@ public final class PulseAgentApp {
         GroupHeartbeatCollector collector = new GroupHeartbeatCollector();
         GroupHeartbeatReceiver receiver = new GroupHeartbeatReceiver(bindHost, port, collector);
         receiver.start();
+        AgentGroupPlan currentPlan = AgentGroupPlan.direct("unknown", Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_SIZE_LIMIT", "7")));
         System.out.printf("Pulse dynamic group receiver started port=%d%n", port);
         while (!Thread.currentThread().isInterrupted()) {
             HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat();
-            AgentGroupPlan plan = client.fetchPlan(heartbeat.agentId());
-            String mode = plan.groupMode();
+            if ("unknown".equals(currentPlan.agentId())) {
+                currentPlan = AgentGroupPlan.direct(heartbeat.agentId(), currentPlan.sizeLimit());
+            }
+            String mode = currentPlan.groupMode();
             if ("leader".equalsIgnoreCase(mode)) {
-                HeartbeatRequest batch = collector.batch(plan.groupId(), heartbeat, Clock.systemUTC().millis(), plan.sizeLimit());
-                client.send("/heartbeat", batch);
-            } else if ("follower".equalsIgnoreCase(mode) && !plan.leaderUrl().isBlank()) {
-                HeartbeatClient leaderClient = new HeartbeatClient(List.of(plan.leaderUrl()), client.timeout);
-                if (!leaderClient.send("/group/heartbeat", heartbeat)) {
-                    client.send("/heartbeat", heartbeat);
+                HeartbeatRequest batch = collector.batch(currentPlan.groupId(), heartbeat, Clock.systemUTC().millis(), currentPlan.sizeLimit());
+                HeartbeatResponse response = client.sendForResponse("/heartbeat", batch);
+                if (response != null) {
+                    receiver.updatePlans(response);
+                    currentPlan = planFromMessages(heartbeat.agentId(), response.agents().stream()
+                                    .filter(agent -> heartbeat.agentId().equals(agent.agentId()))
+                                    .findFirst()
+                                    .map(AgentHeartbeatResponse::messages)
+                                    .orElse(List.of()))
+                            .orElse(currentPlan);
+                }
+            } else if ("follower".equalsIgnoreCase(mode) && !currentPlan.leaderUrl().isBlank()) {
+                HeartbeatClient leaderClient = new HeartbeatClient(List.of(currentPlan.leaderUrl()), client.timeout);
+                HeartbeatResponse response = leaderClient.sendForResponse("/group/heartbeat", heartbeat);
+                if (response == null) {
+                    response = client.sendForResponse("/heartbeat", heartbeat);
+                }
+                if (response != null) {
+                    currentPlan = planFromMessages(heartbeat.agentId(), response.messages()).orElse(currentPlan);
                 }
             } else {
-                client.send("/heartbeat", heartbeat);
+                HeartbeatResponse response = client.sendForResponse("/heartbeat", heartbeat);
+                if (response != null) {
+                    currentPlan = planFromMessages(heartbeat.agentId(), response.messages()).orElse(currentPlan);
+                }
             }
             Thread.sleep(intervalMs);
+        }
+    }
+
+    private static java.util.Optional<AgentGroupPlan> planFromMessages(String agentId, List<PulseMessage> messages) {
+        return messages.stream()
+                .filter(message -> "cmd.group_plan".equals(message.type()))
+                .map(PulseMessage::payload)
+                .filter(payload -> payload != null)
+                .findFirst()
+                .map(payload -> planFromPayload(agentId, payload));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static AgentGroupPlan planFromPayload(String fallbackAgentId, Map<String, Object> payload) {
+        return new AgentGroupPlan(
+                stringValue(payload, "agent_id", fallbackAgentId),
+                stringValue(payload, "group_id", "direct"),
+                stringValue(payload, "group_mode", "direct"),
+                stringValue(payload, "leader_agent_id", fallbackAgentId),
+                stringValue(payload, "leader_url", ""),
+                payload.get("members") instanceof List<?> members
+                        ? members.stream().map(Object::toString).toList()
+                        : List.of(fallbackAgentId),
+                stringValue(payload, "cluster", "unknown"),
+                stringValue(payload, "area", "unknown"),
+                intValue(payload, "size_limit", 7));
+    }
+
+    private static String stringValue(Map<String, Object> payload, String key, String fallback) {
+        Object value = payload.get(key);
+        return value == null || value.toString().isBlank() ? fallback : value.toString();
+    }
+
+    private static int intValue(Map<String, Object> payload, String key, int fallback) {
+        Object value = payload.get(key);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return value == null ? fallback : Integer.parseInt(value.toString());
+        } catch (NumberFormatException ignored) {
+            return fallback;
         }
     }
 
@@ -135,6 +196,10 @@ public final class PulseAgentApp {
         }
 
         boolean send(String path, HeartbeatRequest heartbeat) {
+            return sendForResponse(path, heartbeat) != null;
+        }
+
+        HeartbeatResponse sendForResponse(String path, HeartbeatRequest heartbeat) {
             for (int attempt = 0; attempt < coordinatorUrls.size(); attempt++) {
                 String baseUrl = coordinatorUrls.get((nextCoordinatorIndex + attempt) % coordinatorUrls.size());
                 try {
@@ -158,7 +223,7 @@ public final class PulseAgentApp {
                                     baseUrl,
                                     heartbeat.seq());
                         }
-                        return true;
+                        return mapper.readValue(response.body(), HeartbeatResponse.class);
                     }
                     System.err.printf(
                             "heartbeat status=bad_response coordinator=%s code=%d body=%s%n",
@@ -172,36 +237,7 @@ public final class PulseAgentApp {
                             exception.getMessage());
                 }
             }
-            return false;
-        }
-
-        AgentGroupPlan fetchPlan(String agentId) {
-            String encoded = URLEncoder.encode(agentId, StandardCharsets.UTF_8);
-            for (int attempt = 0; attempt < coordinatorUrls.size(); attempt++) {
-                String baseUrl = coordinatorUrls.get((nextCoordinatorIndex + attempt) % coordinatorUrls.size());
-                try {
-                    HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/api/agent-plan?agent_id=" + encoded))
-                            .timeout(timeout)
-                            .GET()
-                            .build();
-                    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-                    if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                        nextCoordinatorIndex = (nextCoordinatorIndex + attempt) % coordinatorUrls.size();
-                        return mapper.readValue(response.body(), AgentGroupPlan.class);
-                    }
-                    System.err.printf(
-                            "plan status=bad_response coordinator=%s code=%d body=%s%n",
-                            baseUrl,
-                            response.statusCode(),
-                            response.body());
-                } catch (Exception exception) {
-                    System.err.printf(
-                            "plan status=failed coordinator=%s error=%s%n",
-                            baseUrl,
-                            exception.getMessage());
-                }
-            }
-            return AgentGroupPlan.direct(agentId, Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_SIZE_LIMIT", "7")));
+            return null;
         }
     }
 
@@ -209,6 +245,7 @@ public final class PulseAgentApp {
         private final HttpServer server;
         private final GroupHeartbeatCollector collector;
         private final ObjectMapper mapper = JsonSupport.objectMapper();
+        private final Map<String, List<PulseMessage>> planMessages = new ConcurrentHashMap<>();
 
         GroupHeartbeatReceiver(String bindHost, int port, GroupHeartbeatCollector collector) throws IOException {
             this.collector = collector;
@@ -232,9 +269,21 @@ public final class PulseAgentApp {
                     return;
                 }
                 collector.record(request);
-                send(exchange, 200, "{\"ok\":true}");
+                HeartbeatResponse response = HeartbeatResponse.single(
+                        "group-leader",
+                        request.seq() == null ? 0 : request.seq(),
+                        planMessages.getOrDefault(request.agentId(), List.of()));
+                send(exchange, 200, mapper.writeValueAsString(response));
             } catch (Exception exception) {
                 send(exchange, 400, "{\"ok\":false,\"error\":\"" + exception.getMessage() + "\"}");
+            }
+        }
+
+        void updatePlans(HeartbeatResponse response) {
+            for (AgentHeartbeatResponse agent : response.agents()) {
+                if (!agent.messages().isEmpty()) {
+                    planMessages.put(agent.agentId(), agent.messages());
+                }
             }
         }
 

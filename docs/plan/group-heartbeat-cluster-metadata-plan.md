@@ -48,7 +48,7 @@
 - 演进路径：
   - 废弃生产路径中的 auto-ops 静态 group CSV。
   - coordinator 在 `handleHeartbeat` 后维护 `groupPlans` 和 `groupViews`。
-  - agent 默认以 `dynamic` 模式向 coordinator 拉取 plan，再切换 leader/follower。
+  - agent 默认以 `dynamic` 模式从 heartbeat response message 中更新 plan，再切换 leader/follower。
 
 ## 阶段 2.2：Coordinator 动态分组实现
 
@@ -60,13 +60,14 @@
   - 每 7 个 alive agent 形成一个 group。
   - 每个 group 第一个 alive agent 为 leader。
 - `CoordinatorHttpServer`：
-  - 新增 `GET /api/agent-plan?agent_id=...`。
-  - 新增 `GET /api/groups`。
+  - 不新增非必要 API。
+  - 继续只通过 `/heartbeat` 完成心跳和 group plan 交互。
 - `PulseAgentApp`：
   - 默认 `PULSE_GROUP_MODE=dynamic`。
-  - 每轮先生成 heartbeat，再拉取 coordinator plan。
+  - 每轮先生成 heartbeat，再从 heartbeat response 中解析 `cmd.group_plan`。
   - plan 为 `leader` 时聚合 follower 并批量上报。
   - plan 为 `follower` 时上报给 leader。
+  - leader 将 batch heartbeat response 中的 `agents[].messages[]` 转发给 follower。
   - plan 不存在或请求失败时 fallback 到 direct。
 - 部署脚本：
   - 不再依赖静态 group CSV。
@@ -198,6 +199,6 @@ curl -g -sS --proxy socks5h://127.0.0.1:6699 \
   - 静态 plan 是验证捷径，不应作为生产路径。
   - group 逻辑必须放到 coordinator 心跳状态处理中维护。
 - 下一步：
-  - 实现 coordinator 动态 group plan。
+  - 实现 coordinator heartbeat response message 下发 group plan。
   - 部署 agent dynamic 模式。
-  - 验证 `/api/groups`、`/api/agent-plan` 和 coordinator source 分布。
+  - 验证 `/heartbeat` response、leader 本地转发和 coordinator source 分布。

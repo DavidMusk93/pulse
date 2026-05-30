@@ -31,21 +31,28 @@ public class CoordinatorService {
     }
 
     public HeartbeatResponse handleHeartbeat(HeartbeatRequest request) {
+        long now = clock.millis();
         if (request.isBatch()) {
             List<AgentHeartbeatResponse> agentResponses = new ArrayList<>();
             String source = request.groupId() == null || request.groupId().isBlank() ? "group" : request.groupId();
             for (AgentHeartbeat agent : request.agents()) {
-                long acceptedSeq = merge(agent, source, clock.millis(), agent.messages());
+                long acceptedSeq = merge(agent, source, now, agent.messages());
                 agentResponses.add(new AgentHeartbeatResponse(agent.agentId(), acceptedSeq, List.of()));
             }
-            recomputeGroups(clock.millis());
+            recomputeGroups(now);
+            agentResponses = agentResponses.stream()
+                    .map(response -> new AgentHeartbeatResponse(
+                            response.agentId(),
+                            response.acceptedSeq(),
+                            List.of(groupPlanMessage(response.agentId()))))
+                    .toList();
             return HeartbeatResponse.batch(coordinatorId, agentResponses);
         }
 
         AgentHeartbeat heartbeat = request.toSingleAgentHeartbeat();
-        long acceptedSeq = merge(heartbeat, "direct", clock.millis(), heartbeat.messages());
-        recomputeGroups(clock.millis());
-        return HeartbeatResponse.single(coordinatorId, acceptedSeq, List.of());
+        long acceptedSeq = merge(heartbeat, "direct", now, heartbeat.messages());
+        recomputeGroups(now);
+        return HeartbeatResponse.single(coordinatorId, acceptedSeq, List.of(groupPlanMessage(heartbeat.agentId())));
     }
 
     public HeartbeatForwardResponse handleForward(HeartbeatForwardRequest request) {
@@ -85,12 +92,31 @@ public class CoordinatorService {
                 .toList();
     }
 
-    public AgentGroupPlan agentPlan(String agentId) {
+    private AgentGroupPlan agentPlan(String agentId) {
         if (agentId == null || agentId.isBlank()) {
             throw new IllegalArgumentException("agent_id is required");
         }
-        recomputeGroups(clock.millis());
         return groupPlans.getOrDefault(agentId, AgentGroupPlan.direct(agentId, groupSizeLimit));
+    }
+
+    private PulseMessage groupPlanMessage(String agentId) {
+        AgentGroupPlan plan = agentPlan(agentId);
+        return new PulseMessage(
+                "group-plan-" + agentId + "-" + clock.millis(),
+                "cmd.group_plan",
+                1,
+                null,
+                clock.millis() + 30_000,
+                Map.of(
+                        "agent_id", plan.agentId(),
+                        "group_id", plan.groupId(),
+                        "group_mode", plan.groupMode(),
+                        "leader_agent_id", plan.leaderAgentId(),
+                        "leader_url", plan.leaderUrl(),
+                        "members", plan.members(),
+                        "cluster", plan.cluster(),
+                        "area", plan.area(),
+                        "size_limit", plan.sizeLimit()));
     }
 
     private long merge(AgentHeartbeat heartbeat, String source, long observedAtMs, List<PulseMessage> messages) {

@@ -103,7 +103,7 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
-    void exposesDynamicGroupPlanApis() throws Exception {
+    void heartbeatResponseCarriesGroupPlanMessage() throws Exception {
         postJson("/heartbeat", """
                 {
                   "agent_id": "agent-1",
@@ -137,15 +137,29 @@ class CoordinatorHttpServerTest {
                 }
                 """);
 
-        HttpResponse<String> groups = get("/api/groups");
-        HttpResponse<String> plan = get("/api/agent-plan?agent_id=agent-2");
+        HttpResponse<String> response = postJson("/heartbeat", """
+                {
+                  "agent_id": "agent-2",
+                  "epoch": 1,
+                  "seq": 44,
+                  "ttl_ms": 15000,
+                  "messages": [
+                    {
+                      "message_id": "msg-agent-2-44",
+                      "type": "state.heartbeat",
+                      "version": 1,
+                      "payload": {"host": "host-2", "ip": "10.0.0.2", "cluster": "cluster-a", "area": "area-a"}
+                    }
+                  ]
+                }
+                """);
 
-        assertEquals(200, groups.statusCode());
-        assertTrue(groups.body().contains("cluster-a/area-a/000"));
-        assertEquals(200, plan.statusCode());
-        JsonNode planJson = mapper.readTree(plan.body());
-        assertEquals("follower", planJson.get("group_mode").asText());
-        assertEquals("agent-1", planJson.get("leader_agent_id").asText());
+        assertEquals(200, response.statusCode());
+        JsonNode json = mapper.readTree(response.body());
+        JsonNode payload = json.get("messages").get(0).get("payload");
+        assertEquals("cmd.group_plan", json.get("messages").get(0).get("type").asText());
+        assertEquals("follower", payload.get("group_mode").asText());
+        assertEquals("agent-1", payload.get("leader_agent_id").asText());
     }
 
     private HttpResponse<String> get(String path) throws Exception {

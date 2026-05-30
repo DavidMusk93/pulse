@@ -193,14 +193,15 @@ NodeState(agent_id) -> HostView -> GroupAssignment
 - 只使用 `alive` host 参与 leader/follower 分组。
 - `expired` host 不参与新 group，但仍保留在 host 视图中。
 
-下发 API：
+下发方式：
 
-| API | 说明 |
-| --- | --- |
-| `GET /api/agent-plan?agent_id=...` | 返回指定 agent 当前 group plan |
-| `GET /api/groups` | 返回 coordinator 当前所有 group 视图 |
+- 非必要不新增 API。
+- coordinator 在现有 `/heartbeat` 响应中返回 `cmd.group_plan` 消息。
+- 单机 heartbeat 使用 `HeartbeatResponse.messages[]` 下发当前 agent 的 group plan。
+- group heartbeat 使用 `HeartbeatResponse.agents[].messages[]` 分别下发每个 agent 的 group plan。
+- group leader 需要监听本地端口，接收 follower heartbeat，并把 coordinator 返回给 follower 的 `cmd.group_plan` 转发给 follower。
 
-`AgentGroupPlan` 示例：
+`cmd.group_plan` payload 示例：
 
 ```json
 {
@@ -216,7 +217,7 @@ NodeState(agent_id) -> HostView -> GroupAssignment
 }
 ```
 
-没有 plan 时返回：
+没有 plan 时，coordinator 在 heartbeat response 中返回 direct plan：
 
 ```json
 {
@@ -235,11 +236,12 @@ NodeState(agent_id) -> HostView -> GroupAssignment
 agent 行为：
 
 - agent 默认以 `dynamic` 模式启动。
-- 每轮先生成本机 heartbeat，再向 coordinator 拉取 `/api/agent-plan`。
+- agent 从 heartbeat response 中解析 `cmd.group_plan`。
 - `direct`：直接向 coordinator 上报单机 heartbeat。
 - `leader`：启动本地 `/group/heartbeat`，聚合 follower state，并向 coordinator 批量上报。
 - `follower`：将本机 heartbeat 上报给 leader，不再直接打 coordinator。
-- 拉取 plan 失败或 leader 上报失败时，agent 可短暂 fallback 到 direct，避免 host 完全失联。
+- follower 从 leader 的 `/group/heartbeat` 响应中获取 leader 转发的 `cmd.group_plan`。
+- plan 缺失或 leader 上报失败时，agent 可短暂 fallback 到 direct，避免 host 完全失联。
 
 废弃项：
 
@@ -271,8 +273,8 @@ coordinator 可选配置：
 ### 阶段 A：Coordinator Group Plan
 
 - coordinator 在 `handleHeartbeat` 后基于 `states` 计算 `groupPlans` 和 `groupViews`。
-- 新增 `/api/agent-plan` 和 `/api/groups`。
-- agent 默认以 `dynamic` 模式拉取 plan。
+- coordinator 通过 heartbeat response message 下发 `cmd.group_plan`。
+- agent 默认以 `dynamic` 模式从心跳响应中更新 plan。
 
 ### 阶段 B：Agent Leader 模式
 
