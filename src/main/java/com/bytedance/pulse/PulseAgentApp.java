@@ -49,7 +49,7 @@ public final class PulseAgentApp {
             return;
         }
         while (!Thread.currentThread().isInterrupted()) {
-            HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat(taskRunner.drainReplies());
+            HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat(taskRunner.drainReplies(), taskRunner.runningTasks());
             HeartbeatResponse response = client.sendForResponse("/heartbeat", heartbeat);
             if (response != null) {
                 taskRunner.handleMessages(response.messages());
@@ -70,7 +70,7 @@ public final class PulseAgentApp {
         receiver.start();
         System.out.printf("Pulse group leader started group_id=%s size_limit=%d port=%d%n", groupId, sizeLimit, port);
         while (!Thread.currentThread().isInterrupted()) {
-            HeartbeatRequest leaderHeartbeat = heartbeatFactory.nextHeartbeat(taskRunner.drainReplies());
+            HeartbeatRequest leaderHeartbeat = heartbeatFactory.nextHeartbeat(taskRunner.drainReplies(), taskRunner.runningTasks());
             HeartbeatRequest batch = collector.batch(groupId, leaderHeartbeat, Clock.systemUTC().millis(), sizeLimit);
             HeartbeatResponse response = client.sendForResponse("/heartbeat", batch);
             if (response != null) {
@@ -93,7 +93,7 @@ public final class PulseAgentApp {
         HeartbeatClient leaderClient = new HeartbeatClient(List.of(leaderUrl), timeout);
         System.out.printf("Pulse group follower started leader_url=%s%n", leaderUrl);
         while (!Thread.currentThread().isInterrupted()) {
-            HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat(taskRunner.drainReplies());
+            HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat(taskRunner.drainReplies(), taskRunner.runningTasks());
             HeartbeatResponse response = leaderClient.sendForResponse("/group/heartbeat", heartbeat);
             if (response != null) {
                 taskRunner.handleMessages(response.messages());
@@ -112,7 +112,7 @@ public final class PulseAgentApp {
         AgentGroupPlan currentPlan = AgentGroupPlan.direct("unknown", Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_SIZE_LIMIT", "7")));
         System.out.printf("Pulse dynamic group receiver started port=%d%n", port);
         while (!Thread.currentThread().isInterrupted()) {
-            HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat(taskRunner.drainReplies());
+            HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat(taskRunner.drainReplies(), taskRunner.runningTasks());
             if ("unknown".equals(currentPlan.agentId())) {
                 currentPlan = AgentGroupPlan.direct(heartbeat.agentId(), currentPlan.sizeLimit());
             }

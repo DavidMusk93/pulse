@@ -59,6 +59,10 @@ public class AgentHeartbeatFactory {
     }
 
     public HeartbeatRequest nextHeartbeat(List<PulseMessage> extraMessages) {
+        return nextHeartbeat(extraMessages, List.of());
+    }
+
+    public HeartbeatRequest nextHeartbeat(List<PulseMessage> extraMessages, List<Map<String, Object>> asyncTasks) {
         long nextSeq = seq.incrementAndGet();
         PulseMessage message = new PulseMessage(
                 "msg-" + agentId + "-" + epoch + "-" + nextSeq + "-state",
@@ -66,7 +70,7 @@ public class AgentHeartbeatFactory {
                 1,
                 null,
                 null,
-                heartbeatPayload());
+                heartbeatPayload(asyncTasks));
         List<PulseMessage> messages = new ArrayList<>();
         messages.add(message);
         if (extraMessages != null) {
@@ -75,7 +79,7 @@ public class AgentHeartbeatFactory {
         return new HeartbeatRequest(null, agentId, epoch, nextSeq, ttlMs, messages, List.of());
     }
 
-    private Map<String, Object> heartbeatPayload() {
+    private Map<String, Object> heartbeatPayload(List<Map<String, Object>> asyncTasks) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("status", "alive");
         payload.put("host", host);
@@ -86,6 +90,7 @@ public class AgentHeartbeatFactory {
         payload.put("role", role);
         payload.put("load", loadAverage());
         payload.put("tide_workers", tideWorkers());
+        payload.put("async_tasks", asyncTasks == null ? List.of() : asyncTasks);
         payload.put("agent_time_ms", clock.millis());
         return payload;
     }

@@ -6,6 +6,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -25,6 +27,7 @@ public class AgentTaskRunner {
     private final ExecutorService executor;
     private final ConcurrentLinkedQueue<PendingReply> pendingReplies = new ConcurrentLinkedQueue<>();
     private final Set<String> acceptedTasks = ConcurrentHashMap.newKeySet();
+    private final Map<String, RunningTask> runningTasks = new ConcurrentHashMap<>();
 
     public AgentTaskRunner(String agentId, Clock clock) {
         this.agentId = agentId;
@@ -59,6 +62,13 @@ public class AgentTaskRunner {
         return replies;
     }
 
+    public List<Map<String, Object>> runningTasks() {
+        return runningTasks.values().stream()
+                .sorted(Comparator.comparingLong(RunningTask::acceptedAtMs))
+                .map(RunningTask::toPayload)
+                .toList();
+    }
+
     private void handleTask(PulseMessage message) {
         Map<String, Object> payload = message.payload();
         String taskId = stringValue(payload, "task_id");
@@ -74,6 +84,8 @@ public class AgentTaskRunner {
             pendingReplies.add(new PendingReply(resultMessage(message.messageId(), taskId, traceId, taskType, "rejected", null, 0, 0, "", "", false, "task is not in agent allowlist"), REPLY_REPLAY_SENDS));
             return;
         }
+        long acceptedAt = clock.millis();
+        runningTasks.put(taskId, new RunningTask(taskId, traceId, taskType, "accepted", acceptedAt, null, timeoutMs));
         pendingReplies.add(new PendingReply(new PulseMessage(
                 "reply-task-accepted-" + agentId + "-" + taskId,
                 "reply.task_accepted",
@@ -86,12 +98,13 @@ public class AgentTaskRunner {
                         "agent_id", agentId,
                         "task_type", taskType,
                         "status", "accepted",
-                        "accepted_at_ms", clock.millis())), REPLY_REPLAY_SENDS));
+                        "accepted_at_ms", acceptedAt)), REPLY_REPLAY_SENDS));
         executor.submit(() -> execute(message.messageId(), taskId, traceId, definition, timeoutMs));
     }
 
     private void execute(String replyTo, String taskId, String traceId, TaskDefinition definition, long timeoutMs) {
         long started = clock.millis();
+        runningTasks.computeIfPresent(taskId, (ignored, task) -> task.withRunning(started));
         Process process = null;
         try {
             if (!Files.isRegularFile(Path.of(definition.scriptPath()))) {
@@ -142,6 +155,8 @@ public class AgentTaskRunner {
                 process.destroyForcibly();
             }
             pendingReplies.add(new PendingReply(resultMessage(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", "", false, exception.getMessage()), REPLY_REPLAY_SENDS));
+        } finally {
+            runningTasks.remove(taskId);
         }
     }
 
@@ -245,4 +260,29 @@ public class AgentTaskRunner {
     }
 
     private record PendingReply(PulseMessage message, int remainingSends) {}
+
+    private record RunningTask(
+            String taskId,
+            String traceId,
+            String taskType,
+            String status,
+            long acceptedAtMs,
+            Long startedAtMs,
+            long timeoutMs) {
+        RunningTask withRunning(long startedAtMs) {
+            return new RunningTask(taskId, traceId, taskType, "running", acceptedAtMs, startedAtMs, timeoutMs);
+        }
+
+        Map<String, Object> toPayload() {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("task_id", taskId);
+            payload.put("trace_id", traceId);
+            payload.put("task_type", taskType);
+            payload.put("status", status);
+            payload.put("accepted_at_ms", acceptedAtMs);
+            payload.put("started_at_ms", startedAtMs == null ? "" : startedAtMs);
+            payload.put("timeout_ms", timeoutMs);
+            return payload;
+        }
+    }
 }

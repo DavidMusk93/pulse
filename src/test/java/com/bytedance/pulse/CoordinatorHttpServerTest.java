@@ -144,7 +144,13 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("task-modal"));
         assertTrue(response.body().contains("Remote dry-run executor"));
         assertTrue(response.body().contains("task-summary"));
-        assertTrue(response.body().contains("Latest Completion"));
+        assertTrue(response.body().contains("Completion Queue"));
+        assertTrue(response.body().contains("Target IP"));
+        assertTrue(response.body().contains("Format JSON"));
+        assertTrue(response.body().contains("Copy"));
+        assertTrue(response.body().contains("completion-strip"));
+        assertTrue(response.body().contains("Incoming completion"));
+        assertTrue(response.body().contains("highlightText"));
         assertTrue(response.body().contains("startTaskPolling"));
         assertTrue(response.body().contains("window.setInterval(() =>"));
         assertTrue(response.body().contains("auto-refreshes every 2s"));
@@ -166,6 +172,9 @@ class CoordinatorHttpServerTest {
         assertTrue(!response.body().contains("<span>Role</span>"));
         assertTrue(!response.body().contains("<span>Source</span>"));
         assertTrue(!response.body().contains("<span>Zone</span>"));
+        assertTrue(!response.body().contains("<span>Agent</span>"));
+        assertTrue(!response.body().contains("STDOUT"));
+        assertTrue(!response.body().contains("STDERR"));
         assertTrue(response.body().contains("backdrop-filter: blur(12px)"));
         assertTrue(!response.body().contains("liquid-flow"));
         assertTrue(!response.body().contains("water-ripple"));

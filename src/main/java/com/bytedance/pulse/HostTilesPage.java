@@ -339,7 +339,7 @@ public final class HostTilesPage {
                     }
                     .task-summary {
                       display: grid;
-                      grid-template-columns: repeat(4, minmax(0, 1fr));
+                      grid-template-columns: 1.1fr .9fr .8fr .8fr;
                       gap: 12px;
                       padding: 16px 26px;
                     }
@@ -368,7 +368,7 @@ public final class HostTilesPage {
                     }
                     .task-grid {
                       display: grid;
-                      grid-template-columns: .95fr 1.35fr;
+                      grid-template-columns: .62fr 1.62fr;
                       gap: 16px;
                       max-height: calc(90vh - 230px);
                       overflow: auto;
@@ -386,15 +386,25 @@ public final class HostTilesPage {
                       font-size: 15px;
                       letter-spacing: -.02em;
                     }
+                    .task-card.execution-card {
+                      padding: 12px;
+                    }
+                    .task-card.completion-card {
+                      display: grid;
+                      gap: 12px;
+                    }
                     .task-list {
                       display: grid;
-                      gap: 10px;
+                      gap: 8px;
                     }
                     .task-row {
                       border: 1px solid #e2e8f0;
                       border-radius: 16px;
                       background: #f8fafc;
                       padding: 12px;
+                    }
+                    .task-row.compact {
+                      padding: 9px;
                     }
                     .task-row-head {
                       display: flex;
@@ -428,7 +438,8 @@ public final class HostTilesPage {
                     }
                     .task-badge.failed,
                     .task-badge.rejected,
-                    .task-badge.timeout {
+                    .task-badge.timeout,
+                    .task-badge.timed_out {
                       background: #fee2e2;
                       color: #b91c1c;
                     }
@@ -438,13 +449,53 @@ public final class HostTilesPage {
                       line-height: 1.55;
                       overflow-wrap: anywhere;
                     }
+                    .completion-strip {
+                      display: grid;
+                      grid-template-columns: repeat(5, minmax(112px, 1fr));
+                      gap: 10px;
+                    }
+                    .completion-strip div {
+                      min-width: 0;
+                      border: 1px solid #e2e8f0;
+                      border-radius: 14px;
+                      background: #f8fafc;
+                      padding: 10px;
+                    }
+                    .completion-strip span {
+                      display: block;
+                      color: #64748b;
+                      font-size: 10px;
+                      font-weight: 850;
+                      letter-spacing: .08em;
+                      text-transform: uppercase;
+                    }
+                    .completion-strip strong {
+                      display: block;
+                      margin-top: 4px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                      font-size: 13px;
+                    }
+                    .incoming-task {
+                      margin-bottom: 8px;
+                      border-color: #bfdbfe;
+                      background: #eff6ff;
+                    }
                     .task-output-tabs {
                       display: flex;
                       flex-wrap: wrap;
                       gap: 8px;
-                      margin: 12px 0;
+                      align-items: center;
+                      justify-content: space-between;
+                      margin: 0;
                     }
-                    .task-output-tabs span {
+                    .task-output-tags {
+                      display: flex;
+                      flex-wrap: wrap;
+                      gap: 8px;
+                    }
+                    .task-output-tags span {
                       border-radius: 999px;
                       background: #eef2ff;
                       color: #334155;
@@ -452,19 +503,50 @@ public final class HostTilesPage {
                       font-size: 12px;
                       font-weight: 750;
                     }
+                    .task-output-actions {
+                      display: flex;
+                      flex-wrap: wrap;
+                      gap: 8px;
+                    }
+                    .task-output-actions button {
+                      border: 1px solid #cbd5e1;
+                      border-radius: 999px;
+                      background: white;
+                      color: #172033;
+                      padding: 7px 10px;
+                      font-size: 12px;
+                      font-weight: 800;
+                      cursor: pointer;
+                    }
                     .task-output {
                       min-height: 260px;
                       max-height: 430px;
                       overflow: auto;
-                      border: 1px solid rgba(148,163,184,.22);
+                      border: 1px solid #dbe3ed;
                       border-radius: 18px;
-                      background: #0b1120;
-                      color: #dbeafe;
+                      background: #f8fafc;
+                      color: #172033;
                       padding: 14px;
                       white-space: pre-wrap;
                       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
                       font-size: 12px;
                       line-height: 1.55;
+                    }
+                    .task-output .json-key {
+                      color: #1d4ed8;
+                      font-weight: 750;
+                    }
+                    .task-output .keyword-ok {
+                      color: #15803d;
+                      font-weight: 800;
+                    }
+                    .task-output .keyword-warn {
+                      color: #b45309;
+                      font-weight: 800;
+                    }
+                    .task-output .keyword-error {
+                      color: #b91c1c;
+                      font-weight: 850;
                     }
                     .task-empty {
                       border: 1px dashed #cbd5e1;
@@ -517,19 +599,26 @@ public final class HostTilesPage {
                         </div>
                       </div>
                       <div class="task-summary">
-                        <div class="task-stat"><span>Agent</span><strong id="task-agent">-</strong></div>
+                        <div class="task-stat"><span>Target IP</span><strong id="task-agent">-</strong></div>
                         <div class="task-stat"><span>Current run</span><strong id="task-current">Idle</strong></div>
                         <div class="task-stat"><span>Execution queue</span><strong id="task-execution-count">0</strong></div>
                         <div class="task-stat"><span>Completion queue</span><strong id="task-completion-count">0</strong></div>
                       </div>
                       <div class="task-grid">
-                        <section class="task-card">
+                        <section class="task-card execution-card">
                           <h3>Execution Queue</h3>
                           <div id="task-execution"></div>
                         </section>
-                        <section class="task-card">
-                          <h3>Latest Completion</h3>
+                        <section class="task-card completion-card">
+                          <h3>Completion Queue</h3>
                           <div id="task-completion-meta"></div>
+                          <div class="task-output-tabs">
+                            <div id="task-output-tags" class="task-output-tags"></div>
+                            <div class="task-output-actions">
+                              <button id="task-format" type="button">Format JSON</button>
+                              <button id="task-copy" type="button">Copy</button>
+                            </div>
+                          </div>
                           <pre id="task-output" class="task-output"></pre>
                         </section>
                       </div>
@@ -552,6 +641,9 @@ public final class HostTilesPage {
                       const taskExecution = document.getElementById('task-execution');
                       const taskCompletionMeta = document.getElementById('task-completion-meta');
                       const taskOutput = document.getElementById('task-output');
+                      const taskOutputTags = document.getElementById('task-output-tags');
+                      const taskFormat = document.getElementById('task-format');
+                      const taskCopy = document.getElementById('task-copy');
                       const taskType = document.getElementById('task-type');
                       const taskRun = document.getElementById('task-run');
                       const taskKeep = document.getElementById('task-keep');
@@ -562,6 +654,9 @@ public final class HostTilesPage {
                       let activeRunTaskId = '';
                       let taskPollTimer = 0;
                       let taskSnapshotInFlight = false;
+                      let activeTaskLabel = '';
+                      let activeOutputText = '';
+                      let activeOutputMode = 'auto';
 
                       const PulseView = {
                         state: {hosts: [], loading: true, error: null, updatedAt: null},
@@ -821,14 +916,18 @@ public final class HostTilesPage {
                         activeTaskAgentId = agentId;
                         activeCompletionTaskId = '';
                         activeRunTaskId = '';
+                        activeTaskLabel = label || agentId || '-';
+                        activeOutputText = '';
+                        activeOutputMode = 'auto';
                         taskTitle.textContent = 'Run Task · ' + label;
                         taskTrace.textContent = 'trace: pending';
-                        taskAgent.textContent = agentId || '-';
+                        taskAgent.textContent = activeTaskLabel;
                         taskCurrent.textContent = 'Loading';
                         taskExecutionCount.textContent = '0';
                         taskCompletionCount.textContent = '0';
                         taskCompletionMeta.innerHTML = '<div class="task-empty">Waiting for task snapshot...</div>';
-                        taskOutput.textContent = '';
+                        taskOutputTags.innerHTML = '';
+                        renderOutput('');
                         taskModal.classList.add('open');
                         taskModal.setAttribute('aria-hidden', 'false');
                         startTaskPolling();
@@ -872,6 +971,7 @@ public final class HostTilesPage {
                       function renderTaskSnapshot(snapshot) {
                         const execution = snapshot.execution_queue || [];
                         const completions = snapshot.completion_queue || [];
+                        const asyncTasks = activeHostAsyncTasks();
                         const currentExecution = activeRunTaskId
                           ? execution.find(task => task.task_id === activeRunTaskId)
                           : (execution[execution.length - 1] || null);
@@ -892,23 +992,27 @@ public final class HostTilesPage {
                         taskCompletionCount.textContent = String(completions.length);
                         taskKeep.disabled = !activeCompletionTaskId;
                         taskPop.disabled = !activeCompletionTaskId;
-                        taskExecution.innerHTML = execution.length ? '<div class="task-list">'
+                        taskExecution.innerHTML = renderIncomingTasks(asyncTasks)
+                          + (execution.length ? '<div class="task-list">'
                           + execution.map(renderExecutionTask).join('')
-                          + '</div>' : '<div class="task-empty">Execution queue is empty. New dry-runs appear here until an agent accepts and completes them.</div>';
+                          + '</div>' : '<div class="task-empty">No queued command. Running tasks from agent heartbeat appear above.</div>');
                         if (latest) {
                           taskCompletionMeta.innerHTML = renderCompletionMeta(latest, activeRunTaskId && latest.task_id !== activeRunTaskId);
-                          taskOutput.textContent = ['STDOUT', latest.stdout_tail || '', '', 'STDERR', latest.stderr_tail || '', latest.runner_error ? '\\nERROR\\n' + latest.runner_error : ''].join('\\n');
+                          const outputText = taskOutputText(latest);
+                          renderOutput(outputText, activeOutputMode === 'json');
+                          taskOutputTags.innerHTML = renderOutputTags(outputText, latest);
                         } else {
                           taskCompletionMeta.innerHTML = '<div class="task-empty">No completion yet. This panel auto-refreshes every 2s while the dialog is open.</div>';
-                          taskOutput.textContent = currentExecution
+                          renderOutput(currentExecution
                             ? 'Waiting for agent heartbeat result for ' + (currentExecution.task_id || 'task') + '...'
-                            : '';
+                            : '', activeOutputMode === 'json');
+                          taskOutputTags.innerHTML = renderOutputTags(activeOutputText, null);
                         }
                       }
 
                       function renderExecutionTask(task) {
                         return `
-                          <div class="task-row">
+                          <div class="task-row compact">
                             <div class="task-row-head">
                               <div class="task-name">${escapeHtml(task.task_type || '')}</div>
                               <span class="task-badge ${escapeHtml(task.status || '')}">${escapeHtml(task.status || '')}</span>
@@ -916,7 +1020,6 @@ public final class HostTilesPage {
                             <div class="task-detail">
                               task: ${escapeHtml(task.task_id || '')}<br>
                               trace: ${escapeHtml(task.trace_id || '')}<br>
-                              created: ${escapeHtml(formatTime(task.created_at_ms))}<br>
                               delivered: ${escapeHtml(formatTime(task.delivered_at_ms))}<br>
                               accepted: ${escapeHtml(formatTime(task.accepted_at_ms))}
                             </div>
@@ -924,11 +1027,39 @@ public final class HostTilesPage {
                         `;
                       }
 
+                      function renderIncomingTasks(tasks) {
+                        if (!tasks.length) {
+                          return '';
+                        }
+                        return '<div class="task-list">'
+                          + tasks.map(task => `
+                            <div class="task-row compact incoming-task">
+                              <div class="task-row-head">
+                                <div class="task-name">Incoming completion</div>
+                                <span class="task-badge ${escapeHtml(task.status || '')}">${escapeHtml(task.status || '')}</span>
+                              </div>
+                              <div class="task-detail">
+                                ${escapeHtml(task.task_type || '')}<br>
+                                trace: ${escapeHtml(task.trace_id || '')}<br>
+                                started: ${escapeHtml(formatTime(task.started_at_ms))}
+                              </div>
+                            </div>
+                          `).join('')
+                          + '</div>';
+                      }
+
                       function renderCompletionMeta(result, showingPreviousResult) {
                         const previousNotice = showingPreviousResult
                           ? '<div class="task-empty">Current run is still waiting; showing the latest retained completion.</div>'
                           : '';
                         return previousNotice + `
+                          <div class="completion-strip">
+                            <div><span>Status</span><strong>${escapeHtml(result.status || '')}</strong></div>
+                            <div><span>Exit</span><strong>${escapeHtml(result.exit_code ?? '-')}</strong></div>
+                            <div><span>Duration</span><strong>${escapeHtml(result.duration_ms || 0)}ms</strong></div>
+                            <div><span>Finished</span><strong>${escapeHtml(formatTime(result.finished_at_ms))}</strong></div>
+                            <div><span>Output</span><strong>${escapeHtml(outputLengthLabel(result))}</strong></div>
+                          </div>
                           <div class="task-row">
                             <div class="task-row-head">
                               <div class="task-name">${escapeHtml(result.task_type || '')}</div>
@@ -937,16 +1068,67 @@ public final class HostTilesPage {
                             <div class="task-detail">
                               task: ${escapeHtml(result.task_id || '')}<br>
                               trace: ${escapeHtml(result.trace_id || '')}<br>
-                              exit: ${escapeHtml(result.exit_code ?? '-')} · duration: ${escapeHtml(result.duration_ms || 0)}ms<br>
-                              finished: ${escapeHtml(formatTime(result.finished_at_ms))}
-                            </div>
-                            <div class="task-output-tabs">
-                              <span>stdout ${(result.stdout_tail || '').length} chars</span>
-                              <span>stderr ${(result.stderr_tail || '').length} chars</span>
-                              ${result.output_truncated ? '<span>tail truncated</span>' : ''}
+                              started: ${escapeHtml(formatTime(result.started_at_ms))} · finished: ${escapeHtml(formatTime(result.finished_at_ms))}
                             </div>
                           </div>
                         `;
+                      }
+
+                      function activeHostAsyncTasks() {
+                        const host = PulseView.state.hosts.find(item => (item.agent_id || '') === activeTaskAgentId);
+                        const tasks = host && host.state && Array.isArray(host.state.async_tasks) ? host.state.async_tasks : [];
+                        return activeRunTaskId ? tasks.filter(task => task.task_id === activeRunTaskId) : tasks;
+                      }
+
+                      function taskOutputText(result) {
+                        const stdout = result.stdout_tail || '';
+                        const stderr = result.stderr_tail || '';
+                        const runnerError = result.runner_error || '';
+                        return stdout || stderr || runnerError || '';
+                      }
+
+                      function outputLengthLabel(result) {
+                        const length = taskOutputText(result).length;
+                        return length + ' chars' + (result.output_truncated ? ' tail' : '');
+                      }
+
+                      function renderOutputTags(text, result) {
+                        const tags = [`<span>${detectOutputType(text).toUpperCase()}</span>`, `<span>${text.length} chars</span>`];
+                        if (result && result.output_truncated) {
+                          tags.push('<span>tail truncated</span>');
+                        }
+                        return tags.join('');
+                      }
+
+                      function renderOutput(text, forceJson = false) {
+                        activeOutputText = text || '';
+                        const formatted = forceJson ? prettyJson(activeOutputText) : activeOutputText;
+                        taskOutput.innerHTML = highlightText(formatted || '');
+                      }
+
+                      function prettyJson(text) {
+                        try {
+                          return JSON.stringify(JSON.parse(text), null, 2);
+                        } catch (ignored) {
+                          return text;
+                        }
+                      }
+
+                      function detectOutputType(text) {
+                        try {
+                          JSON.parse(text);
+                          return 'json';
+                        } catch (ignored) {
+                          return 'text';
+                        }
+                      }
+
+                      function highlightText(text) {
+                        return escapeHtml(text)
+                          .replace(/\\b(completed|success|ok|true)\\b/gi, '<span class="keyword-ok">$1</span>')
+                          .replace(/\\b(warn|warning|truncated)\\b/gi, '<span class="keyword-warn">$1</span>')
+                          .replace(/\\b(error|failed|rejected|timed_out|timeout|false)\\b/gi, '<span class="keyword-error">$1</span>')
+                          .replace(/(&quot;[^&]*?&quot;)(\\s*:)/g, '<span class="json-key">$1</span>$2');
                       }
 
                       function latestTraceId(traces) {
@@ -967,15 +1149,28 @@ public final class HostTilesPage {
                           body: JSON.stringify({task_type: taskType.value})
                         });
                         if (!response.ok) {
-                          taskOutput.textContent = 'Run failed: HTTP ' + response.status;
+                          renderOutput('Run failed: HTTP ' + response.status);
                           return;
                         }
                         const snapshot = await response.json();
                         const execution = snapshot.execution_queue || [];
                         const latestTask = execution[execution.length - 1] || null;
                         activeRunTaskId = latestTask ? latestTask.task_id : '';
+                        activeOutputMode = 'auto';
                         renderTaskSnapshot(snapshot);
                         startTaskPolling();
+                      };
+
+                      taskFormat.onclick = () => {
+                        activeOutputMode = 'json';
+                        renderOutput(activeOutputText, true);
+                      };
+
+                      taskCopy.onclick = async () => {
+                        if (!activeOutputText) {
+                          return;
+                        }
+                        await navigator.clipboard.writeText(activeOutputMode === 'json' ? prettyJson(activeOutputText) : activeOutputText);
                       };
 
                       taskKeep.onclick = async () => {
