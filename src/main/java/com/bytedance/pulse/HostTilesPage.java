@@ -265,23 +265,49 @@ public final class HostTilesPage {
                       display: flex;
                     }
                     .task-panel {
+                      display: flex;
+                      flex-direction: column;
                       width: min(1360px, 96vw);
                       max-height: 92vh;
                       overflow: hidden;
                       border: 1px solid rgba(148,163,184,.32);
                       border-radius: 28px;
                       background:
-                        radial-gradient(circle at 12% 0%, rgba(59,130,246,.16), transparent 28%),
+                        radial-gradient(circle at 0% 0%, rgba(37,99,235,.16), transparent 28%),
+                        radial-gradient(circle at 100% 0%, rgba(14,165,233,.12), transparent 26%),
                         linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
                       color: #172033;
                       box-shadow: 0 28px 90px rgba(15,23,42,.34);
                     }
+                    .task-shell {
+                      display: grid;
+                      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+                      gap: 22px;
+                      min-height: 0;
+                      max-height: 92vh;
+                      overflow: auto;
+                      padding: 24px;
+                    }
+                    .task-sidebar {
+                      display: grid;
+                      gap: 16px;
+                      align-content: start;
+                      min-width: 0;
+                    }
                     .task-hero {
-                      display: flex;
-                      justify-content: space-between;
-                      gap: 18px;
-                      padding: 22px 28px 14px;
-                      border-bottom: 1px solid #e2e8f0;
+                      display: grid;
+                      gap: 14px;
+                      min-width: 0;
+                      padding: 22px;
+                      border: 1px solid #dbeafe;
+                      border-radius: 26px;
+                      background:
+                        radial-gradient(circle at 20% 0%, rgba(37,99,235,.14), transparent 34%),
+                        linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+                      box-shadow: 0 18px 44px rgba(37,99,235,.09);
+                    }
+                    .task-hero > div {
+                      min-width: 0;
                     }
                     .task-eyebrow {
                       margin: 0 0 8px;
@@ -293,9 +319,10 @@ public final class HostTilesPage {
                     }
                     .task-hero h2 {
                       margin: 0;
-                      font-size: clamp(24px, 3vw, 36px);
-                      line-height: 1;
+                      font-size: clamp(24px, 3vw, 34px);
+                      line-height: 1.08;
                       letter-spacing: -.05em;
+                      overflow-wrap: anywhere;
                     }
                     .task-trace {
                       margin-top: 10px;
@@ -306,18 +333,16 @@ public final class HostTilesPage {
                     }
                     .task-toolbar {
                       display: flex;
-                      flex-wrap: wrap;
-                      justify-content: flex-end;
-                      align-content: flex-start;
+                      flex-direction: column;
                       gap: 10px;
                     }
                     .task-toolbar button,
                     .task-toolbar select {
                       border: 1px solid #cbd5e1;
-                      border-radius: 999px;
+                      border-radius: 16px;
                       background: rgba(255,255,255,.88);
                       color: #172033;
-                      padding: 10px 14px;
+                      padding: 11px 14px;
                       font-weight: 750;
                     }
                     .task-toolbar button {
@@ -334,20 +359,18 @@ public final class HostTilesPage {
                       box-shadow: 0 10px 24px rgba(37,99,235,.22);
                     }
                     .task-close-button {
-                      width: 42px;
-                      padding: 10px 0 !important;
+                      width: 100%;
                     }
                     .task-summary {
                       display: grid;
-                      grid-template-columns: 1fr 1fr 1fr;
+                      grid-template-columns: 1fr;
                       gap: 12px;
-                      padding: 14px 28px 12px;
                     }
                     .task-stat {
                       min-width: 0;
-                      padding: 13px 14px;
+                      padding: 14px 16px;
                       border: 1px solid #e2e8f0;
-                      border-radius: 18px;
+                      border-radius: 20px;
                       background: rgba(255,255,255,.78);
                     }
                     .task-stat span {
@@ -361,52 +384,59 @@ public final class HostTilesPage {
                     .task-stat strong {
                       display: block;
                       margin-top: 6px;
-                      overflow: hidden;
-                      text-overflow: ellipsis;
-                      white-space: nowrap;
+                      overflow-wrap: anywhere;
                       font-size: 16px;
                     }
-                    .task-grid {
+                    .task-workspace {
                       display: grid;
-                      grid-template-columns: minmax(220px, .42fr) minmax(720px, 1.8fr);
-                      gap: 16px;
-                      max-height: calc(92vh - 210px);
-                      overflow: auto;
-                      padding: 0 28px 28px;
+                      grid-template-rows: auto minmax(0, 1fr);
+                      gap: 18px;
+                      min-height: 0;
                     }
                     .task-card {
                       min-width: 0;
                       border: 1px solid #dbe3ed;
-                      border-radius: 22px;
+                      border-radius: 24px;
                       background: rgba(255,255,255,.86);
-                      padding: 16px;
+                      padding: 18px;
+                      box-shadow: 0 12px 34px rgba(15,23,42,.06);
                     }
                     .task-card h3 {
-                      margin: 0 0 12px;
+                      margin: 0 0 14px;
                       font-size: 15px;
                       letter-spacing: -.02em;
                     }
                     .task-card.execution-card {
-                      padding: 12px;
-                      align-self: start;
+                      display: grid;
+                      gap: 12px;
+                      align-self: stretch;
+                      overflow: hidden;
+                    }
+                    .execution-card #task-execution {
+                      max-height: 220px;
+                      overflow: auto;
+                      padding-right: 2px;
                     }
                     .task-card.completion-card {
                       display: grid;
-                      gap: 12px;
+                      gap: 16px;
                       grid-column: span 1;
+                      min-height: 0;
                     }
                     .task-list {
                       display: grid;
                       gap: 8px;
                     }
                     .task-row {
+                      min-width: 0;
                       border: 1px solid #e2e8f0;
                       border-radius: 16px;
                       background: #f8fafc;
                       padding: 12px;
+                      overflow: hidden;
                     }
                     .task-row.compact {
-                      padding: 8px;
+                      padding: 10px;
                     }
                     .task-row-head {
                       display: flex;
@@ -414,6 +444,7 @@ public final class HostTilesPage {
                       justify-content: space-between;
                       gap: 10px;
                       margin-bottom: 8px;
+                      min-width: 0;
                     }
                     .task-name {
                       min-width: 0;
@@ -425,6 +456,7 @@ public final class HostTilesPage {
                     .task-badge {
                       display: inline-flex;
                       align-items: center;
+                      flex: 0 0 auto;
                       border-radius: 999px;
                       padding: 4px 9px;
                       background: #dbeafe;
@@ -450,6 +482,7 @@ public final class HostTilesPage {
                       font-size: 11px;
                       line-height: 1.45;
                       overflow-wrap: anywhere;
+                      word-break: break-word;
                     }
                     .completion-strip {
                       display: grid;
@@ -508,10 +541,41 @@ public final class HostTilesPage {
                     .task-output {
                       min-height: 430px;
                       height: min(56vh, 620px);
-                      overflow: hidden;
+                      overflow: auto;
                       border: 1px solid #dbe3ed;
                       border-radius: 18px;
                       background: #ffffff;
+                    }
+                    .task-output-pre {
+                      box-sizing: border-box;
+                      min-height: 100%;
+                      margin: 0;
+                      padding: 16px 18px;
+                      color: #1e293b;
+                      white-space: pre-wrap;
+                      overflow-wrap: anywhere;
+                      word-break: break-word;
+                      font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                    }
+                    .task-output-lazy {
+                      display: grid;
+                      gap: 12px;
+                      margin: 14px;
+                      padding: 16px;
+                      border: 1px dashed #bfdbfe;
+                      border-radius: 16px;
+                      background: #f8fbff;
+                      color: #475569;
+                    }
+                    .task-output-lazy button {
+                      justify-self: start;
+                      border: 1px solid #bfdbfe;
+                      border-radius: 999px;
+                      background: #eff6ff;
+                      color: #1d4ed8;
+                      padding: 8px 12px;
+                      font-weight: 800;
+                      cursor: pointer;
                     }
                     .editor-hint {
                       color: #64748b;
@@ -527,15 +591,8 @@ public final class HostTilesPage {
                       font-size: 13px;
                     }
                     @media (max-width: 860px) {
-                      .task-hero,
-                      .task-grid {
+                      .task-shell {
                         grid-template-columns: 1fr;
-                      }
-                      .task-hero {
-                        flex-direction: column;
-                      }
-                      .task-summary {
-                        grid-template-columns: 1fr 1fr;
                       }
                     }
                   </style>
@@ -551,45 +608,48 @@ public final class HostTilesPage {
                   </main>
                   <div id="task-modal" class="task-modal" aria-hidden="true">
                     <section class="task-panel" role="dialog" aria-modal="true" aria-labelledby="task-title">
-                      <div class="task-hero">
-                        <div>
-                          <p class="task-eyebrow">Remote dry-run executor</p>
-                          <h2 id="task-title">Run Task</h2>
-                          <div id="task-trace" class="task-trace">trace: pending</div>
-                        </div>
-                        <div class="task-toolbar">
-                          <select id="task-type" aria-label="Task type">
-                            <option value="prepare_disk_layout_dry_run">prepare_disk_layout_dry_run</option>
-                            <option value="analyze_block_layout_dry_run">analyze_block_layout_dry_run</option>
-                          </select>
-                          <button id="task-run" class="task-primary">Run dry-run</button>
-                          <button id="task-pop">Pop result</button>
-                          <button id="task-close" class="task-close-button" aria-label="Close">x</button>
-                        </div>
-                      </div>
-                      <div class="task-summary">
-                        <div class="task-stat"><span>Target IP</span><strong id="task-agent">-</strong></div>
-                        <div class="task-stat"><span>Current run</span><strong id="task-current">Idle</strong></div>
-                        <div class="task-stat"><span>Completion queue</span><strong id="task-completion-count">0</strong></div>
-                      </div>
-                      <div class="task-grid">
-                        <section class="task-card execution-card">
-                          <h3>Execution Queue</h3>
-                          <div id="task-execution"></div>
-                        </section>
-                        <section class="task-card completion-card">
-                          <h3>Completion Queue</h3>
-                          <div id="task-completion-meta"></div>
-                          <div class="task-output-tabs">
-                            <div id="task-output-tags" class="task-output-tags"></div>
-                            <div class="editor-hint">Monaco Editor · auto language · context menu copy/format · scroll both directions</div>
+                      <div class="task-shell">
+                        <aside class="task-sidebar">
+                          <div class="task-hero">
+                            <div>
+                              <p class="task-eyebrow">Remote dry-run executor</p>
+                              <h2 id="task-title">Run Task</h2>
+                              <div id="task-trace" class="task-trace">trace: pending</div>
+                            </div>
+                            <div class="task-toolbar">
+                              <select id="task-type" aria-label="Task type">
+                                <option value="prepare_disk_layout_dry_run">prepare_disk_layout_dry_run</option>
+                                <option value="analyze_block_layout_dry_run">analyze_block_layout_dry_run</option>
+                              </select>
+                              <button id="task-run" class="task-primary">Run dry-run</button>
+                              <button id="task-pop">Pop result</button>
+                              <button id="task-close" class="task-close-button" aria-label="Close">Close</button>
+                            </div>
                           </div>
-                          <div id="task-output" class="task-output"></div>
-                        </section>
+                          <div class="task-summary">
+                            <div class="task-stat"><span>Target IP</span><strong id="task-agent">-</strong></div>
+                            <div class="task-stat"><span>Current run</span><strong id="task-current">Idle</strong></div>
+                            <div class="task-stat"><span>Completion queue</span><strong id="task-completion-count">0</strong></div>
+                          </div>
+                        </aside>
+                        <main class="task-workspace">
+                          <section class="task-card execution-card">
+                            <h3>Execution Queue</h3>
+                            <div id="task-execution"></div>
+                          </section>
+                          <section class="task-card completion-card">
+                            <h3>Completion Queue</h3>
+                            <div id="task-completion-meta"></div>
+                            <div class="task-output-tabs">
+                              <div id="task-output-tags" class="task-output-tags"></div>
+                              <div class="editor-hint">Monaco Editor · lazy load · auto wrap · context menu copy/format</div>
+                            </div>
+                            <div id="task-output" class="task-output"></div>
+                          </section>
+                        </main>
                       </div>
                     </section>
                   </div>
-                  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.49.0/min/vs/loader.js"></script>
                   <script>
                     (() => {
                       const refreshMs = 5000;
@@ -618,8 +678,11 @@ public final class HostTilesPage {
                       let taskSnapshotInFlight = false;
                       let activeTaskLabel = '';
                       let activeOutputText = '';
+                      let renderOutputVersion = 0;
                       let outputEditor = null;
                       let monacoReady = null;
+                      const largeOutputThreshold = 180000;
+                      const previewOutputLimit = 60000;
 
                       const PulseView = {
                         state: {hosts: [], loading: true, error: null, updatedAt: null},
@@ -1063,17 +1126,69 @@ public final class HostTilesPage {
 
                       function renderOutput(text) {
                         activeOutputText = text || '';
-                        const language = detectOutputType(activeOutputText);
-                        setupMonacoEditor().then(() => {
+                        const version = ++renderOutputVersion;
+                        disposeOutputEditor();
+                        if (!activeOutputText) {
+                          taskOutput.replaceChildren();
+                          return;
+                        }
+                        if (activeOutputText.length > largeOutputThreshold) {
+                          renderLazyOutputPreview(activeOutputText);
+                          return;
+                        }
+                        taskOutput.innerHTML = '<pre class="task-output-pre">' + escapeHtml(activeOutputText) + '</pre>';
+                        scheduleIdle(() => {
+                          if (version !== renderOutputVersion) {
+                            return;
+                          }
+                          const language = detectOutputType(activeOutputText);
+                          setupMonacoEditor().then(() => {
+                            if (version !== renderOutputVersion) {
+                              return;
+                            }
+                            updateMonacoValue(activeOutputText, language, true);
+                          });
+                        });
+                      }
+
+                      function renderLazyOutputPreview(text) {
+                        const language = detectOutputType(text);
+                        const preview = text.slice(0, previewOutputLimit);
+                        taskOutput.innerHTML = `
+                          <div class="task-output-lazy">
+                            <div>
+                              Large ${escapeHtml(language)} output is kept losslessly in memory (${text.length} chars).
+                              Rendering is lazy to keep the dashboard responsive.
+                            </div>
+                            <button type="button" id="task-load-editor">Load full editor</button>
+                          </div>
+                          <pre class="task-output-pre">${escapeHtml(preview)}\n\n... preview only. Click "Load full editor" for the complete output.</pre>
+                        `;
+                        const loadButton = document.getElementById('task-load-editor');
+                        if (loadButton) {
+                          loadButton.onclick = () => {
+                            const version = ++renderOutputVersion;
+                            taskOutput.innerHTML = '<pre class="task-output-pre">Loading editor...</pre>';
+                            scheduleIdle(() => {
+                              if (version !== renderOutputVersion) {
+                                return;
+                              }
+                              setupMonacoEditor().then(() => updateMonacoValue(text, language, false));
+                            });
+                          };
+                        }
+                      }
+
+                      function updateMonacoValue(text, language, allowAutoFormat) {
                           if (!outputEditor || !window.monaco) {
-                            taskOutput.textContent = activeOutputText;
+                            taskOutput.innerHTML = '<pre class="task-output-pre">' + escapeHtml(text) + '</pre>';
                             return;
                           }
                           const model = outputEditor.getModel();
-                          model.setValue(activeOutputText);
+                          model.setValue(text);
                           window.monaco.editor.setModelLanguage(model, language);
                           outputEditor.layout();
-                          if (language === 'json') {
+                          if (allowAutoFormat && language === 'json' && text.length <= 100000) {
                             window.setTimeout(() => {
                               const formatAction = outputEditor.getAction('editor.action.formatDocument');
                               if (formatAction) {
@@ -1081,12 +1196,33 @@ public final class HostTilesPage {
                               }
                             }, 0);
                           }
-                        });
+                      }
+
+                      function scheduleIdle(callback) {
+                        if ('requestIdleCallback' in window) {
+                          window.requestIdleCallback(callback, {timeout: 1200});
+                          return;
+                        }
+                        window.setTimeout(callback, 0);
+                      }
+
+                      function disposeOutputEditor() {
+                        if (outputEditor) {
+                          outputEditor.dispose();
+                          outputEditor = null;
+                        }
                       }
 
                       function detectOutputType(text) {
+                        const trimmed = String(text || '').trim();
+                        if (!trimmed) {
+                          return 'text';
+                        }
+                        if (trimmed.length > 100000) {
+                          return (trimmed.startsWith('{') || trimmed.startsWith('[')) ? 'json' : 'text';
+                        }
                         try {
-                          JSON.parse(text);
+                          JSON.parse(trimmed);
                           return 'json';
                         } catch (ignored) {
                           return 'text';
@@ -1098,17 +1234,45 @@ public final class HostTilesPage {
                           return Promise.resolve(outputEditor);
                         }
                         if (monacoReady) {
-                          return monacoReady;
+                          return monacoReady.then(createOutputEditor);
                         }
                         monacoReady = new Promise(resolve => {
-                          if (!window.require) {
-                            taskOutput.textContent = activeOutputText;
-                            resolve(null);
-                            return;
-                          }
-                          window.require.config({paths: {vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.49.0/min/vs'}});
-                          window.require(['vs/editor/editor.main'], () => {
-                            outputEditor = window.monaco.editor.create(taskOutput, {
+                          ensureMonacoLoader(() => {
+                            if (!window.require) {
+                              resolve(null);
+                              return;
+                            }
+                            window.require.config({paths: {vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.49.0/min/vs'}});
+                            window.require(['vs/editor/editor.main'], () => resolve(window.monaco));
+                          });
+                        });
+                        return monacoReady.then(createOutputEditor);
+                      }
+
+                      function ensureMonacoLoader(callback) {
+                        if (window.require) {
+                          callback();
+                          return;
+                        }
+                        const existing = document.querySelector('script[data-monaco-loader]');
+                        if (existing) {
+                          existing.addEventListener('load', callback, {once: true});
+                          return;
+                        }
+                        const script = document.createElement('script');
+                        script.src = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.49.0/min/vs/loader.js';
+                        script.dataset.monacoLoader = 'true';
+                        script.onload = callback;
+                        script.onerror = callback;
+                        document.head.appendChild(script);
+                      }
+
+                      function createOutputEditor() {
+                        if (outputEditor || !window.monaco) {
+                          return outputEditor;
+                        }
+                        taskOutput.replaceChildren();
+                        outputEditor = window.monaco.editor.create(taskOutput, {
                               value: activeOutputText,
                               language: detectOutputType(activeOutputText),
                               readOnly: true,
@@ -1116,20 +1280,22 @@ public final class HostTilesPage {
                               automaticLayout: true,
                               scrollBeyondLastLine: false,
                               minimap: {enabled: false},
-                              wordWrap: 'off',
+                              wordWrap: 'on',
                               wrappingStrategy: 'advanced',
+                              wrappingIndent: 'same',
                               renderLineHighlight: 'none',
                               contextmenu: true,
+                              lineNumbersMinChars: 3,
+                              glyphMargin: false,
+                              folding: false,
+                              overviewRulerLanes: 0,
                               scrollbar: {
                                 vertical: 'visible',
-                                horizontal: 'visible',
+                                horizontal: 'hidden',
                                 useShadows: false
                               }
                             });
-                            resolve(outputEditor);
-                          });
-                        });
-                        return monacoReady;
+                        return outputEditor;
                       }
 
                       function shortHash(hash) {
