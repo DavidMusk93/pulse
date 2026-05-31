@@ -142,8 +142,9 @@ public final class HostTilesPage {
                     .status {
                       flex: 0 0 auto;
                       border: 1px solid rgba(255,255,255,.6);
-                      padding: 3px 7px;
-                      font-size: 11px;
+                      padding: 2px 5px;
+                      font-size: 10px;
+                      line-height: 1.25;
                       font-weight: 750;
                       letter-spacing: .04em;
                       text-transform: uppercase;
@@ -155,16 +156,17 @@ public final class HostTilesPage {
                       flex-direction: row;
                       align-items: center;
                       justify-content: flex-end;
-                      flex-wrap: wrap;
-                      gap: 6px;
+                      flex-wrap: nowrap;
+                      gap: 4px;
                     }
                     .run-button {
                       border: 1px solid rgba(255,255,255,.42);
                       border-radius: 999px;
                       color: white;
                       background: rgba(15,23,42,.16);
-                      padding: 3px 8px;
-                      font-size: 11px;
+                      padding: 2px 6px;
+                      font-size: 10px;
+                      line-height: 1.25;
                       font-weight: 750;
                       cursor: pointer;
                     }
