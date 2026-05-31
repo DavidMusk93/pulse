@@ -138,7 +138,7 @@ TaskResult {
   - coordinator 必须在所有分片到齐并校验 `output_sha256` 后，才把 result 放入 completion queue。
   - 分片未到齐时只能显示 `receiving` / `incomplete` 状态，不能展示“部分结果”冒充完整 completion。
 - `output_sha256` 是完整性校验必填字段；UI 可以展示该 hash，便于确认结果未被传输层破坏。
-- `output_truncated`、`stdout_tail`、`stderr_tail` 这类有损字段只允许作为历史兼容字段读取，不允许作为新协议语义继续使用。
+- `output_truncated`、`stdout_tail`、`stderr_tail` 这类有损字段从协议中删除；新实现不得读取、生成或兼容这些字段。
 - 未来 task 输出格式改为 JSON 后，agent 仍按完整文本处理；可以标记 `output_type=json`，但不能解析后重排、过滤或丢字段再上传。
 
 ### ResultChunk

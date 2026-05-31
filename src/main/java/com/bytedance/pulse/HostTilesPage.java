@@ -339,7 +339,7 @@ public final class HostTilesPage {
                     }
                     .task-summary {
                       display: grid;
-                      grid-template-columns: 1.1fr .9fr .8fr .8fr;
+                      grid-template-columns: .9fr .9fr .8fr .8fr;
                       gap: 12px;
                       padding: 16px 26px;
                     }
@@ -392,6 +392,7 @@ public final class HostTilesPage {
                     .task-card.completion-card {
                       display: grid;
                       gap: 12px;
+                      grid-column: span 1;
                     }
                     .task-list {
                       display: grid;
@@ -451,7 +452,7 @@ public final class HostTilesPage {
                     }
                     .completion-strip {
                       display: grid;
-                      grid-template-columns: repeat(5, minmax(112px, 1fr));
+                      grid-template-columns: repeat(6, minmax(104px, 1fr));
                       gap: 10px;
                     }
                     .completion-strip div {
@@ -916,10 +917,10 @@ public final class HostTilesPage {
                         activeTaskAgentId = agentId;
                         activeCompletionTaskId = '';
                         activeRunTaskId = '';
-                        activeTaskLabel = label || agentId || '-';
+                        activeTaskLabel = agentId || '-';
                         activeOutputText = '';
                         activeOutputMode = 'auto';
-                        taskTitle.textContent = 'Run Task · ' + label;
+                        taskTitle.textContent = 'Run Task · ' + activeTaskLabel;
                         taskTrace.textContent = 'trace: pending';
                         taskAgent.textContent = activeTaskLabel;
                         taskCurrent.textContent = 'Loading';
@@ -1058,7 +1059,10 @@ public final class HostTilesPage {
                             <div><span>Exit</span><strong>${escapeHtml(result.exit_code ?? '-')}</strong></div>
                             <div><span>Duration</span><strong>${escapeHtml(result.duration_ms || 0)}ms</strong></div>
                             <div><span>Finished</span><strong>${escapeHtml(formatTime(result.finished_at_ms))}</strong></div>
-                            <div><span>Output</span><strong>${escapeHtml(outputLengthLabel(result))}</strong></div>
+                            <div><span>Type</span><strong>${escapeHtml(result.output_type || detectOutputType(taskOutputText(result)))}</strong></div>
+                            <div><span>Encoding</span><strong>${escapeHtml(result.output_encoding || '-')}</strong></div>
+                            <div><span>Bytes</span><strong>${escapeHtml(result.output_bytes ?? '-')}</strong></div>
+                            <div><span>SHA256</span><strong title="${escapeHtml(result.output_sha256 || '')}">${escapeHtml(shortHash(result.output_sha256 || ''))}</strong></div>
                           </div>
                           <div class="task-row">
                             <div class="task-row-head">
@@ -1068,7 +1072,8 @@ public final class HostTilesPage {
                             <div class="task-detail">
                               task: ${escapeHtml(result.task_id || '')}<br>
                               trace: ${escapeHtml(result.trace_id || '')}<br>
-                              started: ${escapeHtml(formatTime(result.started_at_ms))} · finished: ${escapeHtml(formatTime(result.finished_at_ms))}
+                              started: ${escapeHtml(formatTime(result.started_at_ms))} · finished: ${escapeHtml(formatTime(result.finished_at_ms))}<br>
+                              output_sha256: ${escapeHtml(result.output_sha256 || '')}
                             </div>
                           </div>
                         `;
@@ -1081,21 +1086,19 @@ public final class HostTilesPage {
                       }
 
                       function taskOutputText(result) {
-                        const stdout = result.stdout_tail || '';
-                        const stderr = result.stderr_tail || '';
                         const runnerError = result.runner_error || '';
-                        return stdout || stderr || runnerError || '';
+                        return result.output || runnerError || '';
                       }
 
                       function outputLengthLabel(result) {
                         const length = taskOutputText(result).length;
-                        return length + ' chars' + (result.output_truncated ? ' tail' : '');
+                        return length + ' chars';
                       }
 
                       function renderOutputTags(text, result) {
                         const tags = [`<span>${detectOutputType(text).toUpperCase()}</span>`, `<span>${text.length} chars</span>`];
-                        if (result && result.output_truncated) {
-                          tags.push('<span>tail truncated</span>');
+                        if (result && result.output_sha256) {
+                          tags.push(`<span>sha256 ${escapeHtml(shortHash(result.output_sha256))}</span>`);
                         }
                         return tags.join('');
                       }
@@ -1129,6 +1132,10 @@ public final class HostTilesPage {
                           .replace(/\\b(warn|warning|truncated)\\b/gi, '<span class="keyword-warn">$1</span>')
                           .replace(/\\b(error|failed|rejected|timed_out|timeout|false)\\b/gi, '<span class="keyword-error">$1</span>')
                           .replace(/(&quot;[^&]*?&quot;)(\\s*:)/g, '<span class="json-key">$1</span>$2');
+                      }
+
+                      function shortHash(hash) {
+                        return hash ? hash.slice(0, 12) : '-';
                       }
 
                       function latestTraceId(traces) {

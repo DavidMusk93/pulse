@@ -170,14 +170,74 @@ class CoordinatorServiceTest {
                                         Map.entry("started_at_ms", clock.millis()),
                                         Map.entry("finished_at_ms", clock.millis() + 1),
                                         Map.entry("duration_ms", 1),
-                                        Map.entry("stdout_tail", "ok"),
-                                        Map.entry("stderr_tail", ""),
-                                        Map.entry("output_truncated", false)))),
+                                        Map.entry("output", "ok"),
+                                        Map.entry("output_type", "text"),
+                                        Map.entry("output_encoding", "identity"),
+                                        Map.entry("output_sha256", TaskOutputCodec.sha256("ok")),
+                                        Map.entry("output_bytes", 2),
+                                        Map.entry("output_chunked", false),
+                                        Map.entry("output_chunk_count", 0),
+                                        Map.entry("runner_error", "")))),
                 List.of()));
 
         TaskSnapshot snapshot = service.taskSnapshot("agent-1");
         assertEquals(1, snapshot.completionQueue().size());
         assertEquals("completed", snapshot.completionQueue().get(0).status());
+        assertEquals("ok", snapshot.completionQueue().get(0).output());
+    }
+
+    @Test
+    void remoteTaskResultChunksAreReassembledLosslessly() {
+        CoordinatorService service = new CoordinatorService("coordinator-a", clock);
+        service.enqueueTask("agent-1", "analyze_block_layout_dry_run");
+        PulseMessage command = service.handleHeartbeat(singleHeartbeat("agent-1", 1, 10, "host-1", "10.0.0.1"))
+                .messages()
+                .stream()
+                .filter(message -> "cmd.task_execute".equals(message.type()))
+                .findFirst()
+                .orElseThrow();
+        String output = "{\"rows\":[" + "1234567890,".repeat(6_000) + "0]}";
+        String first = output.substring(0, output.length() / 2);
+        String second = output.substring(output.length() / 2);
+
+        service.handleHeartbeat(new HeartbeatRequest(
+                null,
+                "agent-1",
+                1L,
+                11L,
+                15_000L,
+                List.of(
+                        new PulseMessage("state-agent-1-11", "state.heartbeat", 1, null, null, Map.of("host", "host-1")),
+                        new PulseMessage(
+                                "result-agent-1",
+                                "reply.task_result",
+                                1,
+                                command.messageId(),
+                                null,
+                                Map.ofEntries(
+                                        Map.entry("task_id", command.payload().get("task_id")),
+                                        Map.entry("trace_id", command.payload().get("trace_id")),
+                                        Map.entry("task_type", "analyze_block_layout_dry_run"),
+                                        Map.entry("status", "completed"),
+                                        Map.entry("exit_code", 0),
+                                        Map.entry("started_at_ms", clock.millis()),
+                                        Map.entry("finished_at_ms", clock.millis() + 1),
+                                        Map.entry("duration_ms", 1),
+                                        Map.entry("output_type", "json"),
+                                        Map.entry("output_encoding", "identity"),
+                                        Map.entry("output_sha256", TaskOutputCodec.sha256(output)),
+                                        Map.entry("output_bytes", output.getBytes(java.nio.charset.StandardCharsets.UTF_8).length),
+                                        Map.entry("output_chunked", true),
+                                        Map.entry("output_chunk_count", 2),
+                                        Map.entry("runner_error", ""))),
+                        chunk(command, 1, second, output),
+                        chunk(command, 0, first, output)),
+                List.of()));
+
+        TaskSnapshot snapshot = service.taskSnapshot("agent-1");
+        assertEquals(1, snapshot.completionQueue().size());
+        assertEquals(output, snapshot.completionQueue().get(0).output());
+        assertEquals(TaskOutputCodec.sha256(output), snapshot.completionQueue().get(0).outputSha256());
     }
 
     @Test
@@ -244,5 +304,24 @@ class CoordinatorServiceTest {
                                 "zone", "az-a",
                                 "role", "worker",
                                 "load", "0.42"))));
+    }
+
+    private static PulseMessage chunk(PulseMessage command, int index, String payload, String fullOutput) {
+        return new PulseMessage(
+                "chunk-" + index,
+                "reply.task_result_chunk",
+                1,
+                command.messageId(),
+                null,
+                Map.ofEntries(
+                        Map.entry("task_id", command.payload().get("task_id")),
+                        Map.entry("trace_id", command.payload().get("trace_id")),
+                        Map.entry("chunk_index", index),
+                        Map.entry("chunk_count", 2),
+                        Map.entry("output_encoding", "identity"),
+                        Map.entry("payload", payload),
+                        Map.entry("payload_sha256", TaskOutputCodec.sha256(payload)),
+                        Map.entry("output_sha256", TaskOutputCodec.sha256(fullOutput)),
+                        Map.entry("output_bytes", fullOutput.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)));
     }
 }

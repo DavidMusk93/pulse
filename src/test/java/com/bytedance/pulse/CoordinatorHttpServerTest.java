@@ -149,6 +149,7 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("Format JSON"));
         assertTrue(response.body().contains("Copy"));
         assertTrue(response.body().contains("completion-strip"));
+        assertTrue(response.body().contains("output_sha256"));
         assertTrue(response.body().contains("Incoming completion"));
         assertTrue(response.body().contains("highlightText"));
         assertTrue(response.body().contains("startTaskPolling"));
@@ -175,6 +176,9 @@ class CoordinatorHttpServerTest {
         assertTrue(!response.body().contains("<span>Agent</span>"));
         assertTrue(!response.body().contains("STDOUT"));
         assertTrue(!response.body().contains("STDERR"));
+        assertTrue(!response.body().contains("stdout_tail"));
+        assertTrue(!response.body().contains("stderr_tail"));
+        assertTrue(!response.body().contains("output_truncated"));
         assertTrue(response.body().contains("backdrop-filter: blur(12px)"));
         assertTrue(!response.body().contains("liquid-flow"));
         assertTrue(!response.body().contains("water-ripple"));

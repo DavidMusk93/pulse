@@ -3,6 +3,7 @@ package com.bytedance.pulse;
 import java.time.Clock;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +20,7 @@ public class RemoteTaskService {
     private final Map<String, Map<String, RemoteTask>> inFlight = new ConcurrentHashMap<>();
     private final Map<String, ArrayDeque<TaskResult>> completionQueues = new ConcurrentHashMap<>();
     private final Map<String, List<TaskTraceLogEntry>> traceLogs = new ConcurrentHashMap<>();
+    private final Map<String, ResultAssembly> pendingResults = new ConcurrentHashMap<>();
     private final Map<String, TaskDefinition> taskDefinitions;
 
     public RemoteTaskService(Clock clock) {
@@ -109,7 +111,9 @@ public class RemoteTaskService {
 
     public synchronized void handleReplies(String agentId, List<PulseMessage> messages) {
         for (PulseMessage message : messages) {
-            if (!"reply.task_accepted".equals(message.type()) && !"reply.task_result".equals(message.type())) {
+            if (!"reply.task_accepted".equals(message.type())
+                    && !"reply.task_result".equals(message.type())
+                    && !"reply.task_result_chunk".equals(message.type())) {
                 continue;
             }
             Map<String, Object> payload = message.payload();
@@ -141,16 +145,16 @@ public class RemoteTaskService {
                 RemoteTask accepted = task.withStatus("accepted", task.deliveredAtMs(), clock.millis(), task.startedAtMs(), task.finishedAtMs());
                 inFlight(agentId).put(taskId, accepted);
                 trace(accepted, "task.accepted_by_agent", "agent", agentId, Map.of());
-            } else {
-                TaskResult result = resultFrom(agentId, payload);
-                inFlight(agentId).remove(taskId);
-                ArrayDeque<TaskResult> completions = completions(agentId);
-                completions.removeIf(existing -> existing.taskId().equals(result.taskId()));
-                completions.addLast(result);
-                while (completions.size() > MAX_COMPLETIONS_PER_AGENT) {
-                    completions.removeFirst();
+            } else if ("reply.task_result_chunk".equals(message.type())) {
+                Optional<TaskResult> result = acceptChunk(agentId, payload);
+                if (result.isPresent()) {
+                    complete(agentId, task, result.get());
                 }
-                trace(task, "task.result_received", "agent", agentId, Map.of("status", result.status()));
+            } else {
+                Optional<TaskResult> result = acceptResult(agentId, payload);
+                if (result.isPresent()) {
+                    complete(agentId, task, result.get());
+                }
             }
         }
     }
@@ -164,7 +168,7 @@ public class RemoteTaskService {
     public synchronized TaskSnapshot popCompletion(String agentId, String taskId) {
         ArrayDeque<TaskResult> completions = completions(agentId);
         completions.removeIf(result -> result.taskId().equals(taskId));
-        trace(new TaskResult(taskId, "trace-unknown", agentId, "", "popped", null, 0, 0, 0, "", "", false, null),
+        trace(new TaskResult(taskId, "trace-unknown", agentId, "", "popped", null, 0, 0, 0, "", "text", TaskOutputCodec.IDENTITY, TaskOutputCodec.sha256(""), 0, null),
                 "task.completion_popped",
                 "ui",
                 "pulse-ui",
@@ -216,7 +220,61 @@ public class RemoteTaskService {
                         detail));
     }
 
-    private static TaskResult resultFrom(String agentId, Map<String, Object> payload) {
+    private void complete(String agentId, RemoteTask task, TaskResult result) {
+        inFlight(agentId).remove(result.taskId());
+        pendingResults.remove(assemblyKey(agentId, result.taskId()));
+        ArrayDeque<TaskResult> completions = completions(agentId);
+        completions.removeIf(existing -> existing.taskId().equals(result.taskId()));
+        completions.addLast(result);
+        while (completions.size() > MAX_COMPLETIONS_PER_AGENT) {
+            completions.removeFirst();
+        }
+        trace(task, "task.result_received", "agent", agentId, Map.of("status", result.status(), "output_sha256", result.outputSha256()));
+    }
+
+    private Optional<TaskResult> acceptResult(String agentId, Map<String, Object> payload) {
+        if (!booleanValue(payload, "output_chunked")) {
+            return Optional.of(resultFrom(agentId, payload, stringValue(payload, "output")));
+        }
+        ResultAssembly assembly = assembly(agentId, stringValue(payload, "task_id"));
+        assembly.metadata = new LinkedHashMap<>(payload);
+        return assembly.tryBuild(agentId);
+    }
+
+    private Optional<TaskResult> acceptChunk(String agentId, Map<String, Object> payload) {
+        String taskId = stringValue(payload, "task_id");
+        ResultAssembly assembly = assembly(agentId, taskId);
+        int chunkIndex = intValue(payload, "chunk_index") == null ? -1 : intValue(payload, "chunk_index");
+        int chunkCount = intValue(payload, "chunk_count") == null ? -1 : intValue(payload, "chunk_count");
+        String chunk = stringValue(payload, "payload");
+        String expectedPayloadSha = stringValue(payload, "payload_sha256");
+        if (chunkIndex < 0 || chunkCount <= 0 || !TaskOutputCodec.sha256(chunk).equals(expectedPayloadSha)) {
+            return Optional.empty();
+        }
+        assembly.chunkCount = chunkCount;
+        assembly.chunks.put(chunkIndex, chunk);
+        return assembly.tryBuild(agentId);
+    }
+
+    private ResultAssembly assembly(String agentId, String taskId) {
+        return pendingResults.computeIfAbsent(assemblyKey(agentId, taskId), ignored -> new ResultAssembly());
+    }
+
+    private static String assemblyKey(String agentId, String taskId) {
+        return agentId + ":" + taskId;
+    }
+
+    static TaskResult resultFrom(String agentId, Map<String, Object> payload, String encodedOutput) {
+        String encoding = stringValue(payload, "output_encoding");
+        String output = TaskOutputCodec.decode(encodedOutput, encoding);
+        String outputSha = stringValue(payload, "output_sha256");
+        long outputBytes = longValue(payload, "output_bytes");
+        if (!TaskOutputCodec.sha256(output).equals(outputSha)) {
+            throw new IllegalArgumentException("task output sha256 mismatch");
+        }
+        if (output.getBytes(java.nio.charset.StandardCharsets.UTF_8).length != outputBytes) {
+            throw new IllegalArgumentException("task output byte size mismatch");
+        }
         return new TaskResult(
                 stringValue(payload, "task_id"),
                 stringValue(payload, "trace_id"),
@@ -227,9 +285,11 @@ public class RemoteTaskService {
                 longValue(payload, "started_at_ms"),
                 longValue(payload, "finished_at_ms"),
                 longValue(payload, "duration_ms"),
-                stringValue(payload, "stdout_tail"),
-                stringValue(payload, "stderr_tail"),
-                booleanValue(payload, "output_truncated"),
+                output,
+                stringValue(payload, "output_type"),
+                encoding,
+                outputSha,
+                outputBytes,
                 stringValue(payload, "runner_error"));
     }
 
@@ -316,10 +376,33 @@ record TaskResult(
         long startedAtMs,
         long finishedAtMs,
         long durationMs,
-        String stdoutTail,
-        String stderrTail,
-        boolean outputTruncated,
+        String output,
+        String outputType,
+        String outputEncoding,
+        String outputSha256,
+        long outputBytes,
         String runnerError) {}
+
+final class ResultAssembly {
+    Map<String, Object> metadata;
+    int chunkCount = -1;
+    final Map<Integer, String> chunks = new HashMap<>();
+
+    Optional<TaskResult> tryBuild(String agentId) {
+        if (metadata == null || chunkCount <= 0 || chunks.size() < chunkCount) {
+            return Optional.empty();
+        }
+        StringBuilder output = new StringBuilder();
+        for (int index = 0; index < chunkCount; index++) {
+            String chunk = chunks.get(index);
+            if (chunk == null) {
+                return Optional.empty();
+            }
+            output.append(chunk);
+        }
+        return Optional.of(RemoteTaskService.resultFrom(agentId, metadata, output.toString()));
+    }
+}
 
 record TaskTraceLogEntry(
         String traceId,

@@ -1,9 +1,8 @@
 package com.bytedance.pulse;
 
-import java.io.ByteArrayOutputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -18,7 +17,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 public class AgentTaskRunner {
-    private static final int OUTPUT_TAIL_BYTES = 64 * 1024;
+    private static final int RESULT_INLINE_CHARS = 48 * 1024;
+    private static final int RESULT_CHUNK_CHARS = 48 * 1024;
     private static final int REPLY_REPLAY_SENDS = 3;
     private static final long DEFAULT_TASK_TIMEOUT_MS = 600_000;
     private final String agentId;
@@ -81,7 +81,7 @@ public class AgentTaskRunner {
         }
         TaskDefinition definition = definition(taskType);
         if (definition == null || !definition.scriptPath().equals(scriptPath) || !definition.args().equals(argsValue(payload))) {
-            pendingReplies.add(new PendingReply(resultMessage(message.messageId(), taskId, traceId, taskType, "rejected", null, 0, 0, "", "", false, "task is not in agent allowlist"), REPLY_REPLAY_SENDS));
+            enqueueResultMessages(resultMessages(message.messageId(), taskId, traceId, taskType, "rejected", null, 0, 0, "", "task is not in agent allowlist"));
             return;
         }
         long acceptedAt = clock.millis();
@@ -106,9 +106,11 @@ public class AgentTaskRunner {
         long started = clock.millis();
         runningTasks.computeIfPresent(taskId, (ignored, task) -> task.withRunning(started));
         Process process = null;
+        Path stdoutFile = null;
+        Path stderrFile = null;
         try {
             if (!Files.isRegularFile(Path.of(definition.scriptPath()))) {
-                pendingReplies.add(new PendingReply(resultMessage(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", "", false, "script not found"), REPLY_REPLAY_SENDS));
+                enqueueResultMessages(resultMessages(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", "script not found"));
                 return;
             }
             List<String> command = new ArrayList<>();
@@ -119,25 +121,31 @@ public class AgentTaskRunner {
             }
             command.add(definition.scriptPath());
             command.addAll(definition.args());
-            process = new ProcessBuilder(command).start();
-            Process running = process;
-            ByteArrayOutputStream stdout = new ByteArrayOutputStream();
-            ByteArrayOutputStream stderr = new ByteArrayOutputStream();
-            Thread stdoutThread = new Thread(() -> copyTail(running.getInputStream(), stdout));
-            Thread stderrThread = new Thread(() -> copyTail(running.getErrorStream(), stderr));
-            stdoutThread.start();
-            stderrThread.start();
+            stdoutFile = Files.createTempFile("pulse-task-" + taskId + "-", ".stdout");
+            stderrFile = Files.createTempFile("pulse-task-" + taskId + "-", ".stderr");
+            process = new ProcessBuilder(command)
+                    .redirectOutput(stdoutFile.toFile())
+                    .redirectError(stderrFile.toFile())
+                    .start();
             boolean finished = process.waitFor(Math.max(1, timeoutMs), TimeUnit.MILLISECONDS);
             long finishedAt = clock.millis();
             if (!finished) {
                 process.destroyForcibly();
-                pendingReplies.add(new PendingReply(resultMessage(replyTo, taskId, traceId, definition.taskType(), "timed_out", null, started, finishedAt, stdout.toString(StandardCharsets.UTF_8), stderr.toString(StandardCharsets.UTF_8), false, "task timed out"), REPLY_REPLAY_SENDS));
+                enqueueResultMessages(resultMessages(
+                        replyTo,
+                        taskId,
+                        traceId,
+                        definition.taskType(),
+                        "timed_out",
+                        null,
+                        started,
+                        finishedAt,
+                        readUtf8(stdoutFile),
+                        appendError(readUtf8(stderrFile), "task timed out")));
                 return;
             }
-            stdoutThread.join(1000);
-            stderrThread.join(1000);
             int exitCode = process.exitValue();
-            pendingReplies.add(new PendingReply(resultMessage(
+            enqueueResultMessages(resultMessages(
                     replyTo,
                     taskId,
                     traceId,
@@ -146,21 +154,25 @@ public class AgentTaskRunner {
                     exitCode,
                     started,
                     finishedAt,
-                    stdout.toString(StandardCharsets.UTF_8),
-                    stderr.toString(StandardCharsets.UTF_8),
-                    false,
-                    ""), REPLY_REPLAY_SENDS));
+                    readUtf8(stdoutFile),
+                    readUtf8(stderrFile)));
         } catch (Exception exception) {
             if (process != null) {
                 process.destroyForcibly();
             }
-            pendingReplies.add(new PendingReply(resultMessage(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", "", false, exception.getMessage()), REPLY_REPLAY_SENDS));
+            enqueueResultMessages(resultMessages(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", exception.getMessage()));
         } finally {
+            deleteQuietly(stdoutFile);
+            deleteQuietly(stderrFile);
             runningTasks.remove(taskId);
         }
     }
 
-    private PulseMessage resultMessage(
+    private void enqueueResultMessages(List<PulseMessage> messages) {
+        messages.forEach(message -> pendingReplies.add(new PendingReply(message, REPLY_REPLAY_SENDS)));
+    }
+
+    private List<PulseMessage> resultMessages(
             String replyTo,
             String taskId,
             String traceId,
@@ -169,30 +181,62 @@ public class AgentTaskRunner {
             Integer exitCode,
             long started,
             long finished,
-            String stdout,
-            String stderr,
-            boolean truncated,
+            String output,
             String runnerError) {
-        return new PulseMessage(
+        TaskOutputCodec.EncodedOutput encoded = TaskOutputCodec.encode(output);
+        boolean chunked = encoded.value().length() > RESULT_INLINE_CHARS;
+        Map<String, Object> resultPayload = new LinkedHashMap<>();
+        resultPayload.put("task_id", taskId);
+        resultPayload.put("trace_id", traceId);
+        resultPayload.put("agent_id", agentId);
+        resultPayload.put("task_type", taskType);
+        resultPayload.put("status", status);
+        resultPayload.put("exit_code", exitCode == null ? "" : exitCode);
+        resultPayload.put("started_at_ms", started);
+        resultPayload.put("finished_at_ms", finished);
+        resultPayload.put("duration_ms", Math.max(0, finished - started));
+        resultPayload.put("output_type", detectOutputType(output));
+        resultPayload.put("output_encoding", encoded.encoding());
+        resultPayload.put("output_sha256", encoded.sha256());
+        resultPayload.put("output_bytes", encoded.bytes());
+        resultPayload.put("output_chunked", chunked);
+        resultPayload.put("output_chunk_count", chunked ? chunkCount(encoded.value()) : 0);
+        resultPayload.put("runner_error", runnerError == null ? "" : runnerError);
+        if (!chunked) {
+            resultPayload.put("output", encoded.value());
+        }
+
+        List<PulseMessage> messages = new ArrayList<>();
+        messages.add(new PulseMessage(
                 "reply-task-result-" + agentId + "-" + taskId,
                 "reply.task_result",
                 1,
                 replyTo,
                 null,
-                Map.ofEntries(
-                        Map.entry("task_id", taskId),
-                        Map.entry("trace_id", traceId),
-                        Map.entry("agent_id", agentId),
-                        Map.entry("task_type", taskType),
-                        Map.entry("status", status),
-                        Map.entry("exit_code", exitCode == null ? "" : exitCode),
-                        Map.entry("started_at_ms", started),
-                        Map.entry("finished_at_ms", finished),
-                        Map.entry("duration_ms", Math.max(0, finished - started)),
-                        Map.entry("stdout_tail", tail(stdout)),
-                        Map.entry("stderr_tail", tail(stderr)),
-                        Map.entry("output_truncated", truncated || stdout.length() > OUTPUT_TAIL_BYTES || stderr.length() > OUTPUT_TAIL_BYTES),
-                        Map.entry("runner_error", runnerError == null ? "" : runnerError)));
+                resultPayload));
+        if (chunked) {
+            for (int index = 0; index < chunkCount(encoded.value()); index++) {
+                String chunk = chunk(encoded.value(), index);
+                messages.add(new PulseMessage(
+                        "reply-task-result-chunk-" + agentId + "-" + taskId + "-" + index,
+                        "reply.task_result_chunk",
+                        1,
+                        replyTo,
+                        null,
+                        Map.ofEntries(
+                                Map.entry("task_id", taskId),
+                                Map.entry("trace_id", traceId),
+                                Map.entry("agent_id", agentId),
+                                Map.entry("chunk_index", index),
+                                Map.entry("chunk_count", chunkCount(encoded.value())),
+                                Map.entry("output_encoding", encoded.encoding()),
+                                Map.entry("payload", chunk),
+                                Map.entry("payload_sha256", TaskOutputCodec.sha256(chunk)),
+                                Map.entry("output_sha256", encoded.sha256()),
+                                Map.entry("output_bytes", encoded.bytes()))));
+            }
+        }
+        return messages;
     }
 
     private TaskDefinition definition(String taskType) {
@@ -234,29 +278,40 @@ public class AgentTaskRunner {
         }
     }
 
-    private static String tail(String value) {
-        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-        if (bytes.length <= OUTPUT_TAIL_BYTES) {
-            return value;
-        }
-        return new String(bytes, bytes.length - OUTPUT_TAIL_BYTES, OUTPUT_TAIL_BYTES, StandardCharsets.UTF_8);
+    private static String readUtf8(Path path) throws java.io.IOException {
+        return path == null ? "" : Files.readString(path, StandardCharsets.UTF_8);
     }
 
-    private static void copyTail(java.io.InputStream input, ByteArrayOutputStream output) {
-        try (input) {
-            byte[] buffer = new byte[4096];
-            int read;
-            while ((read = input.read(buffer)) >= 0) {
-                output.write(buffer, 0, read);
-                if (output.size() > OUTPUT_TAIL_BYTES * 2) {
-                    byte[] bytes = output.toByteArray();
-                    output.reset();
-                    output.write(bytes, bytes.length - OUTPUT_TAIL_BYTES, OUTPUT_TAIL_BYTES);
-                }
+    private static String appendError(String stderr, String error) {
+        if (stderr == null || stderr.isBlank()) {
+            return error;
+        }
+        return stderr + "\n" + error;
+    }
+
+    private static void deleteQuietly(Path path) {
+        try {
+            if (path != null) {
+                Files.deleteIfExists(path);
             }
         } catch (Exception ignored) {
-            // Best-effort output capture must not fail the task runner.
+            // Temporary capture files are best-effort cleanup.
         }
+    }
+
+    private static String detectOutputType(String output) {
+        String value = output == null ? "" : output.trim();
+        return (value.startsWith("{") && value.endsWith("}")) || (value.startsWith("[") && value.endsWith("]")) ? "json" : "text";
+    }
+
+    private static int chunkCount(String value) {
+        return Math.max(1, (value.length() + RESULT_CHUNK_CHARS - 1) / RESULT_CHUNK_CHARS);
+    }
+
+    private static String chunk(String value, int index) {
+        int start = index * RESULT_CHUNK_CHARS;
+        int end = Math.min(value.length(), start + RESULT_CHUNK_CHARS);
+        return value.substring(start, end);
     }
 
     private record PendingReply(PulseMessage message, int remainingSends) {}
