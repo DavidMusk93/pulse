@@ -265,8 +265,8 @@ public final class HostTilesPage {
                       display: flex;
                     }
                     .task-panel {
-                      width: min(1120px, 94vw);
-                      max-height: 90vh;
+                      width: min(1360px, 96vw);
+                      max-height: 92vh;
                       overflow: hidden;
                       border: 1px solid rgba(148,163,184,.32);
                       border-radius: 28px;
@@ -280,7 +280,7 @@ public final class HostTilesPage {
                       display: flex;
                       justify-content: space-between;
                       gap: 18px;
-                      padding: 24px 26px 18px;
+                      padding: 22px 28px 14px;
                       border-bottom: 1px solid #e2e8f0;
                     }
                     .task-eyebrow {
@@ -339,9 +339,9 @@ public final class HostTilesPage {
                     }
                     .task-summary {
                       display: grid;
-                      grid-template-columns: .9fr .9fr .8fr .8fr;
+                      grid-template-columns: 1fr 1fr 1fr;
                       gap: 12px;
-                      padding: 16px 26px;
+                      padding: 14px 28px 12px;
                     }
                     .task-stat {
                       min-width: 0;
@@ -368,11 +368,11 @@ public final class HostTilesPage {
                     }
                     .task-grid {
                       display: grid;
-                      grid-template-columns: .62fr 1.62fr;
+                      grid-template-columns: minmax(220px, .42fr) minmax(720px, 1.8fr);
                       gap: 16px;
-                      max-height: calc(90vh - 230px);
+                      max-height: calc(92vh - 210px);
                       overflow: auto;
-                      padding: 0 26px 26px;
+                      padding: 0 28px 28px;
                     }
                     .task-card {
                       min-width: 0;
@@ -388,6 +388,7 @@ public final class HostTilesPage {
                     }
                     .task-card.execution-card {
                       padding: 12px;
+                      align-self: start;
                     }
                     .task-card.completion-card {
                       display: grid;
@@ -405,7 +406,7 @@ public final class HostTilesPage {
                       padding: 12px;
                     }
                     .task-row.compact {
-                      padding: 9px;
+                      padding: 8px;
                     }
                     .task-row-head {
                       display: flex;
@@ -446,8 +447,8 @@ public final class HostTilesPage {
                     }
                     .task-detail {
                       color: #475569;
-                      font-size: 12px;
-                      line-height: 1.55;
+                      font-size: 11px;
+                      line-height: 1.45;
                       overflow-wrap: anywhere;
                     }
                     .completion-strip {
@@ -504,50 +505,18 @@ public final class HostTilesPage {
                       font-size: 12px;
                       font-weight: 750;
                     }
-                    .task-output-actions {
-                      display: flex;
-                      flex-wrap: wrap;
-                      gap: 8px;
-                    }
-                    .task-output-actions button {
-                      border: 1px solid #cbd5e1;
-                      border-radius: 999px;
-                      background: white;
-                      color: #172033;
-                      padding: 7px 10px;
-                      font-size: 12px;
-                      font-weight: 800;
-                      cursor: pointer;
-                    }
                     .task-output {
-                      min-height: 260px;
-                      max-height: 430px;
-                      overflow: auto;
+                      min-height: 430px;
+                      height: min(56vh, 620px);
+                      overflow: hidden;
                       border: 1px solid #dbe3ed;
                       border-radius: 18px;
-                      background: #f8fafc;
-                      color: #172033;
-                      padding: 14px;
-                      white-space: pre-wrap;
-                      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                      background: #ffffff;
+                    }
+                    .editor-hint {
+                      color: #64748b;
                       font-size: 12px;
-                      line-height: 1.55;
-                    }
-                    .task-output .json-key {
-                      color: #1d4ed8;
-                      font-weight: 750;
-                    }
-                    .task-output .keyword-ok {
-                      color: #15803d;
-                      font-weight: 800;
-                    }
-                    .task-output .keyword-warn {
-                      color: #b45309;
-                      font-weight: 800;
-                    }
-                    .task-output .keyword-error {
-                      color: #b91c1c;
-                      font-weight: 850;
+                      line-height: 1.5;
                     }
                     .task-empty {
                       border: 1px dashed #cbd5e1;
@@ -594,7 +563,6 @@ public final class HostTilesPage {
                             <option value="analyze_block_layout_dry_run">analyze_block_layout_dry_run</option>
                           </select>
                           <button id="task-run" class="task-primary">Run dry-run</button>
-                          <button id="task-keep">Keep result</button>
                           <button id="task-pop">Pop result</button>
                           <button id="task-close" class="task-close-button" aria-label="Close">x</button>
                         </div>
@@ -602,7 +570,6 @@ public final class HostTilesPage {
                       <div class="task-summary">
                         <div class="task-stat"><span>Target IP</span><strong id="task-agent">-</strong></div>
                         <div class="task-stat"><span>Current run</span><strong id="task-current">Idle</strong></div>
-                        <div class="task-stat"><span>Execution queue</span><strong id="task-execution-count">0</strong></div>
                         <div class="task-stat"><span>Completion queue</span><strong id="task-completion-count">0</strong></div>
                       </div>
                       <div class="task-grid">
@@ -615,16 +582,14 @@ public final class HostTilesPage {
                           <div id="task-completion-meta"></div>
                           <div class="task-output-tabs">
                             <div id="task-output-tags" class="task-output-tags"></div>
-                            <div class="task-output-actions">
-                              <button id="task-format" type="button">Format JSON</button>
-                              <button id="task-copy" type="button">Copy</button>
-                            </div>
+                            <div class="editor-hint">Monaco Editor · auto language · context menu copy/format · scroll both directions</div>
                           </div>
-                          <pre id="task-output" class="task-output"></pre>
+                          <div id="task-output" class="task-output"></div>
                         </section>
                       </div>
                     </section>
                   </div>
+                  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.49.0/min/vs/loader.js"></script>
                   <script>
                     (() => {
                       const refreshMs = 5000;
@@ -637,17 +602,13 @@ public final class HostTilesPage {
                       const taskTrace = document.getElementById('task-trace');
                       const taskAgent = document.getElementById('task-agent');
                       const taskCurrent = document.getElementById('task-current');
-                      const taskExecutionCount = document.getElementById('task-execution-count');
                       const taskCompletionCount = document.getElementById('task-completion-count');
                       const taskExecution = document.getElementById('task-execution');
                       const taskCompletionMeta = document.getElementById('task-completion-meta');
                       const taskOutput = document.getElementById('task-output');
                       const taskOutputTags = document.getElementById('task-output-tags');
-                      const taskFormat = document.getElementById('task-format');
-                      const taskCopy = document.getElementById('task-copy');
                       const taskType = document.getElementById('task-type');
                       const taskRun = document.getElementById('task-run');
-                      const taskKeep = document.getElementById('task-keep');
                       const taskPop = document.getElementById('task-pop');
                       const taskClose = document.getElementById('task-close');
                       let activeTaskAgentId = '';
@@ -657,7 +618,8 @@ public final class HostTilesPage {
                       let taskSnapshotInFlight = false;
                       let activeTaskLabel = '';
                       let activeOutputText = '';
-                      let activeOutputMode = 'auto';
+                      let outputEditor = null;
+                      let monacoReady = null;
 
                       const PulseView = {
                         state: {hosts: [], loading: true, error: null, updatedAt: null},
@@ -919,12 +881,10 @@ public final class HostTilesPage {
                         activeRunTaskId = '';
                         activeTaskLabel = agentId || '-';
                         activeOutputText = '';
-                        activeOutputMode = 'auto';
                         taskTitle.textContent = 'Run Task · ' + activeTaskLabel;
                         taskTrace.textContent = 'trace: pending';
                         taskAgent.textContent = activeTaskLabel;
                         taskCurrent.textContent = 'Loading';
-                        taskExecutionCount.textContent = '0';
                         taskCompletionCount.textContent = '0';
                         taskCompletionMeta.innerHTML = '<div class="task-empty">Waiting for task snapshot...</div>';
                         taskOutputTags.innerHTML = '';
@@ -989,9 +949,7 @@ public final class HostTilesPage {
                         taskCurrent.textContent = currentCompletion
                           ? (currentCompletion.status || 'completed')
                           : (currentExecution ? (currentExecution.status || 'queued') : (latest ? 'Previous result' : 'Idle'));
-                        taskExecutionCount.textContent = String(execution.length);
                         taskCompletionCount.textContent = String(completions.length);
-                        taskKeep.disabled = !activeCompletionTaskId;
                         taskPop.disabled = !activeCompletionTaskId;
                         taskExecution.innerHTML = renderIncomingTasks(asyncTasks)
                           + (execution.length ? '<div class="task-list">'
@@ -1000,13 +958,13 @@ public final class HostTilesPage {
                         if (latest) {
                           taskCompletionMeta.innerHTML = renderCompletionMeta(latest, activeRunTaskId && latest.task_id !== activeRunTaskId);
                           const outputText = taskOutputText(latest);
-                          renderOutput(outputText, activeOutputMode === 'json');
+                          renderOutput(outputText);
                           taskOutputTags.innerHTML = renderOutputTags(outputText, latest);
                         } else {
                           taskCompletionMeta.innerHTML = '<div class="task-empty">No completion yet. This panel auto-refreshes every 2s while the dialog is open.</div>';
                           renderOutput(currentExecution
                             ? 'Waiting for agent heartbeat result for ' + (currentExecution.task_id || 'task') + '...'
-                            : '', activeOutputMode === 'json');
+                            : '');
                           taskOutputTags.innerHTML = renderOutputTags(activeOutputText, null);
                         }
                       }
@@ -1103,18 +1061,27 @@ public final class HostTilesPage {
                         return tags.join('');
                       }
 
-                      function renderOutput(text, forceJson = false) {
+                      function renderOutput(text) {
                         activeOutputText = text || '';
-                        const formatted = forceJson ? prettyJson(activeOutputText) : activeOutputText;
-                        taskOutput.innerHTML = highlightText(formatted || '');
-                      }
-
-                      function prettyJson(text) {
-                        try {
-                          return JSON.stringify(JSON.parse(text), null, 2);
-                        } catch (ignored) {
-                          return text;
-                        }
+                        const language = detectOutputType(activeOutputText);
+                        setupMonacoEditor().then(() => {
+                          if (!outputEditor || !window.monaco) {
+                            taskOutput.textContent = activeOutputText;
+                            return;
+                          }
+                          const model = outputEditor.getModel();
+                          model.setValue(activeOutputText);
+                          window.monaco.editor.setModelLanguage(model, language);
+                          outputEditor.layout();
+                          if (language === 'json') {
+                            window.setTimeout(() => {
+                              const formatAction = outputEditor.getAction('editor.action.formatDocument');
+                              if (formatAction) {
+                                formatAction.run();
+                              }
+                            }, 0);
+                          }
+                        });
                       }
 
                       function detectOutputType(text) {
@@ -1126,12 +1093,43 @@ public final class HostTilesPage {
                         }
                       }
 
-                      function highlightText(text) {
-                        return escapeHtml(text)
-                          .replace(/\\b(completed|success|ok|true)\\b/gi, '<span class="keyword-ok">$1</span>')
-                          .replace(/\\b(warn|warning|truncated)\\b/gi, '<span class="keyword-warn">$1</span>')
-                          .replace(/\\b(error|failed|rejected|timed_out|timeout|false)\\b/gi, '<span class="keyword-error">$1</span>')
-                          .replace(/(&quot;[^&]*?&quot;)(\\s*:)/g, '<span class="json-key">$1</span>$2');
+                      function setupMonacoEditor() {
+                        if (outputEditor) {
+                          return Promise.resolve(outputEditor);
+                        }
+                        if (monacoReady) {
+                          return monacoReady;
+                        }
+                        monacoReady = new Promise(resolve => {
+                          if (!window.require) {
+                            taskOutput.textContent = activeOutputText;
+                            resolve(null);
+                            return;
+                          }
+                          window.require.config({paths: {vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.49.0/min/vs'}});
+                          window.require(['vs/editor/editor.main'], () => {
+                            outputEditor = window.monaco.editor.create(taskOutput, {
+                              value: activeOutputText,
+                              language: detectOutputType(activeOutputText),
+                              readOnly: true,
+                              theme: 'vs',
+                              automaticLayout: true,
+                              scrollBeyondLastLine: false,
+                              minimap: {enabled: false},
+                              wordWrap: 'off',
+                              wrappingStrategy: 'advanced',
+                              renderLineHighlight: 'none',
+                              contextmenu: true,
+                              scrollbar: {
+                                vertical: 'visible',
+                                horizontal: 'visible',
+                                useShadows: false
+                              }
+                            });
+                            resolve(outputEditor);
+                          });
+                        });
+                        return monacoReady;
                       }
 
                       function shortHash(hash) {
@@ -1163,28 +1161,8 @@ public final class HostTilesPage {
                         const execution = snapshot.execution_queue || [];
                         const latestTask = execution[execution.length - 1] || null;
                         activeRunTaskId = latestTask ? latestTask.task_id : '';
-                        activeOutputMode = 'auto';
                         renderTaskSnapshot(snapshot);
                         startTaskPolling();
-                      };
-
-                      taskFormat.onclick = () => {
-                        activeOutputMode = 'json';
-                        renderOutput(activeOutputText, true);
-                      };
-
-                      taskCopy.onclick = async () => {
-                        if (!activeOutputText) {
-                          return;
-                        }
-                        await navigator.clipboard.writeText(activeOutputMode === 'json' ? prettyJson(activeOutputText) : activeOutputText);
-                      };
-
-                      taskKeep.onclick = async () => {
-                        if (activeTaskAgentId && activeCompletionTaskId) {
-                          await fetch('/api/agents/' + encodeURIComponent(activeTaskAgentId) + '/tasks/completions/' + encodeURIComponent(activeCompletionTaskId) + '/keep', {method: 'POST'});
-                          await refreshTaskSnapshot();
-                        }
                       };
 
                       taskPop.onclick = async () => {
