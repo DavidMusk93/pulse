@@ -65,6 +65,523 @@ function log::dryrun() {
     log::print "$LOG_COLOR_YELLOW" "DRYRUN" "$1"
 }
 
+function json::string() {
+    local value=$1
+
+    value=${value//\\/\\\\}
+    value=${value//\"/\\\"}
+    value=${value//$'\n'/\\n}
+    value=${value//$'\r'/\\r}
+    value=${value//$'\t'/\\t}
+    printf '"%s"' "$value"
+}
+
+function json::print_string_array() {
+    local first=1
+    local value=''
+
+    printf '['
+    for value in "$@"; do
+        if (( first == 0 )); then
+            printf ','
+        fi
+        first=0
+        json::string "$value"
+    done
+    printf ']'
+}
+
+function json::print_disk_health_array() {
+    local first=1
+    local line=''
+    local status=''
+    local mount=''
+    local kind=''
+    local device=''
+
+    printf '['
+    for line in "$@"; do
+        IFS='|' read -r status mount kind device <<< "$line"
+        if (( first == 0 )); then
+            printf ','
+        fi
+        first=0
+        printf '{"status":'
+        json::string "${status:-UNKNOWN}"
+        printf ',"mount":'
+        json::string "${mount:-unknown}"
+        printf ',"kind":'
+        json::string "${kind:-unknown}"
+        printf ',"device":'
+        json::string "${device:-unknown}"
+        printf '}'
+    done
+    printf ']'
+}
+
+function layout::link_status() {
+    local target=$1
+    local source=$2
+    local current_source=''
+    local current_resolved=''
+    local source_resolved=''
+
+    if [[ -L "$target" ]]; then
+        current_source=$(readlink "$target" 2>/dev/null || true)
+        if [[ "$current_source" == "$source" && -e "$target" ]]; then
+            printf 'ok\n'
+            return 0
+        fi
+
+        current_resolved=$(readlink -f "$target" 2>/dev/null || true)
+        source_resolved=$(readlink -f "$source" 2>/dev/null || true)
+        if [[ -n "$current_resolved" && "$current_resolved" == "$source_resolved" ]]; then
+            printf 'ok\n'
+            return 0
+        fi
+
+        printf 'change_required\n'
+        return 0
+    fi
+
+    if [[ -e "$target" ]]; then
+        printf 'replace_non_symlink\n'
+        return 0
+    fi
+
+    printf 'missing\n'
+}
+
+function json::print_expected_link() {
+    local name=$1
+    local target=$2
+    local source=$3
+    local role=$4
+
+    printf '{"name":'
+    json::string "$name"
+    printf ',"role":'
+    json::string "$role"
+    printf ',"target":'
+    json::string "$target"
+    printf ',"source":'
+    json::string "$source"
+    printf ',"status":'
+    json::string "$(layout::link_status "$target" "$source")"
+    printf '}'
+}
+
+function json::print_manifest_overview_item() {
+    local name=$1
+    local path=$2
+    local expected=$3
+    local strategy=$4
+    local current=''
+    local status='missing'
+
+    if [[ -f "$path" ]]; then
+        current=$(<"$path")
+        if [[ "$current" == "$expected" ]]; then
+            status='ok'
+        else
+            status='change_required'
+        fi
+    fi
+
+    printf '{"name":'
+    json::string "$name"
+    printf ',"path":'
+    json::string "$path"
+    printf ',"expected_content":'
+    json::string "$expected"
+    printf ',"current_content":'
+    json::string "$current"
+    printf ',"strategy":'
+    json::string "$strategy"
+    printf ',"status":'
+    json::string "$status"
+    printf '}'
+}
+
+function json::print_expected_disk_links() {
+    local node_index=$1
+    local prefix=$2
+    local target_prefix=$3
+    shift 3
+    local mounts=("$@")
+    local first=1
+    local index=1
+    local mount_path=''
+    local name=''
+    local target=''
+    local source=''
+
+    printf '['
+    for mount_path in "${mounts[@]}"; do
+        name=$(printf '%s%02d' "$prefix" "$index")
+        target=$(printf '%s/node%d/%s%02d' "$ENGINE_HOME_PATH" "$node_index" "$target_prefix" "$index")
+        source="${mount_path}/fringedb/data"
+        if (( first == 0 )); then
+            printf ','
+        fi
+        first=0
+        json::print_expected_link "$name" "$target" "$source" 'data'
+        index=$((index + 1))
+    done
+    printf ']'
+}
+
+function json::print_metadata_links() {
+    local node_index=$1
+    local metadata_dir=$2
+    local first=1
+    local name=''
+
+    printf '['
+    for name in disk00 metadata; do
+        if (( first == 0 )); then
+            printf ','
+        fi
+        first=0
+        json::print_expected_link "$name" "$ENGINE_HOME_PATH/node${node_index}/${name}" "$metadata_dir" 'metadata'
+    done
+    printf ']'
+}
+
+function json::print_layout_node() {
+    local node_index=$1
+    local hdd_per_node=$2
+    local ssd_per_node=$3
+    local hdd_start=$((node_index * hdd_per_node))
+    local ssd_start=$((node_index * ssd_per_node))
+    local hdd_mounts=()
+    local ssd_mounts=()
+    local metadata_source_type='none'
+    local metadata_mount=''
+    local metadata_dir=''
+
+    if (( hdd_per_node > 0 )); then
+        hdd_mounts=("${HDD_DIRS[@]:hdd_start:hdd_per_node}")
+    fi
+    if (( ssd_per_node > 0 )); then
+        ssd_mounts=("${SSD_DIRS[@]:ssd_start:ssd_per_node}")
+    fi
+
+    if (( ${#ssd_mounts[@]} > 0 )); then
+        metadata_source_type='ssd'
+        metadata_mount=${ssd_mounts[0]}
+        metadata_dir="${metadata_mount}/fringedb/node${node_index}"
+    elif (( ${#hdd_mounts[@]} > 0 )); then
+        metadata_source_type='hdd'
+        metadata_mount=${hdd_mounts[0]}
+        metadata_dir="${metadata_mount}/fringedb/node${node_index}"
+    fi
+
+    printf '{"node":"node%s","node_path":' "$node_index"
+    json::string "$ENGINE_HOME_PATH/node${node_index}"
+    printf ',"metadata":{"source_type":'
+    json::string "$metadata_source_type"
+    printf ',"mount":'
+    json::string "$metadata_mount"
+    printf ',"directory":'
+    json::string "$metadata_dir"
+    printf ',"links":'
+    if [[ -n "$metadata_dir" ]]; then
+        json::print_metadata_links "$node_index" "$metadata_dir"
+    else
+        printf '[]'
+    fi
+    printf '},"hdd":{"mounts":'
+    json::print_string_array "${hdd_mounts[@]}"
+    printf ',"links":'
+    json::print_expected_disk_links "$node_index" 'disk' 'disk' "${hdd_mounts[@]}"
+    printf '},"ssd":{"mounts":'
+    json::print_string_array "${ssd_mounts[@]}"
+    printf ',"links":'
+    json::print_expected_disk_links "$node_index" 'ssd_disks_' 'ssd_disks_' "${ssd_mounts[@]}"
+    printf '}}'
+}
+
+function json::print_layout_nodes() {
+    local numa_count=${EXPLAIN_NUMA_COUNT:-0}
+    local total_hdd=${#HDD_DIRS[@]}
+    local total_ssd=${#SSD_DIRS[@]}
+    local hdd_per_node=0
+    local ssd_per_node=0
+    local node_index=0
+
+    if (( numa_count > 0 && total_hdd > 0 )); then
+        hdd_per_node=$((total_hdd / numa_count))
+    fi
+    if (( numa_count > 0 && total_ssd > 0 )); then
+        ssd_per_node=$((total_ssd / numa_count))
+    fi
+
+    printf '['
+    for ((node_index = 0; node_index < numa_count; node_index++)); do
+        if (( node_index > 0 )); then
+            printf ','
+        fi
+        json::print_layout_node "$node_index" "$hdd_per_node" "$ssd_per_node"
+    done
+    printf ']'
+}
+
+function json::print_layout_overview() {
+    local numa_count=${EXPLAIN_NUMA_COUNT:-0}
+    local total_hdd=${#HDD_DIRS[@]}
+    local total_ssd=${#SSD_DIRS[@]}
+    local hdd_per_node=0
+    local ssd_per_node=0
+    local disks_manifest=''
+    local ssd_manifest=''
+    local metadata_source='none'
+    local ssd_strategy='dedicated_ssd'
+
+    if (( numa_count > 0 && total_hdd > 0 )); then
+        hdd_per_node=$((total_hdd / numa_count))
+        disks_manifest=$(manifest::build_disk_names 'disk' "$hdd_per_node")
+    fi
+    if (( numa_count > 0 && total_ssd > 0 )); then
+        ssd_per_node=$((total_ssd / numa_count))
+        ssd_manifest=$(manifest::build_disk_names 'ssd_disks_' "$ssd_per_node")
+        metadata_source='ssd'
+    elif (( total_hdd > 0 )); then
+        ssd_strategy='reuse_hdd_disk_manifest'
+        ssd_manifest="$disks_manifest"
+        disks_manifest=''
+        metadata_source='hdd'
+    else
+        ssd_strategy='no_disks'
+    fi
+
+    printf '{\n'
+    printf '    "summary": {\n'
+    printf '      "numa_count": %s,\n' "$numa_count"
+    printf '      "hdd_total": %s,\n' "$total_hdd"
+    printf '      "ssd_total": %s,\n' "$total_ssd"
+    printf '      "hdd_per_node": %s,\n' "$hdd_per_node"
+    printf '      "ssd_per_node": %s,\n' "$ssd_per_node"
+    printf '      "metadata_source": '
+    json::string "$metadata_source"
+    printf ',\n'
+    printf '      "ssd_strategy": '
+    json::string "$ssd_strategy"
+    printf '\n'
+    printf '    },\n'
+    printf '    "manifests": ['
+    json::print_manifest_overview_item 'disks' "$TIDELET_HOME_PATH/disks" "$disks_manifest" 'hdd_data_links'
+    printf ','
+    json::print_manifest_overview_item 'ssd_disks' "$TIDELET_HOME_PATH/ssd_disks" "$ssd_manifest" "$ssd_strategy"
+    printf '],\n'
+    printf '    "nodes": '
+    json::print_layout_nodes
+    printf '\n'
+    printf '  }'
+}
+
+function json::print_planned_mutation_count() {
+    local type=$1
+    local count=0
+    local line=''
+
+    for line in "${EXPLAIN_ACTION_LINES[@]}"; do
+        case "$type:$line" in
+        directories:ensure\ directory:*) count=$((count + 1)) ;;
+        links:link\ *) count=$((count + 1)) ;;
+        manifests:write\ file:* | manifests:copy\ file:* | manifests:truncate\ file:*) count=$((count + 1)) ;;
+        cleanup:remove\ path:* | cleanup:purge\ symlink\ target\ data:*) count=$((count + 1)) ;;
+        kept:keep\ path:*) count=$((count + 1)) ;;
+        esac
+    done
+
+    printf '%s' "$count"
+}
+
+function json::print_directory_mutations() {
+    local first=1
+    local line=''
+    local path=''
+
+    printf '['
+    for line in "${EXPLAIN_ACTION_LINES[@]}"; do
+        [[ "$line" == ensure\ directory:* ]] || continue
+        path=${line#ensure directory: }
+        if (( first == 0 )); then
+            printf ','
+        fi
+        first=0
+        printf '{"action":"ensure_directory","path":'
+        json::string "$path"
+        printf '}'
+    done
+    printf ']'
+}
+
+function json::print_link_mutations() {
+    local first=1
+    local line=''
+    local target=''
+    local source=''
+    local node='Global'
+    local name=''
+
+    printf '['
+    for line in "${EXPLAIN_ACTION_LINES[@]}"; do
+        [[ "$line" == link\ * ]] || continue
+        target=${line#link }
+        source=${target#* -> }
+        target=${target%% -> *}
+        name=${target##*/}
+        node='Global'
+        if [[ "$target" =~ /node([0-9]+)(/|$) ]]; then
+            node="node${BASH_REMATCH[1]}"
+        fi
+        if (( first == 0 )); then
+            printf ','
+        fi
+        first=0
+        printf '{"action":"link","node":'
+        json::string "$node"
+        printf ',"name":'
+        json::string "$name"
+        printf ',"target":'
+        json::string "$target"
+        printf ',"source":'
+        json::string "$source"
+        printf '}'
+    done
+    printf ']'
+}
+
+function json::print_manifest_mutations() {
+    local first=1
+    local line=''
+    local path=''
+    local content=''
+    local source=''
+    local target=''
+
+    printf '['
+    for line in "${EXPLAIN_ACTION_LINES[@]}"; do
+        case "$line" in
+        write\ file:*)
+            path=${line#write file: }
+            content=${path#* = }
+            path=${path%% = *}
+            ;;
+        copy\ file:*)
+            source=${line#copy file: }
+            target=${source#* -> }
+            source=${source%% -> *}
+            ;;
+        truncate\ file:*)
+            path=${line#truncate file: }
+            ;;
+        *)
+            continue
+            ;;
+        esac
+
+        if (( first == 0 )); then
+            printf ','
+        fi
+        first=0
+
+        if [[ "$line" == write\ file:* ]]; then
+            printf '{"action":"write_file","path":'
+            json::string "$path"
+            printf ',"content":'
+            json::string "$content"
+            printf '}'
+        elif [[ "$line" == copy\ file:* ]]; then
+            printf '{"action":"copy_file","source":'
+            json::string "$source"
+            printf ',"target":'
+            json::string "$target"
+            printf '}'
+        else
+            printf '{"action":"truncate_file","path":'
+            json::string "$path"
+            printf '}'
+        fi
+    done
+    printf ']'
+}
+
+function json::print_cleanup_mutations() {
+    local first=1
+    local line=''
+    local path=''
+    local action=''
+
+    printf '['
+    for line in "${EXPLAIN_ACTION_LINES[@]}"; do
+        case "$line" in
+        remove\ path:*)
+            action='remove_path'
+            path=${line#remove path: }
+            ;;
+        purge\ symlink\ target\ data:*)
+            action='purge_symlink_target_data'
+            path=${line#purge symlink target data: }
+            ;;
+        *)
+            continue
+            ;;
+        esac
+
+        if (( first == 0 )); then
+            printf ','
+        fi
+        first=0
+        printf '{"action":'
+        json::string "$action"
+        printf ',"path":'
+        json::string "$path"
+        printf '}'
+    done
+    printf ']'
+}
+
+function json::print_planned_mutations() {
+    printf '{\n'
+    printf '    "summary": {\n'
+    printf '      "total": %s,\n' "${#EXPLAIN_ACTION_LINES[@]}"
+    printf '      "directories": '
+    json::print_planned_mutation_count directories
+    printf ',\n'
+    printf '      "links": '
+    json::print_planned_mutation_count links
+    printf ',\n'
+    printf '      "manifests": '
+    json::print_planned_mutation_count manifests
+    printf ',\n'
+    printf '      "cleanup": '
+    json::print_planned_mutation_count cleanup
+    printf ',\n'
+    printf '      "kept": '
+    json::print_planned_mutation_count kept
+    printf '\n'
+    printf '    },\n'
+    printf '    "links": '
+    json::print_link_mutations
+    printf ',\n'
+    printf '    "manifests": '
+    json::print_manifest_mutations
+    printf ',\n'
+    printf '    "directories": '
+    json::print_directory_mutations
+    printf ',\n'
+    printf '    "cleanup": '
+    json::print_cleanup_mutations
+    printf ',\n'
+    printf '    "raw_actions": '
+    json::print_string_array "${EXPLAIN_ACTION_LINES[@]}"
+    printf '\n'
+    printf '  }'
+}
+
 function explain::get_terminal_width() {
     local raw_width=''
 
@@ -441,46 +958,67 @@ function explain::print_mutation_blocks() {
 }
 
 function explain::print_summary() {
-    local environment_lines=()
-    local available_width=0
-    local border=''
-    local header=''
-
     if (( DRY_RUN == 0 )); then
         return 0
     fi
 
-    environment_lines=(
-        "NUMA count: ${EXPLAIN_NUMA_COUNT:-unknown}"
-        "CPU model: ${EXPLAIN_CPU_MODEL:-unknown}"
-        "TIDELET_HOME_PATH: ${TIDELET_HOME_PATH}"
-        "ENGINE_HOME_PATH: ${ENGINE_HOME_PATH}"
-        "PURGE_LINK_TARGET_DATA: ${PURGE_LINK_TARGET_DATA}"
-        "REMOVE_TIDEMQ_OFFSET: ${REMOVE_TIDEMQ_OFFSET}"
-        "REPAIR_MISSING_PATH_METADATA: ${REPAIR_MISSING_PATH_METADATA}"
-    )
-
-    available_width=$(explain::get_dryrun_box_content_width)
-    if (( available_width < 56 )); then
-        available_width=56
+    printf '{\n'
+    printf '  "report_type": "prepare_disk_layout",\n'
+    printf '  "mode": "dry-run",\n'
+    printf '  "environment": {\n'
+    printf '    "numa_count": '
+    if [[ "${EXPLAIN_NUMA_COUNT:-}" =~ ^[0-9]+$ ]]; then
+        printf '%s' "$EXPLAIN_NUMA_COUNT"
+    else
+        json::string "${EXPLAIN_NUMA_COUNT:-unknown}"
     fi
-    border="+$(explain::repeat_char '=' "$((available_width + 2))")+"
-
-    log::dryrun ""
-    log::dryrun "$border"
-    printf -v header "| %-*s |" "$available_width" "DRY-RUN EXPLAIN REPORT"
-    log::dryrun "$header"
-    log::dryrun "$border"
-    explain::print_section "Environment" "${environment_lines[@]}"
-    explain::print_section "NUMA Memory Validation" "${EXPLAIN_NUMA_MEMORY_LINES[@]}"
-    log::dryrun ""
-    log::dryrun "  [ Disk Health Validation ]"
-    explain::print_disk_health_table "${EXPLAIN_DISK_HEALTH_LINES[@]}"
-    explain::print_section "Discovered Resources" "${EXPLAIN_RESOURCE_LINES[@]}"
-    explain::print_section "Planned Layout" "${EXPLAIN_LAYOUT_LINES[@]}"
-    explain::print_mutation_blocks "Metadata Repair Plan" "${EXPLAIN_METADATA_REPAIR_LINES[@]}"
-    explain::print_mutation_blocks "Planned Mutations" "${EXPLAIN_ACTION_LINES[@]}"
-    log::dryrun "$border"
+    printf ',\n'
+    printf '    "cpu_model": '
+    json::string "${EXPLAIN_CPU_MODEL:-unknown}"
+    printf ',\n'
+    printf '    "tidelet_home_path": '
+    json::string "$TIDELET_HOME_PATH"
+    printf ',\n'
+    printf '    "engine_home_path": '
+    json::string "$ENGINE_HOME_PATH"
+    printf ',\n'
+    printf '    "purge_link_target_data": %s,\n' "$PURGE_LINK_TARGET_DATA"
+    printf '    "remove_tidemq_offset": %s,\n' "$REMOVE_TIDEMQ_OFFSET"
+    printf '    "repair_missing_path_metadata": %s\n' "$REPAIR_MISSING_PATH_METADATA"
+    printf '  },\n'
+    printf '  "mounts": {\n'
+    printf '    "hdd": '
+    json::print_string_array "${HDD_DIRS[@]}"
+    printf ',\n'
+    printf '    "ssd": '
+    json::print_string_array "${SSD_DIRS[@]}"
+    printf ',\n'
+    printf '    "disallowed": '
+    json::print_string_array "${DISALLOWED_DIRS_ARR[@]}"
+    printf '\n'
+    printf '  },\n'
+    printf '  "numa_memory_validation": '
+    json::print_string_array "${EXPLAIN_NUMA_MEMORY_LINES[@]}"
+    printf ',\n'
+    printf '  "disk_health_validation": '
+    json::print_disk_health_array "${EXPLAIN_DISK_HEALTH_LINES[@]}"
+    printf ',\n'
+    printf '  "discovered_resources": '
+    json::print_string_array "${EXPLAIN_RESOURCE_LINES[@]}"
+    printf ',\n'
+    printf '  "layout_overview": '
+    json::print_layout_overview
+    printf ',\n'
+    printf '  "planned_layout": '
+    json::print_string_array "${EXPLAIN_LAYOUT_LINES[@]}"
+    printf ',\n'
+    printf '  "metadata_repair_plan": '
+    json::print_string_array "${EXPLAIN_METADATA_REPAIR_LINES[@]}"
+    printf ',\n'
+    printf '  "planned_mutations": '
+    json::print_planned_mutations
+    printf '\n'
+    printf '}\n'
 }
 
 function init::usage() {
@@ -896,6 +1434,10 @@ function validate::print_disk_health_detail() {
     shift 2
     local rows=("$@")
 
+    if (( DRY_RUN == 1 )); then
+        return 0
+    fi
+
     log::info "Disk health detail: ${mount_path} (${disk_kind})"
     explain::print_command_table "Disk: ${mount_path} (${disk_kind})" "${rows[@]}"
 }
@@ -1163,6 +1705,10 @@ function validate::check_missing_resources() {
 
 function filesystem::ensure_dir() {
     local path=$1
+
+    if [[ -d "$path" ]]; then
+        return 0
+    fi
 
     explain::record_action "ensure directory: $path"
     if (( DRY_RUN == 1 )); then
@@ -1654,11 +2200,21 @@ function filesystem::replace_link() {
     local target=$1
     local source=$2
     local current_source=''
+    local current_resolved=''
+    local source_resolved=''
 
     if [[ -L "$target" ]]; then
         current_source=$(readlink "$target" 2>/dev/null || true)
         if [[ "$current_source" == "$source" && -e "$target" ]]; then
             return 0
+        fi
+
+        if command -v readlink >/dev/null 2>&1; then
+            current_resolved=$(readlink -f "$target" 2>/dev/null || true)
+            source_resolved=$(readlink -f "$source" 2>/dev/null || true)
+            if [[ -n "$current_resolved" && "$current_resolved" == "$source_resolved" ]]; then
+                return 0
+            fi
         fi
     fi
 
@@ -1764,8 +2320,10 @@ function init::prepare_directories() {
     PENDING_PURGE_TARGETS=()
     filesystem::ensure_dir "$TIDELET_HOME_PATH"
     filesystem::ensure_dir "$ENGINE_HOME_PATH"
-    filesystem::remove_path_if_present "$TIDELET_HOME_PATH/disks"
-    filesystem::remove_path_if_present "$TIDELET_HOME_PATH/ssd_disks"
+    if (( DRY_RUN == 0 )); then
+        filesystem::remove_path_if_present "$TIDELET_HOME_PATH/disks"
+        filesystem::remove_path_if_present "$TIDELET_HOME_PATH/ssd_disks"
+    fi
 
     for ((node_index = 0; node_index < numa_count; node_index++)); do
         filesystem::ensure_dir "$ENGINE_HOME_PATH/node${node_index}"
@@ -1798,6 +2356,14 @@ function manifest::build_disk_names() {
 function manifest::write_file() {
     local path=$1
     local content=$2
+    local current=''
+
+    if [[ -f "$path" ]]; then
+        current=$(<"$path")
+        if [[ "$current" == "$content" ]]; then
+            return 0
+        fi
+    fi
 
     explain::record_action "write file: ${path} = ${content}"
     if (( DRY_RUN == 1 )); then
@@ -1812,6 +2378,10 @@ function filesystem::copy_file() {
     local source=$1
     local target=$2
 
+    if [[ -f "$source" && -f "$target" ]] && cmp -s "$source" "$target"; then
+        return 0
+    fi
+
     explain::record_action "copy file: ${source} -> ${target}"
     if (( DRY_RUN == 1 )); then
         return 0
@@ -1823,6 +2393,10 @@ function filesystem::copy_file() {
 
 function manifest::truncate_file() {
     local path=$1
+
+    if [[ -f "$path" && ! -s "$path" ]]; then
+        return 0
+    fi
 
     explain::record_action "truncate file: $path"
     if (( DRY_RUN == 1 )); then
@@ -2079,7 +2653,9 @@ function init::main() {
 
     explain::print_summary
 
-    log::success "Disk layout initialization completed."
+    if (( DRY_RUN == 0 )); then
+        log::success "Disk layout initialization completed."
+    fi
 }
 
 init::main "$@"

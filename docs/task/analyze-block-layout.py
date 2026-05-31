@@ -64,6 +64,7 @@ import argparse
 import ctypes
 import dataclasses
 import datetime as dt
+import json
 import os
 import shutil
 import sqlite3
@@ -82,6 +83,7 @@ MIN_CELL_WIDTH = 8
 TERMINAL_RIGHT_MARGIN = 2
 DELETE_WORK_STEAL_CHUNK_SIZE = 128
 MAX_DELETE_WORKERS = 32
+DEFAULT_JSON_SAMPLE_LIMIT = 20
 LOG_COLOR_RED = "\033[0;31m"
 LOG_COLOR_YELLOW = "\033[1;33m"
 LOG_COLOR_BLUE = "\033[0;34m"
@@ -122,6 +124,14 @@ class TableStats:
     disk_bytes: dict[str, int] = dataclasses.field(default_factory=lambda: defaultdict(int))
     disk_blocks: dict[str, int] = dataclasses.field(default_factory=lambda: defaultdict(int))
     ttl_values: set[int] = dataclasses.field(default_factory=set)
+
+
+@dataclasses.dataclass
+class SizeStats:
+    blocks: int = 0
+    bytes_total: int = 0
+    disk_bytes: dict[str, int] = dataclasses.field(default_factory=lambda: defaultdict(int))
+    disk_blocks: dict[str, int] = dataclasses.field(default_factory=lambda: defaultdict(int))
 
 
 @dataclasses.dataclass
@@ -594,6 +604,29 @@ def aggregate_table_stats(records: Iterable[BlockRecord]) -> dict[str, TableStat
         if record.out_of_date:
             table_stats.outdated_blocks += 1
             table_stats.outdated_bytes += record.data_size
+    return stats
+
+
+def previous_utc_day_window(now_epoch: int) -> tuple[str, int, int]:
+    current_day = dt.datetime.fromtimestamp(now_epoch, tz=dt.timezone.utc).date()
+    previous_day = current_day - dt.timedelta(days=1)
+    start = dt.datetime.combine(previous_day, dt.time.min, tzinfo=dt.timezone.utc)
+    end = start + dt.timedelta(days=1)
+    return previous_day.isoformat(), int(start.timestamp()), int(end.timestamp())
+
+
+def aggregate_previous_day_stats(records: Iterable[BlockRecord], start_epoch: int, end_epoch: int) -> dict[str, SizeStats]:
+    stats: dict[str, SizeStats] = defaultdict(SizeStats)
+    for record in records:
+        if record.partition_time is None:
+            continue
+        if not (start_epoch <= record.partition_time < end_epoch):
+            continue
+        table_stats = stats[record.table_key]
+        table_stats.blocks += 1
+        table_stats.bytes_total += record.data_size
+        table_stats.disk_bytes[record.disk_path] += record.data_size
+        table_stats.disk_blocks[record.disk_path] += 1
     return stats
 
 
@@ -1122,6 +1155,316 @@ def build_execution_plan_rows(plan: ExecutionPlan, metadata_db_count: int, disk_
     return rows
 
 
+def block_record_to_json(
+    record: BlockRecord,
+    include_obsolete: bool,
+    include_outdated: bool,
+    now_epoch: int,
+) -> dict[str, object]:
+    reasons = candidate_reasons(record, include_obsolete, include_outdated)
+    expire_at = None
+    expired_seconds = None
+    expires_in_seconds = None
+    if record.ttl is not None and record.partition_time is not None:
+        expire_at = record.partition_time + record.ttl
+        if expire_at < now_epoch:
+            expired_seconds = now_epoch - expire_at
+        else:
+            expires_in_seconds = expire_at - now_epoch
+
+    return {
+        "db_path": record.db_path,
+        "tenant": record.tenant,
+        "table": record.table,
+        "table_key": record.table_key,
+        "path": record.path,
+        "disk_path": record.disk_path,
+        "disk_name": record.disk_name,
+        "node_name": record.node_name,
+        "data_size_bytes": record.data_size,
+        "data_size": format_bytes(record.data_size),
+        "layer": record.layer,
+        "event_time": record.event_time,
+        "ttl_seconds": record.ttl,
+        "partition_time": record.partition_time,
+        "expire_at": expire_at,
+        "expired_seconds": expired_seconds,
+        "expires_in_seconds": expires_in_seconds,
+        "obsolete": record.obsolete,
+        "out_of_date": record.out_of_date,
+        "reasons": reasons,
+    }
+
+
+def untracked_block_to_json(block: UntrackedBlock) -> dict[str, object]:
+    return {
+        "path": block.path,
+        "disk_path": block.disk_path,
+        "data_size_bytes": block.data_size,
+        "data_size": format_bytes(block.data_size),
+    }
+
+
+def remove_plan_to_json(remove_plan: dict[str, list[FileRemovalCandidate]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for disk_path, disk_candidates in sorted(remove_plan.items()):
+        total_size = sum(candidate.data_size for candidate in disk_candidates)
+        rows.append(
+            {
+                "disk_path": disk_path,
+                "blocks": len(disk_candidates),
+                "size_bytes": total_size,
+                "size": format_bytes(total_size),
+                "paths": [candidate.path for candidate in sorted(disk_candidates, key=lambda item: item.path)],
+            }
+        )
+    return rows
+
+
+def limited_items(items: list, limit: int) -> tuple[list, int]:
+    if limit == 0:
+        return items, 0
+    visible = items[:limit]
+    return visible, max(0, len(items) - len(visible))
+
+
+def disk_distribution_to_json(
+    table_stats: TableStats,
+    previous_day_stats: SizeStats | None,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for disk_path, disk_bytes in sorted(table_stats.disk_bytes.items(), key=lambda item: item[0]):
+        table_percent = 0.0
+        if table_stats.bytes_total > 0:
+            table_percent = disk_bytes * 100.0 / table_stats.bytes_total
+        previous_day_bytes = 0
+        previous_day_blocks = 0
+        if previous_day_stats is not None:
+            previous_day_bytes = previous_day_stats.disk_bytes.get(disk_path, 0)
+            previous_day_blocks = previous_day_stats.disk_blocks.get(disk_path, 0)
+        rows.append(
+            {
+                "disk_path": disk_path,
+                "blocks": table_stats.disk_blocks[disk_path],
+                "size_bytes": disk_bytes,
+                "size": format_bytes(disk_bytes),
+                "table_percent": round(table_percent, 2),
+                "previous_day_blocks": previous_day_blocks,
+                "previous_day_size_bytes": previous_day_bytes,
+                "previous_day_size": format_bytes(previous_day_bytes),
+            }
+        )
+    return rows
+
+
+def table_layout_to_json(
+    stats: dict[str, TableStats],
+    previous_day_stats: dict[str, SizeStats],
+    top: int,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    sorted_tables = sorted(stats.items(), key=lambda item: (-item[1].bytes_total, item[0]))
+    for table_key, table_stats in sorted_tables[:top]:
+        previous_stats = previous_day_stats.get(table_key)
+        previous_day_blocks = previous_stats.blocks if previous_stats is not None else 0
+        previous_day_bytes = previous_stats.bytes_total if previous_stats is not None else 0
+        max_disk_bytes = max(table_stats.disk_bytes.values(), default=0)
+        max_disk_percent = 0.0
+        if table_stats.bytes_total > 0:
+            max_disk_percent = max_disk_bytes * 100.0 / table_stats.bytes_total
+        rows.append(
+            {
+                "table": table_key,
+                "blocks": table_stats.blocks,
+                "size_bytes": table_stats.bytes_total,
+                "size": format_bytes(table_stats.bytes_total),
+                "disk_count": len(table_stats.disk_bytes),
+                "max_disk_percent": round(max_disk_percent, 2),
+                "ttl_seconds": sorted(table_stats.ttl_values),
+                "ttl": format_ttl_values(table_stats.ttl_values),
+                "previous_day": {
+                    "blocks": previous_day_blocks,
+                    "size_bytes": previous_day_bytes,
+                    "size": format_bytes(previous_day_bytes),
+                },
+                "disk_distribution": disk_distribution_to_json(table_stats, previous_stats),
+            }
+        )
+    return rows
+
+
+def block_layout_to_json(
+    stats: dict[str, TableStats],
+    previous_day_stats: dict[str, SizeStats],
+    records: list[BlockRecord],
+    db_paths: list[str],
+    disk_paths: list[str],
+    total_bytes: int,
+    top: int,
+    previous_day_label: str,
+    previous_day_start: int,
+    previous_day_end: int,
+) -> dict[str, object]:
+    previous_day_bytes = sum(table_stats.bytes_total for table_stats in previous_day_stats.values())
+    previous_day_blocks = sum(table_stats.blocks for table_stats in previous_day_stats.values())
+    return {
+        "summary": {
+            "metadata_dbs": len(db_paths),
+            "disk_tasks": len(disk_paths),
+            "tables": len(stats),
+            "blocks": len(records),
+            "total_size_bytes": total_bytes,
+            "total_size": format_bytes(total_bytes),
+            "previous_day": {
+                "date_utc": previous_day_label,
+                "start_epoch": previous_day_start,
+                "end_epoch": previous_day_end,
+                "blocks": previous_day_blocks,
+                "size_bytes": previous_day_bytes,
+                "size": format_bytes(previous_day_bytes),
+            },
+        },
+        "tables_order": "size_bytes_desc",
+        "table_limit": top,
+        "tables": table_layout_to_json(stats, previous_day_stats, top),
+    }
+
+
+def table_summary_to_json(stats: dict[str, TableStats], top: int) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for table_key, table_stats in sorted(stats.items(), key=lambda item: item[0])[:top]:
+        rows.append(
+            {
+                "table": table_key,
+                "ttl_seconds": sorted(table_stats.ttl_values),
+                "ttl": format_ttl_values(table_stats.ttl_values),
+                "blocks": table_stats.blocks,
+                "size_bytes": table_stats.bytes_total,
+                "size": format_bytes(table_stats.bytes_total),
+                "obsolete_blocks": table_stats.obsolete_blocks,
+                "obsolete_bytes": table_stats.obsolete_bytes,
+                "obsolete_size": format_bytes(table_stats.obsolete_bytes),
+                "out_of_date_blocks": table_stats.outdated_blocks,
+                "out_of_date_bytes": table_stats.outdated_bytes,
+                "out_of_date_size": format_bytes(table_stats.outdated_bytes),
+                "disk_count": len(table_stats.disk_bytes),
+            }
+        )
+    return rows
+
+
+def table_distribution_to_json(stats: dict[str, TableStats], top: int) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for table_key, table_stats in sorted(stats.items(), key=lambda item: item[0])[:top]:
+        for disk_path, disk_bytes in sorted(table_stats.disk_bytes.items(), key=lambda item: item[0]):
+            percent = 0.0
+            if table_stats.bytes_total > 0:
+                percent = disk_bytes * 100.0 / table_stats.bytes_total
+            rows.append(
+                {
+                    "table": table_key,
+                    "disk_path": disk_path,
+                    "blocks": table_stats.disk_blocks[disk_path],
+                    "size_bytes": disk_bytes,
+                    "size": format_bytes(disk_bytes),
+                    "table_percent": round(percent, 2),
+                }
+            )
+    return rows
+
+
+def output_dry_run_json(
+    args: argparse.Namespace,
+    plan: ExecutionPlan,
+    report_time: str,
+    db_paths: list[str],
+    disk_paths: list[str],
+    records: list[BlockRecord],
+    untracked_blocks: list[UntrackedBlock],
+    stats: dict[str, TableStats],
+    total_bytes: int,
+    obsolete_count: int,
+    outdated_count: int,
+    include_obsolete: bool,
+    include_outdated: bool,
+    include_untracked: bool,
+) -> None:
+    sample_limit = args.json_sample_limit
+    visible_records, hidden_records = limited_items(plan.selected_records, sample_limit)
+    visible_untracked, hidden_untracked = limited_items(plan.selected_untracked, sample_limit)
+    execution_plan = [
+        {"phase": phase, "resource": resource, "action": action, "count": count}
+        for phase, resource, action, count in build_execution_plan_rows(plan, len(db_paths), len(disk_paths))
+    ]
+    previous_day_label, previous_day_start, previous_day_end = previous_utc_day_window(args.now)
+    previous_day_stats = aggregate_previous_day_stats(records, previous_day_start, previous_day_end)
+
+    payload = {
+        "report_type": "block_layout_analysis",
+        "report_time": report_time,
+        "mode": "dry-run",
+        "tide_home": args.tide_home,
+        "block_layout": block_layout_to_json(
+            stats,
+            previous_day_stats,
+            records,
+            db_paths,
+            disk_paths,
+            total_bytes,
+            args.top,
+            previous_day_label,
+            previous_day_start,
+            previous_day_end,
+        ),
+        "cleanup_overview": {
+            "summary": {
+                "cleanup_requested": plan.cleanup_requested,
+                "obsolete_blocks": obsolete_count,
+                "out_of_date_blocks": outdated_count,
+                "untracked_blocks": len(untracked_blocks),
+                "selected_db_record_candidates": len(plan.selected_records),
+                "selected_untracked_candidates": len(plan.selected_untracked),
+                "file_removal_candidates": len(plan.file_removal_candidates),
+                "file_removal_groups": len(plan.remove_plan),
+                "db_delete_candidates": plan.db_delete_count,
+            },
+            "samples": {
+                "limit": sample_limit,
+                "db_record_candidates_hidden": hidden_records,
+                "untracked_candidates_hidden": hidden_untracked,
+                "db_record_candidates": [
+                    block_record_to_json(record, include_obsolete, include_outdated, args.now)
+                    for record in visible_records
+                ],
+                "untracked_candidates": [untracked_block_to_json(block) for block in visible_untracked],
+                "file_removal_groups": remove_plan_to_json(plan.remove_plan)[:sample_limit] if sample_limit else remove_plan_to_json(plan.remove_plan),
+            },
+        },
+        "execution_plan": execution_plan,
+        "cleanup_requested": plan.cleanup_requested,
+        "filters": {
+            "include_obsolete": include_obsolete,
+            "include_out_of_date": include_outdated,
+            "include_untracked": include_untracked,
+            "remove_block_files": args.remove_block_files,
+        },
+        "limits": {
+            "top": args.top,
+            "candidate_limit": args.candidate_limit,
+            "json_sample_limit": sample_limit,
+        },
+        "metadata_dbs": db_paths,
+        "disk_paths": disk_paths,
+        "message": (
+            "selected cleanup actions were not applied"
+            if plan.cleanup_requested
+            else "probe only; pass cleanup options to build an executable mutation plan"
+        ),
+    }
+    json.dump(payload, sys.stdout, indent=2)
+    print()
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Analyze Tide block distribution and cleanup candidates from fringedb.db metadata.",
@@ -1175,6 +1518,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=50,
         help="Maximum cleanup candidates to show; 0 means show all",
     )
+    parser.add_argument(
+        "--json-sample-limit",
+        type=int,
+        default=DEFAULT_JSON_SAMPLE_LIMIT,
+        help="Maximum non-layout samples in dry-run JSON; 0 means show all",
+    )
     return parser.parse_args(argv)
 
 
@@ -1183,6 +1532,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--top must be positive")
     if args.candidate_limit < 0:
         raise SystemExit("--candidate-limit must be zero or positive")
+    if args.json_sample_limit < 0:
+        raise SystemExit("--json-sample-limit must be zero or positive")
 
 
 def main(argv: list[str]) -> int:
@@ -1230,6 +1581,25 @@ def main(argv: list[str]) -> int:
     )
 
     report_time = dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    if plan.dry_run:
+        output_dry_run_json(
+            args,
+            plan,
+            report_time,
+            db_paths,
+            disk_paths,
+            records,
+            untracked_blocks,
+            stats,
+            total_bytes,
+            obsolete_count,
+            outdated_count,
+            include_obsolete,
+            include_outdated,
+            include_untracked,
+        )
+        return 0
+
     print(f"Block Layout Analysis - {report_time}")
     print(f"Mode              : {'DRY-RUN' if plan.dry_run else 'BUILD'}")
     print(f"TIDE_HOME         : {args.tide_home}")
@@ -1291,15 +1661,6 @@ def main(argv: list[str]) -> int:
             build_remove_group_rows(plan.remove_plan),
             group_by=1,
         )
-
-    if plan.dry_run:
-        if plan.cleanup_requested:
-            print()
-            print("Dry-run: selected cleanup actions were not applied.")
-        else:
-            print()
-            print("Probe only: pass cleanup options to build an executable mutation plan.")
-        return 0
 
     removed = 0
     if plan.remove_plan:
