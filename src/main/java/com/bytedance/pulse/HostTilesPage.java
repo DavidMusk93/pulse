@@ -152,8 +152,10 @@ public final class HostTilesPage {
                     }
                     .tile-actions {
                       display: flex;
-                      flex-direction: column;
-                      align-items: flex-end;
+                      flex-direction: row;
+                      align-items: center;
+                      justify-content: flex-end;
+                      flex-wrap: wrap;
                       gap: 6px;
                     }
                     .run-button {
@@ -161,7 +163,7 @@ public final class HostTilesPage {
                       border-radius: 999px;
                       color: white;
                       background: rgba(15,23,42,.16);
-                      padding: 4px 9px;
+                      padding: 3px 8px;
                       font-size: 11px;
                       font-weight: 750;
                       cursor: pointer;
