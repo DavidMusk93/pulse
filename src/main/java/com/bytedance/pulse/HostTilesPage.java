@@ -278,9 +278,41 @@ public final class HostTilesPage {
                     }
                     .cluster-title {
                       display: flex;
-                      align-items: baseline;
-                      gap: 12px;
+                      align-items: center;
+                      gap: var(--space-3);
                       margin: 12px 0 16px;
+                      width: 100%;
+                      padding: 0;
+                      border: none;
+                      background: transparent;
+                      color: inherit;
+                      text-align: left;
+                      cursor: pointer;
+                      border-radius: var(--radius-md);
+                      transition: background-color var(--motion-fast) var(--motion-ease-out);
+                    }
+                    .cluster-title:hover {
+                      background: rgba(37,99,235,.06);
+                    }
+                    .cluster-title:focus-visible {
+                      outline: none;
+                      box-shadow: 0 0 0 3px rgba(37,99,235,.28);
+                    }
+                    .cluster-toggle {
+                      display: inline-flex;
+                      align-items: center;
+                      justify-content: center;
+                      width: 26px;
+                      height: 26px;
+                      flex: 0 0 auto;
+                      border-radius: 999px;
+                      background: hsl(var(--cluster-hue) 44% 92%);
+                      color: hsl(var(--cluster-hue) 44% 30%);
+                      font: 700 14px/1 var(--font-mono);
+                      transition: transform var(--motion-base) var(--motion-ease-out);
+                    }
+                    .cluster-section.collapsed .cluster-toggle {
+                      transform: rotate(-90deg);
                     }
                     .cluster-title h2 {
                       margin: 0;
@@ -290,8 +322,12 @@ public final class HostTilesPage {
                       color: hsl(var(--cluster-hue) 44% 34%);
                     }
                     .cluster-title span {
-                      color: #64748b;
-                      font-size: 13px;
+                      color: var(--color-muted-fg);
+                      font: 600 13px/1 var(--font-num);
+                      font-variant-numeric: tabular-nums;
+                    }
+                    .cluster-section.collapsed .tile-grid {
+                      display: none;
                     }
                     .task-modal {
                       position: fixed;
@@ -775,6 +811,7 @@ public final class HostTilesPage {
                         state: {hosts: [], loading: true, error: null, updatedAt: null},
                         clusterSections: new Map(),
                         tiles: new Map(),
+                        collapsedClusters: loadCollapsedClusters(),
                         setState(patch) {
                           this.state = {...this.state, ...patch};
                           this.render();
@@ -846,10 +883,28 @@ public final class HostTilesPage {
                             const hue = clusterHue(cluster, index);
                             section.style.setProperty('--cluster-hue', String(hue));
                             section.dataset.cluster = cluster;
+                            const collapsed = this.collapsedClusters.has(cluster);
+                            section.classList.toggle('collapsed', collapsed);
+                            const titleBtn = section.querySelector('.cluster-title');
+                            if (titleBtn) {
+                              titleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+                            }
                             section.querySelector('[data-cluster-name]').textContent = cluster;
                             section.querySelector('[data-cluster-count]').textContent =
                               hosts.length + ' host' + (hosts.length === 1 ? '' : 's');
-                            this.updateTiles(section.querySelector('.tile-grid'), hosts);
+                            if (collapsed) {
+                              // Skip DOM diffing of tiles when collapsed: avoids wide-area
+                              // re-renders on the polling cadence.
+                              section.querySelectorAll('[data-agent-id]').forEach(tile => {
+                                this.tiles.delete(tile.dataset.agentId || '');
+                              });
+                              const grid = section.querySelector('.tile-grid');
+                              if (grid && grid.firstChild) {
+                                grid.replaceChildren();
+                              }
+                            } else {
+                              this.updateTiles(section.querySelector('.tile-grid'), hosts);
+                            }
                             placeChild(app, section, index);
                           });
                           [...this.clusterSections.entries()].forEach(([cluster, section]) => {
@@ -869,9 +924,26 @@ public final class HostTilesPage {
                           }
                           section = document.createElement('section');
                           section.className = 'cluster-section';
-                          section.innerHTML = '<div class="cluster-title"><h2 data-cluster-name></h2><span data-cluster-count></span></div><div class="tile-grid"></div>';
+                          section.innerHTML =
+                            '<button type="button" class="cluster-title" aria-expanded="true">'
+                            + '<span class="cluster-toggle" aria-hidden="true">v</span>'
+                            + '<h2 data-cluster-name></h2><span data-cluster-count></span>'
+                            + '</button><div class="tile-grid"></div>';
+                          const titleBtn = section.querySelector('.cluster-title');
+                          titleBtn.addEventListener('click', () => {
+                            this.toggleCluster(cluster);
+                          });
                           this.clusterSections.set(cluster, section);
                           return section;
+                        },
+                        toggleCluster(cluster) {
+                          if (this.collapsedClusters.has(cluster)) {
+                            this.collapsedClusters.delete(cluster);
+                          } else {
+                            this.collapsedClusters.add(cluster);
+                          }
+                          saveCollapsedClusters(this.collapsedClusters);
+                          this.render();
                         },
                         updateTiles(grid, hosts) {
                           const sortedHosts = sortHosts(hosts);
@@ -938,6 +1010,27 @@ public final class HostTilesPage {
                           groups.get(cluster).push(host);
                         });
                         return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right));
+                      }
+
+                      const collapseStorageKey = 'pulse:collapsedClusters';
+                      function loadCollapsedClusters() {
+                        try {
+                          const raw = window.localStorage.getItem(collapseStorageKey);
+                          if (!raw) {
+                            return new Set();
+                          }
+                          const parsed = JSON.parse(raw);
+                          return new Set(Array.isArray(parsed) ? parsed : []);
+                        } catch (error) {
+                          return new Set();
+                        }
+                      }
+                      function saveCollapsedClusters(set) {
+                        try {
+                          window.localStorage.setItem(collapseStorageKey, JSON.stringify([...set]));
+                        } catch (error) {
+                          /* storage unavailable: silently ignore */
+                        }
                       }
 
                       function sortHosts(hosts) {
