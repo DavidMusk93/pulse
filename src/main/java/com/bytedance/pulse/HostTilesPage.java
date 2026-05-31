@@ -66,37 +66,198 @@ public final class HostTilesPage {
                     body {
                       margin: 0;
                       min-height: 100vh;
-                      background: linear-gradient(180deg, #fbfcff 0%, #eef3f8 100%);
+                      background:
+                        radial-gradient(circle at 10% 8%, rgba(251, 113, 133, .22), transparent 30%),
+                        radial-gradient(circle at 88% 4%, rgba(56, 189, 248, .24), transparent 28%),
+                        radial-gradient(circle at 50% 96%, rgba(250, 204, 21, .20), transparent 34%),
+                        linear-gradient(180deg, #fff7ed 0%, #eef2ff 48%, #ecfeff 100%);
                     }
                     header {
-                      padding: 30px clamp(18px, 4vw, 56px) 14px;
+                      padding: 28px clamp(18px, 4vw, 56px) 18px;
+                    }
+                    .hero-shell {
+                      display: grid;
+                      grid-template-columns: minmax(0, 1.12fr) minmax(280px, .88fr);
+                      gap: 22px;
+                      align-items: stretch;
+                    }
+                    .hero-card,
+                    .demo-card,
+                    .testimonial-card {
+                      border: 1px solid rgba(255,255,255,.7);
+                      border-radius: 34px;
+                      background:
+                        linear-gradient(145deg, rgba(255,255,255,.82), rgba(255,255,255,.48)),
+                        radial-gradient(circle at 20% 0%, rgba(99,102,241,.18), transparent 36%);
+                      box-shadow:
+                        18px 18px 42px rgba(99,102,241,.16),
+                        -12px -12px 32px rgba(255,255,255,.78),
+                        inset 0 1px 0 rgba(255,255,255,.78);
+                      backdrop-filter: blur(18px);
+                    }
+                    .hero-card {
+                      padding: clamp(22px, 3vw, 34px);
+                    }
+                    .hero-eyebrow {
+                      display: inline-flex;
+                      align-items: center;
+                      gap: 8px;
+                      margin: 0 0 12px;
+                      color: #7c3aed;
+                      font-size: 12px;
+                      font-weight: 900;
+                      letter-spacing: .14em;
+                      text-transform: uppercase;
                     }
                     h1 {
                       margin: 0;
-                      font-size: clamp(32px, 5vw, 56px);
-                      font-weight: 750;
-                      letter-spacing: -0.06em;
+                      max-width: 760px;
+                      font-size: clamp(38px, 6vw, 76px);
+                      line-height: .9;
+                      font-weight: 900;
+                      letter-spacing: -0.075em;
+                      color: #111827;
                     }
                     .subtitle {
-                      margin-top: 8px;
-                      color: #64748b;
-                      font-size: 15px;
+                      max-width: 680px;
+                      margin-top: 16px;
+                      color: #475569;
+                      font-size: clamp(15px, 1.6vw, 18px);
+                      line-height: 1.55;
                     }
-                    .app-status {
+                    .hero-actions {
                       display: flex;
                       flex-wrap: wrap;
+                      gap: 12px;
+                      margin-top: 22px;
+                    }
+                    .hero-cta,
+                    .hero-secondary {
+                      display: inline-flex;
+                      align-items: center;
+                      justify-content: center;
+                      min-height: 44px;
+                      border-radius: 999px;
+                      padding: 0 18px;
+                      font-weight: 850;
+                      text-decoration: none;
+                    }
+                    .hero-cta {
+                      color: #ffffff;
+                      background: linear-gradient(135deg, #f97316, #ec4899 48%, #7c3aed);
+                      box-shadow: 0 16px 34px rgba(236,72,153,.28);
+                    }
+                    .hero-secondary {
+                      color: #334155;
+                      border: 1px solid rgba(148,163,184,.44);
+                      background: rgba(255,255,255,.66);
+                    }
+                    .demo-stack {
+                      display: grid;
+                      gap: 14px;
+                    }
+                    .demo-card {
+                      padding: 18px;
+                    }
+                    .demo-card h2,
+                    .testimonial-card h2 {
+                      margin: 0 0 12px;
+                      font-size: 18px;
+                      letter-spacing: -.03em;
+                    }
+                    .catalog-preview {
+                      display: grid;
+                      grid-template-columns: repeat(2, minmax(0, 1fr));
                       gap: 10px;
+                    }
+                    .catalog-pill {
+                      min-width: 0;
+                      border-radius: 20px;
+                      padding: 12px;
+                      color: #172033;
+                      background: linear-gradient(145deg, rgba(255,255,255,.84), rgba(255,255,255,.42));
+                      box-shadow: inset 0 -10px 24px rgba(99,102,241,.08);
+                    }
+                    .catalog-pill strong {
+                      display: block;
+                      font-size: 13px;
+                    }
+                    .catalog-pill span {
+                      display: block;
+                      margin-top: 4px;
+                      color: #64748b;
+                      font-size: 11px;
+                    }
+                    .testimonial-card {
+                      padding: 16px 18px;
+                    }
+                    .testimonial-card blockquote {
+                      margin: 0;
+                      color: #334155;
+                      font-size: 13px;
+                      line-height: 1.5;
+                    }
+                    .testimonial-card cite {
+                      display: block;
+                      margin-top: 10px;
+                      color: #7c3aed;
+                      font-style: normal;
+                      font-weight: 850;
+                    }
+                    .app-status {
+                      display: grid;
+                      grid-template-columns: repeat(6, minmax(128px, 1fr));
+                      gap: 12px;
                       padding: 0 clamp(18px, 4vw, 56px) 18px;
                       color: #64748b;
                       font-size: 13px;
                     }
-                    .app-status strong {
+                    .status-card {
+                      min-width: 0;
+                      border: 1px solid rgba(255,255,255,.72);
+                      border-radius: 24px;
+                      padding: 14px;
+                      background: linear-gradient(145deg, rgba(255,255,255,.78), rgba(255,255,255,.44));
+                      box-shadow:
+                        12px 12px 28px rgba(99,102,241,.12),
+                        -10px -10px 24px rgba(255,255,255,.76),
+                        inset 0 1px 0 rgba(255,255,255,.7);
+                    }
+                    .status-card span {
+                      display: block;
+                      color: #64748b;
+                      font-size: 11px;
+                      font-weight: 800;
+                      letter-spacing: .08em;
+                      text-transform: uppercase;
+                    }
+                    .status-card strong {
+                      display: block;
+                      margin-top: 6px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
                       color: #172033;
+                      font: 800 18px/1.15 var(--font-num);
+                    }
+                    .progress-track {
+                      height: 8px;
+                      margin-top: 11px;
+                      overflow: hidden;
+                      border-radius: 999px;
+                      background: rgba(148,163,184,.22);
+                    }
+                    .progress-fill {
+                      display: block;
+                      width: var(--progress, 0%);
+                      height: 100%;
+                      border-radius: inherit;
+                      background: linear-gradient(90deg, #22c55e, #14b8a6, #38bdf8);
                     }
                     .tile-grid {
                       display: grid;
-                      grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
-                      gap: 14px;
+                      grid-template-columns: repeat(auto-fill, minmax(208px, 1fr));
+                      gap: 18px;
                     }
                     .tile {
                       position: relative;
@@ -105,12 +266,18 @@ public final class HostTilesPage {
                       min-height: 0;
                       padding: 0;
                       color: white;
-                      border-radius: 22px;
+                      border: 1px solid rgba(255,255,255,.52);
+                      border-radius: 28px;
                       background:
+                        radial-gradient(circle at 16% 12%, rgba(255,255,255,.44), transparent 34%),
+                        radial-gradient(circle at 86% 4%, rgba(255,255,255,.20), transparent 28%),
                         linear-gradient(135deg,
-                          hsl(var(--cluster-hue) 44% calc(68% - var(--load-level) * 24%)),
-                          hsl(var(--cluster-hue) 42% calc(54% - var(--load-level) * 18%)));
-                      box-shadow: none;
+                          hsl(var(--cluster-hue) 74% calc(66% - var(--load-level) * 18%)),
+                          hsl(calc(var(--cluster-hue) + 28) 76% calc(54% - var(--load-level) * 14%)));
+                      box-shadow:
+                        16px 18px 34px hsla(var(--cluster-hue), 60%, 34%, .20),
+                        -10px -10px 28px rgba(255,255,255,.70),
+                        inset 0 1px 0 rgba(255,255,255,.42);
                       isolation: isolate;
                     }
                     .tile.expired {
@@ -142,13 +309,14 @@ public final class HostTilesPage {
                     .status {
                       flex: 0 0 auto;
                       border: 1px solid rgba(255,255,255,.6);
-                      padding: 2px 5px;
+                      padding: 3px 7px;
                       font-size: 10px;
                       line-height: 1.25;
                       font-weight: 750;
                       letter-spacing: .04em;
                       text-transform: uppercase;
-                      background: rgba(255,255,255,.14);
+                      background: rgba(255,255,255,.20);
+                      box-shadow: inset 0 1px 0 rgba(255,255,255,.26);
                       border-radius: 999px;
                     }
                     .tile-actions {
@@ -163,8 +331,8 @@ public final class HostTilesPage {
                       border: 1px solid rgba(255,255,255,.42);
                       border-radius: 999px;
                       color: white;
-                      background: rgba(15,23,42,.16);
-                      padding: 2px 6px;
+                      background: rgba(255,255,255,.22);
+                      padding: 3px 8px;
                       font-size: 10px;
                       line-height: 1.25;
                       font-weight: 750;
@@ -184,7 +352,7 @@ public final class HostTilesPage {
                     }
                     .tile-host {
                       margin-top: 16px;
-                      font-size: 21px;
+                      font-size: 23px;
                       line-height: 1.08;
                       font-weight: 800;
                       letter-spacing: -.04em;
@@ -197,9 +365,10 @@ public final class HostTilesPage {
                     }
                     .worker-card {
                       padding: 9px;
-                      border: 1px solid rgba(255,255,255,.24);
-                      background: rgba(15,23,42,.16);
-                      border-radius: 14px;
+                      border: 1px solid rgba(255,255,255,.32);
+                      background: rgba(255,255,255,.16);
+                      border-radius: 16px;
+                      box-shadow: inset 0 1px 0 rgba(255,255,255,.18);
                     }
                     .worker-title {
                       display: flex;
@@ -234,9 +403,10 @@ public final class HostTilesPage {
                       min-width: 0;
                       overflow-wrap: anywhere;
                       padding: 7px 8px;
-                      border: 1px solid rgba(255,255,255,.16);
-                      border-radius: 12px;
-                      background: rgba(15,23,42,.1);
+                      border: 1px solid rgba(255,255,255,.30);
+                      border-radius: 17px;
+                      background: rgba(255,255,255,.15);
+                      box-shadow: inset 0 1px 0 rgba(255,255,255,.14);
                     }
                     .tile-meta span {
                       display: block;
@@ -253,7 +423,7 @@ public final class HostTilesPage {
                       bottom: 0;
                       height: 7px;
                       background: rgba(15, 23, 42, .24);
-                      border-radius: 0 0 22px 22px;
+                      border-radius: 0 0 28px 28px;
                       overflow: hidden;
                     }
                     .load-bar::after {
@@ -261,7 +431,7 @@ public final class HostTilesPage {
                       display: block;
                       width: calc(18% + var(--load-level) * 82%);
                       height: 100%;
-                      background: hsl(var(--cluster-hue) 48% 24%);
+                      background: linear-gradient(90deg, #fef08a, #fb7185, #8b5cf6);
                       box-shadow: 0 0 0 1px rgba(255,255,255,.26) inset;
                     }
                     .empty {
@@ -278,15 +448,26 @@ public final class HostTilesPage {
                       border: 1px solid #fde68a;
                     }
                     .cluster-section {
-                      padding: 0 clamp(18px, 4vw, 56px) 34px;
+                      margin: 0 clamp(18px, 4vw, 56px) 26px;
+                      padding: 18px;
+                      border: 1px solid rgba(255,255,255,.58);
+                      border-radius: 34px;
+                      background:
+                        linear-gradient(145deg, rgba(255,255,255,.56), rgba(255,255,255,.30)),
+                        radial-gradient(circle at 0% 0%, hsla(var(--cluster-hue), 80%, 72%, .20), transparent 28%);
+                      box-shadow:
+                        18px 18px 44px rgba(99,102,241,.10),
+                        -12px -12px 30px rgba(255,255,255,.68),
+                        inset 0 1px 0 rgba(255,255,255,.66);
+                      backdrop-filter: blur(16px);
                     }
                     .cluster-title {
                       display: flex;
                       align-items: center;
                       gap: var(--space-3);
-                      margin: 12px 0 16px;
+                      margin: 0 0 16px;
                       width: 100%;
-                      padding: 0;
+                      padding: 4px 6px;
                       border: none;
                       background: transparent;
                       color: inherit;
@@ -296,7 +477,7 @@ public final class HostTilesPage {
                       transition: background-color var(--motion-fast) var(--motion-ease-out);
                     }
                     .cluster-title:hover {
-                      background: rgba(37,99,235,.06);
+                      background: rgba(255,255,255,.36);
                     }
                     .cluster-title:focus-visible {
                       outline: none;
@@ -310,9 +491,10 @@ public final class HostTilesPage {
                       height: 26px;
                       flex: 0 0 auto;
                       border-radius: 999px;
-                      background: hsl(var(--cluster-hue) 44% 92%);
+                      background: linear-gradient(145deg, #ffffff, hsl(var(--cluster-hue) 76% 90%));
                       color: hsl(var(--cluster-hue) 44% 30%);
-                      font: 700 14px/1 var(--font-mono);
+                      font: 900 14px/1 var(--font-mono);
+                      box-shadow: 6px 6px 14px rgba(99,102,241,.16), inset 0 1px 0 #fff;
                       transition: transform var(--motion-base) var(--motion-ease-out);
                     }
                     .cluster-section.collapsed .cluster-toggle {
@@ -321,7 +503,7 @@ public final class HostTilesPage {
                     .cluster-title h2 {
                       margin: 0;
                       font-size: 26px;
-                      font-weight: 800;
+                      font-weight: 900;
                       letter-spacing: -.04em;
                       color: hsl(var(--cluster-hue) 44% 34%);
                     }
@@ -333,6 +515,8 @@ public final class HostTilesPage {
                     .cluster-section.collapsed .tile-grid {
                       display: none;
                     }
+                    """
+                + """
                     .task-modal {
                       position: fixed;
                       inset: 0;
@@ -770,6 +954,19 @@ public final class HostTilesPage {
                       font-size: 13px;
                     }
                     @media (max-width: 860px) {
+                      .hero-shell {
+                        grid-template-columns: 1fr;
+                      }
+                      .app-status {
+                        grid-template-columns: repeat(2, minmax(0, 1fr));
+                      }
+                      .cluster-section {
+                        margin-inline: 12px;
+                        padding: 12px;
+                      }
+                      .tile-grid {
+                        grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+                      }
                       .task-shell {
                         grid-template-columns: 1fr;
                         overflow: auto;
@@ -792,8 +989,33 @@ public final class HostTilesPage {
                 </head>
                 <body data-coordinator-id="__COORDINATOR_ID__">
                   <header>
-                    <h1>Pulse Hosts</h1>
-                    <div class="subtitle">Coordinator __COORDINATOR_ID__ · PulseView keyed dashboard · JSON refresh 5s</div>
+                    <div class="hero-shell">
+                      <section class="hero-card">
+                        <p class="hero-eyebrow">Remote Ops Academy</p>
+                        <h1>Master every host cohort in one vibrant workspace.</h1>
+                        <div class="subtitle">Coordinator __COORDINATOR_ID__ becomes a live course campus: browse cluster catalogs, track progress, and launch safe dry-runs without losing Pulse's keyed DOM performance.</div>
+                        <div class="hero-actions">
+                          <a class="hero-cta" href="#pulse-app">Enroll in live monitoring</a>
+                          <a class="hero-secondary" href="#pulse-app">Explore course catalog</a>
+                        </div>
+                      </section>
+                      <aside class="demo-stack" aria-label="Educational platform preview">
+                        <section class="demo-card">
+                          <h2>Course Catalog Preview</h2>
+                          <div class="catalog-preview">
+                            <div class="catalog-pill"><strong>Cluster Foundations</strong><span>Collapse cohorts, keep refresh cheap.</span></div>
+                            <div class="catalog-pill"><strong>Dry-run Lab</strong><span>Launch agent tasks from each card.</span></div>
+                            <div class="catalog-pill"><strong>Load Mastery</strong><span>Sort by 5m average progress.</span></div>
+                            <div class="catalog-pill"><strong>Completion Studio</strong><span>Review JSON in the editor workspace.</span></div>
+                          </div>
+                        </section>
+                        <section class="testimonial-card">
+                          <h2>Student Testimonials</h2>
+                          <blockquote>"The dashboard now feels like a guided lab: clear cohorts, visible progress, and safe actions right where operators need them."</blockquote>
+                          <cite>Pulse SRE cohort</cite>
+                        </section>
+                      </aside>
+                    </div>
                   </header>
                   <div id="pulse-status" class="app-status"></div>
                   <main id="pulse-app" data-framework="PulseView">
@@ -1067,13 +1289,15 @@ public final class HostTilesPage {
                         const alive = state.hosts.filter(host => host.status === 'alive').length;
                         const expired = state.hosts.filter(host => host.status === 'expired').length;
                         const updated = state.updatedAt ? state.updatedAt.toLocaleTimeString() : 'pending';
+                        const aliveProgress = state.hosts.length ? Math.round((alive / state.hosts.length) * 100) : 0;
+                        const expiredProgress = state.hosts.length ? Math.round((expired / state.hosts.length) * 100) : 0;
                         return `
-                          <span><strong>${escapeHtml(coordinatorId)}</strong></span>
-                          <span>Total <strong>${state.hosts.length}</strong></span>
-                          <span>Alive <strong>${alive}</strong></span>
-                          <span>Expired <strong>${expired}</strong></span>
-                          <span>Updated <strong>${escapeHtml(updated)}</strong></span>
-                          <span>Mode <strong>Keyed DOM refresh</strong></span>
+                          <div class="status-card"><span>Coordinator</span><strong>${escapeHtml(coordinatorId)}</strong></div>
+                          <div class="status-card"><span>Catalog Size</span><strong>${state.hosts.length} hosts</strong><div class="progress-track"><i class="progress-fill" style="--progress:100%"></i></div></div>
+                          <div class="status-card"><span>Progress Alive</span><strong>${alive} · ${aliveProgress}%</strong><div class="progress-track"><i class="progress-fill" style="--progress:${aliveProgress}%"></i></div></div>
+                          <div class="status-card"><span>Needs Review</span><strong>${expired} · ${expiredProgress}%</strong><div class="progress-track"><i class="progress-fill" style="--progress:${expiredProgress}%"></i></div></div>
+                          <div class="status-card"><span>Last Lesson</span><strong>${escapeHtml(updated)}</strong></div>
+                          <div class="status-card"><span>Refresh Mode</span><strong>Keyed DOM</strong></div>
                         `;
                       }
 
