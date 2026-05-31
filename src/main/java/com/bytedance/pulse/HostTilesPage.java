@@ -356,6 +356,7 @@ public final class HostTilesPage {
                       to { opacity: 1; transform: translateY(0) scale(1); }
                     }
                     .task-panel {
+                      position: relative;
                       display: flex;
                       flex-direction: column;
                       width: min(1360px, 96vw);
@@ -372,14 +373,19 @@ public final class HostTilesPage {
                       box-shadow: 0 28px 90px rgba(15,23,42,.34);
                     }
                     .task-panel-head {
+                      position: absolute;
+                      top: 14px;
+                      right: var(--space-5);
+                      left: var(--space-5);
+                      z-index: 1;
                       display: flex;
                       align-items: center;
-                      justify-content: space-between;
+                      justify-content: flex-end;
                       gap: var(--space-4);
-                      flex: 0 0 auto;
-                      padding: 14px var(--space-5) 0;
+                      pointer-events: none;
                     }
                     .task-panel-title {
+                      display: none;
                       color: var(--color-muted-fg);
                       font: 700 12px/1 var(--font-num);
                       letter-spacing: .08em;
@@ -397,6 +403,7 @@ public final class HostTilesPage {
                       color: var(--color-foreground);
                       font: 700 18px/1 var(--font-num);
                       cursor: pointer;
+                      pointer-events: auto;
                     }
                     .task-panel-close:hover {
                       border-color: var(--color-ring);
@@ -408,12 +415,12 @@ public final class HostTilesPage {
                     }
                     .task-shell {
                       display: grid;
-                      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-                      gap: var(--space-5);
+                      grid-template-columns: minmax(248px, 300px) minmax(0, 1fr);
+                      gap: var(--space-4);
                       flex: 1 1 auto;
                       min-height: 0;
                       overflow: hidden;
-                      padding: var(--space-4) var(--space-5) var(--space-5);
+                      padding: var(--space-5);
                     }
                     .task-sidebar {
                       display: grid;
@@ -425,9 +432,9 @@ public final class HostTilesPage {
                     }
                     .task-hero {
                       display: grid;
-                      gap: 14px;
+                      gap: 12px;
                       min-width: 0;
-                      padding: 22px;
+                      padding: 16px;
                       border: 1px solid #dbeafe;
                       border-radius: 26px;
                       background:
@@ -448,7 +455,7 @@ public final class HostTilesPage {
                     }
                     .task-hero h2 {
                       margin: 0;
-                      font-size: clamp(24px, 3vw, 34px);
+                      font-size: clamp(20px, 2.4vw, 30px);
                       line-height: 1.08;
                       letter-spacing: -.05em;
                       overflow-wrap: anywhere;
@@ -541,8 +548,8 @@ public final class HostTilesPage {
                     }
                     .task-workspace {
                       display: grid;
-                      grid-template-rows: minmax(86px, auto) minmax(0, 1fr);
-                      gap: var(--space-4);
+                      grid-template-rows: minmax(96px, max-content) minmax(0, 1fr);
+                      gap: var(--space-3);
                       min-height: 0;
                       overflow: hidden;
                     }
@@ -551,11 +558,11 @@ public final class HostTilesPage {
                       border: 1px solid #dbe3ed;
                       border-radius: var(--radius-lg);
                       background: rgba(255,255,255,.86);
-                      padding: 20px 22px;
+                      padding: 14px;
                       box-shadow: 0 12px 34px rgba(15,23,42,.06);
                     }
                     .task-card h3 {
-                      margin: 0 0 var(--space-3);
+                      margin: 0 0 var(--space-2);
                       font-size: 15px;
                       font-weight: 700;
                       letter-spacing: -.02em;
@@ -567,18 +574,23 @@ public final class HostTilesPage {
                       overflow: hidden;
                     }
                     .execution-card #task-execution {
-                      max-height: 240px;
+                      max-height: 80px;
                       overflow-y: auto;
                       overflow-x: hidden;
                       padding-right: var(--space-1);
                     }
                     .task-card.completion-card {
                       display: grid;
-                      grid-template-rows: auto auto minmax(0, 1fr);
-                      gap: var(--space-3);
+                      grid-template-rows: auto minmax(0, 72px) auto minmax(0, 1fr);
+                      gap: var(--space-2);
                       grid-column: span 1;
                       min-height: 0;
                       overflow: hidden;
+                    }
+                    #task-completion-meta {
+                      min-height: 0;
+                      overflow: auto;
+                      padding-right: 2px;
                     }
                     .task-list {
                       display: grid;
@@ -589,7 +601,7 @@ public final class HostTilesPage {
                       border: 1px solid #e2e8f0;
                       border-radius: 16px;
                       background: #f8fafc;
-                      padding: 12px;
+                      padding: 10px;
                       overflow: hidden;
                     }
                     .task-row.compact {
@@ -643,7 +655,7 @@ public final class HostTilesPage {
                     }
                     .completion-strip {
                       display: grid;
-                      grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+                      grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
                       gap: var(--space-2);
                     }
                     .completion-strip div {
@@ -651,7 +663,7 @@ public final class HostTilesPage {
                       border: 1px solid var(--color-border);
                       border-radius: var(--radius-sm);
                       background: var(--color-surface-muted);
-                      padding: 10px 12px;
+                      padding: 8px 10px;
                     }
                     .completion-strip span {
                       display: block;
@@ -699,6 +711,7 @@ public final class HostTilesPage {
                     .task-output {
                       min-height: 0;
                       height: auto;
+                      align-self: stretch;
                       overflow: auto;
                       overflow-x: hidden;
                       border: 1px solid #dbe3ed;
