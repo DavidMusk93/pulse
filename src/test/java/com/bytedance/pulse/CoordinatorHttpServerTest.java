@@ -142,6 +142,12 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("data-field=\"seen\""));
         assertTrue(response.body().contains("data-action=\"run-task\""));
         assertTrue(response.body().contains("task-modal"));
+        assertTrue(response.body().contains("Remote dry-run executor"));
+        assertTrue(response.body().contains("task-summary"));
+        assertTrue(response.body().contains("Latest Completion"));
+        assertTrue(response.body().contains("startTaskPolling"));
+        assertTrue(response.body().contains("window.setInterval(() =>"));
+        assertTrue(response.body().contains("auto-refreshes every 2s"));
         assertTrue(response.body().contains("prepare_disk_layout_dry_run"));
         assertTrue(response.body().contains("analyze_block_layout_dry_run"));
         assertTrue(!response.body().contains("shell command"));
@@ -160,7 +166,7 @@ class CoordinatorHttpServerTest {
         assertTrue(!response.body().contains("<span>Role</span>"));
         assertTrue(!response.body().contains("<span>Source</span>"));
         assertTrue(!response.body().contains("<span>Zone</span>"));
-        assertTrue(!response.body().contains("background: rgba(255,255,255,.86)"));
+        assertTrue(response.body().contains("backdrop-filter: blur(12px)"));
         assertTrue(!response.body().contains("liquid-flow"));
         assertTrue(!response.body().contains("water-ripple"));
         assertTrue(!response.body().contains("repeating-radial-gradient"));

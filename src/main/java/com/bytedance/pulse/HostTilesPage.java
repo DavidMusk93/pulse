@@ -258,60 +258,233 @@ public final class HostTilesPage {
                       align-items: center;
                       justify-content: center;
                       padding: 24px;
-                      background: rgba(15,23,42,.46);
+                      background: rgba(15,23,42,.58);
+                      backdrop-filter: blur(12px);
                     }
                     .task-modal.open {
                       display: flex;
                     }
                     .task-panel {
-                      width: min(960px, 92vw);
-                      max-height: 88vh;
-                      overflow: auto;
-                      border-radius: 24px;
-                      background: #f8fafc;
+                      width: min(1120px, 94vw);
+                      max-height: 90vh;
+                      overflow: hidden;
+                      border: 1px solid rgba(148,163,184,.32);
+                      border-radius: 28px;
+                      background:
+                        radial-gradient(circle at 12% 0%, rgba(59,130,246,.16), transparent 28%),
+                        linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
                       color: #172033;
-                      box-shadow: 0 24px 80px rgba(15,23,42,.22);
+                      box-shadow: 0 28px 90px rgba(15,23,42,.34);
                     }
-                    .task-panel header {
-                      padding: 22px;
+                    .task-hero {
+                      display: flex;
+                      justify-content: space-between;
+                      gap: 18px;
+                      padding: 24px 26px 18px;
+                      border-bottom: 1px solid #e2e8f0;
+                    }
+                    .task-eyebrow {
+                      margin: 0 0 8px;
+                      color: #2563eb;
+                      font-size: 12px;
+                      font-weight: 800;
+                      letter-spacing: .12em;
+                      text-transform: uppercase;
+                    }
+                    .task-hero h2 {
+                      margin: 0;
+                      font-size: clamp(24px, 3vw, 36px);
+                      line-height: 1;
+                      letter-spacing: -.05em;
+                    }
+                    .task-trace {
+                      margin-top: 10px;
+                      color: #64748b;
+                      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                      font-size: 12px;
+                      overflow-wrap: anywhere;
+                    }
+                    .task-toolbar {
+                      display: flex;
+                      flex-wrap: wrap;
+                      justify-content: flex-end;
+                      align-content: flex-start;
+                      gap: 10px;
+                    }
+                    .task-toolbar button,
+                    .task-toolbar select {
+                      border: 1px solid #cbd5e1;
+                      border-radius: 999px;
+                      background: rgba(255,255,255,.88);
+                      color: #172033;
+                      padding: 10px 14px;
+                      font-weight: 750;
+                    }
+                    .task-toolbar button {
+                      cursor: pointer;
+                    }
+                    .task-toolbar button:disabled {
+                      cursor: not-allowed;
+                      opacity: .52;
+                    }
+                    .task-primary {
+                      border-color: #2563eb !important;
+                      background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
+                      color: white !important;
+                      box-shadow: 0 10px 24px rgba(37,99,235,.22);
+                    }
+                    .task-close-button {
+                      width: 42px;
+                      padding: 10px 0 !important;
+                    }
+                    .task-summary {
+                      display: grid;
+                      grid-template-columns: repeat(4, minmax(0, 1fr));
+                      gap: 12px;
+                      padding: 16px 26px;
+                    }
+                    .task-stat {
+                      min-width: 0;
+                      padding: 13px 14px;
+                      border: 1px solid #e2e8f0;
+                      border-radius: 18px;
+                      background: rgba(255,255,255,.78);
+                    }
+                    .task-stat span {
+                      display: block;
+                      color: #64748b;
+                      font-size: 11px;
+                      font-weight: 800;
+                      letter-spacing: .08em;
+                      text-transform: uppercase;
+                    }
+                    .task-stat strong {
+                      display: block;
+                      margin-top: 6px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                      font-size: 16px;
                     }
                     .task-grid {
                       display: grid;
-                      grid-template-columns: 1fr 1.4fr;
-                      gap: 14px;
-                      padding: 0 22px 22px;
+                      grid-template-columns: .95fr 1.35fr;
+                      gap: 16px;
+                      max-height: calc(90vh - 230px);
+                      overflow: auto;
+                      padding: 0 26px 26px;
                     }
                     .task-card {
+                      min-width: 0;
                       border: 1px solid #dbe3ed;
-                      border-radius: 18px;
-                      background: white;
-                      padding: 14px;
+                      border-radius: 22px;
+                      background: rgba(255,255,255,.86);
+                      padding: 16px;
+                    }
+                    .task-card h3 {
+                      margin: 0 0 12px;
+                      font-size: 15px;
+                      letter-spacing: -.02em;
+                    }
+                    .task-list {
+                      display: grid;
+                      gap: 10px;
+                    }
+                    .task-row {
+                      border: 1px solid #e2e8f0;
+                      border-radius: 16px;
+                      background: #f8fafc;
+                      padding: 12px;
+                    }
+                    .task-row-head {
+                      display: flex;
+                      align-items: center;
+                      justify-content: space-between;
+                      gap: 10px;
+                      margin-bottom: 8px;
+                    }
+                    .task-name {
+                      min-width: 0;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                      font-weight: 800;
+                    }
+                    .task-badge {
+                      display: inline-flex;
+                      align-items: center;
+                      border-radius: 999px;
+                      padding: 4px 9px;
+                      background: #dbeafe;
+                      color: #1d4ed8;
+                      font-size: 11px;
+                      font-weight: 850;
+                      letter-spacing: .04em;
+                      text-transform: uppercase;
+                    }
+                    .task-badge.completed {
+                      background: #dcfce7;
+                      color: #15803d;
+                    }
+                    .task-badge.failed,
+                    .task-badge.rejected,
+                    .task-badge.timeout {
+                      background: #fee2e2;
+                      color: #b91c1c;
+                    }
+                    .task-detail {
+                      color: #475569;
+                      font-size: 12px;
+                      line-height: 1.55;
+                      overflow-wrap: anywhere;
+                    }
+                    .task-output-tabs {
+                      display: flex;
+                      flex-wrap: wrap;
+                      gap: 8px;
+                      margin: 12px 0;
+                    }
+                    .task-output-tabs span {
+                      border-radius: 999px;
+                      background: #eef2ff;
+                      color: #334155;
+                      padding: 5px 9px;
+                      font-size: 12px;
+                      font-weight: 750;
                     }
                     .task-output {
-                      min-height: 220px;
-                      max-height: 360px;
+                      min-height: 260px;
+                      max-height: 430px;
                       overflow: auto;
-                      border-radius: 14px;
-                      background: #0f172a;
+                      border: 1px solid rgba(148,163,184,.22);
+                      border-radius: 18px;
+                      background: #0b1120;
                       color: #dbeafe;
-                      padding: 12px;
+                      padding: 14px;
                       white-space: pre-wrap;
                       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
                       font-size: 12px;
+                      line-height: 1.55;
                     }
-                    .task-actions {
-                      display: flex;
-                      flex-wrap: wrap;
-                      gap: 10px;
-                      padding: 0 22px 22px;
+                    .task-empty {
+                      border: 1px dashed #cbd5e1;
+                      border-radius: 16px;
+                      color: #64748b;
+                      background: #f8fafc;
+                      padding: 18px;
+                      font-size: 13px;
                     }
-                    .task-actions button,
-                    .task-actions select {
-                      border: 1px solid #cbd5e1;
-                      border-radius: 999px;
-                      background: white;
-                      color: #172033;
-                      padding: 9px 12px;
+                    @media (max-width: 860px) {
+                      .task-hero,
+                      .task-grid {
+                        grid-template-columns: 1fr;
+                      }
+                      .task-hero {
+                        flex-direction: column;
+                      }
+                      .task-summary {
+                        grid-template-columns: 1fr 1fr;
+                      }
                     }
                   </style>
                 </head>
@@ -325,31 +498,40 @@ public final class HostTilesPage {
                     <section class="empty">Loading hosts from /api/hosts...</section>
                   </main>
                   <div id="task-modal" class="task-modal" aria-hidden="true">
-                    <section class="task-panel">
-                      <header>
-                        <h2 id="task-title">Run Task</h2>
-                        <div id="task-trace" class="subtitle">trace: pending</div>
-                      </header>
+                    <section class="task-panel" role="dialog" aria-modal="true" aria-labelledby="task-title">
+                      <div class="task-hero">
+                        <div>
+                          <p class="task-eyebrow">Remote dry-run executor</p>
+                          <h2 id="task-title">Run Task</h2>
+                          <div id="task-trace" class="task-trace">trace: pending</div>
+                        </div>
+                        <div class="task-toolbar">
+                          <select id="task-type" aria-label="Task type">
+                            <option value="prepare_disk_layout_dry_run">prepare_disk_layout_dry_run</option>
+                            <option value="analyze_block_layout_dry_run">analyze_block_layout_dry_run</option>
+                          </select>
+                          <button id="task-run" class="task-primary">Run dry-run</button>
+                          <button id="task-keep">Keep result</button>
+                          <button id="task-pop">Pop result</button>
+                          <button id="task-close" class="task-close-button" aria-label="Close">x</button>
+                        </div>
+                      </div>
+                      <div class="task-summary">
+                        <div class="task-stat"><span>Agent</span><strong id="task-agent">-</strong></div>
+                        <div class="task-stat"><span>Current run</span><strong id="task-current">Idle</strong></div>
+                        <div class="task-stat"><span>Execution queue</span><strong id="task-execution-count">0</strong></div>
+                        <div class="task-stat"><span>Completion queue</span><strong id="task-completion-count">0</strong></div>
+                      </div>
                       <div class="task-grid">
                         <section class="task-card">
                           <h3>Execution Queue</h3>
                           <div id="task-execution"></div>
                         </section>
                         <section class="task-card">
-                          <h3>Completion Queue</h3>
+                          <h3>Latest Completion</h3>
                           <div id="task-completion-meta"></div>
                           <pre id="task-output" class="task-output"></pre>
                         </section>
-                      </div>
-                      <div class="task-actions">
-                        <select id="task-type">
-                          <option value="prepare_disk_layout_dry_run">prepare_disk_layout_dry_run</option>
-                          <option value="analyze_block_layout_dry_run">analyze_block_layout_dry_run</option>
-                        </select>
-                        <button id="task-run">Run dry-run</button>
-                        <button id="task-keep">Keep result</button>
-                        <button id="task-pop">Pop and show next</button>
-                        <button id="task-close">Close</button>
                       </div>
                     </section>
                   </div>
@@ -363,6 +545,10 @@ public final class HostTilesPage {
                       const taskModal = document.getElementById('task-modal');
                       const taskTitle = document.getElementById('task-title');
                       const taskTrace = document.getElementById('task-trace');
+                      const taskAgent = document.getElementById('task-agent');
+                      const taskCurrent = document.getElementById('task-current');
+                      const taskExecutionCount = document.getElementById('task-execution-count');
+                      const taskCompletionCount = document.getElementById('task-completion-count');
                       const taskExecution = document.getElementById('task-execution');
                       const taskCompletionMeta = document.getElementById('task-completion-meta');
                       const taskOutput = document.getElementById('task-output');
@@ -373,6 +559,9 @@ public final class HostTilesPage {
                       const taskClose = document.getElementById('task-close');
                       let activeTaskAgentId = '';
                       let activeCompletionTaskId = '';
+                      let activeRunTaskId = '';
+                      let taskPollTimer = 0;
+                      let taskSnapshotInFlight = false;
 
                       const PulseView = {
                         state: {hosts: [], loading: true, error: null, updatedAt: null},
@@ -631,41 +820,141 @@ public final class HostTilesPage {
                       async function openTaskModal(agentId, label) {
                         activeTaskAgentId = agentId;
                         activeCompletionTaskId = '';
+                        activeRunTaskId = '';
                         taskTitle.textContent = 'Run Task · ' + label;
                         taskTrace.textContent = 'trace: pending';
+                        taskAgent.textContent = agentId || '-';
+                        taskCurrent.textContent = 'Loading';
+                        taskExecutionCount.textContent = '0';
+                        taskCompletionCount.textContent = '0';
+                        taskCompletionMeta.innerHTML = '<div class="task-empty">Waiting for task snapshot...</div>';
+                        taskOutput.textContent = '';
                         taskModal.classList.add('open');
                         taskModal.setAttribute('aria-hidden', 'false');
-                        await refreshTaskSnapshot();
+                        startTaskPolling();
+                        await refreshTaskSnapshot({silent: false});
                       }
 
-                      async function refreshTaskSnapshot() {
-                        if (!activeTaskAgentId) {
+                      function startTaskPolling() {
+                        stopTaskPolling();
+                        taskPollTimer = window.setInterval(() => {
+                          refreshTaskSnapshot({silent: true});
+                        }, 2000);
+                      }
+
+                      function stopTaskPolling() {
+                        if (taskPollTimer) {
+                          window.clearInterval(taskPollTimer);
+                          taskPollTimer = 0;
+                        }
+                      }
+
+                      async function refreshTaskSnapshot(options = {}) {
+                        if (!activeTaskAgentId || taskSnapshotInFlight) {
                           return;
                         }
-                        const response = await fetch('/api/agents/' + encodeURIComponent(activeTaskAgentId) + '/tasks', {cache: 'no-store'});
-                        if (!response.ok) {
-                          throw new Error('task snapshot HTTP ' + response.status);
+                        taskSnapshotInFlight = true;
+                        try {
+                          const response = await fetch('/api/agents/' + encodeURIComponent(activeTaskAgentId) + '/tasks', {cache: 'no-store'});
+                          if (!response.ok) {
+                            throw new Error('task snapshot HTTP ' + response.status);
+                          }
+                          renderTaskSnapshot(await response.json());
+                        } catch (error) {
+                          if (!options.silent) {
+                            taskCompletionMeta.innerHTML = '<div class="task-empty">Failed to refresh task snapshot: ' + escapeHtml(error.message || String(error)) + '</div>';
+                          }
+                        } finally {
+                          taskSnapshotInFlight = false;
                         }
-                        renderTaskSnapshot(await response.json());
                       }
 
                       function renderTaskSnapshot(snapshot) {
                         const execution = snapshot.execution_queue || [];
                         const completions = snapshot.completion_queue || [];
-                        const latest = completions[completions.length - 1] || null;
+                        const currentExecution = activeRunTaskId
+                          ? execution.find(task => task.task_id === activeRunTaskId)
+                          : (execution[execution.length - 1] || null);
+                        const currentCompletion = activeRunTaskId
+                          ? completions.find(result => result.task_id === activeRunTaskId)
+                          : null;
+                        const latest = currentCompletion || completions[completions.length - 1] || null;
+                        const traceId = (latest && latest.trace_id)
+                          || (currentExecution && currentExecution.trace_id)
+                          || latestTraceId(snapshot.traces)
+                          || 'pending';
                         activeCompletionTaskId = latest ? latest.task_id : '';
-                        taskExecution.innerHTML = execution.length
-                          ? execution.map(task => `<div class="tile-meta"><div><span>${escapeHtml(task.status || '')}</span>${escapeHtml(task.task_type || '')}<br>${escapeHtml(task.trace_id || '')}</div></div>`).join('')
-                          : '<div class="subtitle">Execution queue is empty.</div>';
+                        taskTrace.textContent = 'trace: ' + traceId;
+                        taskCurrent.textContent = currentCompletion
+                          ? (currentCompletion.status || 'completed')
+                          : (currentExecution ? (currentExecution.status || 'queued') : (latest ? 'Previous result' : 'Idle'));
+                        taskExecutionCount.textContent = String(execution.length);
+                        taskCompletionCount.textContent = String(completions.length);
+                        taskKeep.disabled = !activeCompletionTaskId;
+                        taskPop.disabled = !activeCompletionTaskId;
+                        taskExecution.innerHTML = execution.length ? '<div class="task-list">'
+                          + execution.map(renderExecutionTask).join('')
+                          + '</div>' : '<div class="task-empty">Execution queue is empty. New dry-runs appear here until an agent accepts and completes them.</div>';
                         if (latest) {
-                          taskTrace.textContent = 'trace: ' + latest.trace_id;
-                          taskCompletionMeta.innerHTML = `<div>Status <strong>${escapeHtml(latest.status || '')}</strong> · Exit <strong>${escapeHtml(latest.exit_code ?? '-')}</strong> · Duration <strong>${escapeHtml(latest.duration_ms || 0)}ms</strong></div>`;
+                          taskCompletionMeta.innerHTML = renderCompletionMeta(latest, activeRunTaskId && latest.task_id !== activeRunTaskId);
                           taskOutput.textContent = ['STDOUT', latest.stdout_tail || '', '', 'STDERR', latest.stderr_tail || '', latest.runner_error ? '\\nERROR\\n' + latest.runner_error : ''].join('\\n');
                         } else {
-                          taskTrace.textContent = 'trace: pending';
-                          taskCompletionMeta.innerHTML = '<div class="subtitle">No completion yet.</div>';
-                          taskOutput.textContent = '';
+                          taskCompletionMeta.innerHTML = '<div class="task-empty">No completion yet. This panel auto-refreshes every 2s while the dialog is open.</div>';
+                          taskOutput.textContent = currentExecution
+                            ? 'Waiting for agent heartbeat result for ' + (currentExecution.task_id || 'task') + '...'
+                            : '';
                         }
+                      }
+
+                      function renderExecutionTask(task) {
+                        return `
+                          <div class="task-row">
+                            <div class="task-row-head">
+                              <div class="task-name">${escapeHtml(task.task_type || '')}</div>
+                              <span class="task-badge ${escapeHtml(task.status || '')}">${escapeHtml(task.status || '')}</span>
+                            </div>
+                            <div class="task-detail">
+                              task: ${escapeHtml(task.task_id || '')}<br>
+                              trace: ${escapeHtml(task.trace_id || '')}<br>
+                              created: ${escapeHtml(formatTime(task.created_at_ms))}<br>
+                              delivered: ${escapeHtml(formatTime(task.delivered_at_ms))}<br>
+                              accepted: ${escapeHtml(formatTime(task.accepted_at_ms))}
+                            </div>
+                          </div>
+                        `;
+                      }
+
+                      function renderCompletionMeta(result, showingPreviousResult) {
+                        const previousNotice = showingPreviousResult
+                          ? '<div class="task-empty">Current run is still waiting; showing the latest retained completion.</div>'
+                          : '';
+                        return previousNotice + `
+                          <div class="task-row">
+                            <div class="task-row-head">
+                              <div class="task-name">${escapeHtml(result.task_type || '')}</div>
+                              <span class="task-badge ${escapeHtml(result.status || '')}">${escapeHtml(result.status || '')}</span>
+                            </div>
+                            <div class="task-detail">
+                              task: ${escapeHtml(result.task_id || '')}<br>
+                              trace: ${escapeHtml(result.trace_id || '')}<br>
+                              exit: ${escapeHtml(result.exit_code ?? '-')} · duration: ${escapeHtml(result.duration_ms || 0)}ms<br>
+                              finished: ${escapeHtml(formatTime(result.finished_at_ms))}
+                            </div>
+                            <div class="task-output-tabs">
+                              <span>stdout ${(result.stdout_tail || '').length} chars</span>
+                              <span>stderr ${(result.stderr_tail || '').length} chars</span>
+                              ${result.output_truncated ? '<span>tail truncated</span>' : ''}
+                            </div>
+                          </div>
+                        `;
+                      }
+
+                      function latestTraceId(traces) {
+                        if (!Array.isArray(traces) || !traces.length) {
+                          return '';
+                        }
+                        const latest = traces[traces.length - 1] || {};
+                        return latest.trace_id || '';
                       }
 
                       taskRun.onclick = async () => {
@@ -681,7 +970,12 @@ public final class HostTilesPage {
                           taskOutput.textContent = 'Run failed: HTTP ' + response.status;
                           return;
                         }
-                        renderTaskSnapshot(await response.json());
+                        const snapshot = await response.json();
+                        const execution = snapshot.execution_queue || [];
+                        const latestTask = execution[execution.length - 1] || null;
+                        activeRunTaskId = latestTask ? latestTask.task_id : '';
+                        renderTaskSnapshot(snapshot);
+                        startTaskPolling();
                       };
 
                       taskKeep.onclick = async () => {
@@ -701,8 +995,12 @@ public final class HostTilesPage {
                       };
 
                       taskClose.onclick = () => {
+                        stopTaskPolling();
                         taskModal.classList.remove('open');
                         taskModal.setAttribute('aria-hidden', 'true');
+                        activeTaskAgentId = '';
+                        activeRunTaskId = '';
+                        activeCompletionTaskId = '';
                       };
 
                       function clusterHue(cluster, index) {
@@ -725,6 +1023,11 @@ public final class HostTilesPage {
                       function formatSeen(value) {
                         const millis = Number(value);
                         return Number.isFinite(millis) ? new Date(millis).toLocaleString() : '';
+                      }
+
+                      function formatTime(value) {
+                        const millis = Number(value);
+                        return Number.isFinite(millis) && millis > 0 ? new Date(millis).toLocaleString() : '-';
                       }
 
                       function percent(value) {
