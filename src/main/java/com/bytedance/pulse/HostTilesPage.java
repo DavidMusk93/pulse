@@ -908,6 +908,8 @@ public final class HostTilesPage {
                       const taskPop = document.getElementById('task-pop');
                       const taskClose = document.getElementById('task-close');
                       const taskCloseX = document.getElementById('task-close-x');
+                      const loadAverageWindowMs = 5 * 60 * 1000;
+                      const loadSamples = new Map();
                       let activeTaskAgentId = '';
                       let activeCompletionTaskId = '';
                       let activeRunTaskId = '';
@@ -1061,8 +1063,9 @@ public final class HostTilesPage {
                           this.render();
                         },
                         updateTiles(grid, hosts) {
+                          recordLoadSamples(hosts);
                           const sortedHosts = sortHosts(hosts);
-                          const maxLoad = Math.max(0, ...sortedHosts.map(loadValue));
+                          const maxLoad = Math.max(0, ...sortedHosts.map(loadSortValue));
                           const activeAgents = new Set();
                           sortedHosts.forEach((host, rank) => {
                             const agentId = host.agent_id || '';
@@ -1150,9 +1153,47 @@ public final class HostTilesPage {
 
                       function sortHosts(hosts) {
                         return [...hosts].sort((left, right) =>
-                          loadValue(right) - loadValue(left)
+                          loadSortValue(right) - loadSortValue(left)
                           || String(left.ip || '').localeCompare(String(right.ip || ''))
                           || String(left.agent_id || '').localeCompare(String(right.agent_id || '')));
+                      }
+
+                      function recordLoadSamples(hosts) {
+                        const now = Date.now();
+                        const activeAgents = new Set();
+                        hosts.forEach(host => {
+                          const agentId = host.agent_id || host.ip || '';
+                          if (!agentId) {
+                            return;
+                          }
+                          activeAgents.add(agentId);
+                          const samples = loadSamples.get(agentId) || [];
+                          samples.push({t: now, load: loadValue(host)});
+                          const cutoff = now - loadAverageWindowMs;
+                          while (samples.length && samples[0].t < cutoff) {
+                            samples.shift();
+                          }
+                          loadSamples.set(agentId, samples);
+                        });
+                        [...loadSamples.keys()].forEach(agentId => {
+                          if (!activeAgents.has(agentId)) {
+                            loadSamples.delete(agentId);
+                          }
+                        });
+                      }
+
+                      function averageLoad(host) {
+                        const agentId = host.agent_id || host.ip || '';
+                        const samples = loadSamples.get(agentId) || [];
+                        if (!samples.length) {
+                          return loadValue(host);
+                        }
+                        const total = samples.reduce((sum, sample) => sum + sample.load, 0);
+                        return total / samples.length;
+                      }
+
+                      function loadSortValue(host) {
+                        return averageLoad(host);
                       }
 
                       function createTile(agentId) {
@@ -1171,7 +1212,7 @@ public final class HostTilesPage {
                             <div class="tile-host" data-field="ip_title"></div>
                             <div class="tile-meta">
                               <div><span>Load</span><span data-field="load"></span></div>
-                              <div><span>IP</span><span data-field="ip"></span></div>
+                              <div><span>5m avg</span><span data-field="load_avg"></span></div>
                               <div><span>Area</span><span data-field="area"></span></div>
                               <div><span>Confirm</span><span data-field="confirmations"></span></div>
                             </div>
@@ -1183,7 +1224,7 @@ public final class HostTilesPage {
                       }
 
                       function updateTile(tile, host, rank, maxLoad) {
-                        const load = loadValue(host);
+                        const load = loadSortValue(host);
                         const level = maxLoad <= 0 ? 0 : Math.max(0, Math.min(1, load / maxLoad));
                         const statusClass = host.status === 'expired' ? 'expired' : 'alive';
                         const agentId = host.agent_id || '';
@@ -1197,7 +1238,7 @@ public final class HostTilesPage {
                         runButton.onclick = () => openTaskModal(agentId, host.ip || agentId);
                         setText(tile, 'ip_title', host.ip || 'unknown ip');
                         setText(tile, 'load', host.load || '');
-                        setText(tile, 'ip', host.ip || '');
+                        setText(tile, 'load_avg', averageLoad(host).toFixed(2));
                         setText(tile, 'area', host.area || '');
                         setText(tile, 'confirmations', String(host.heartbeat_confirmations || 0) + '/3 in 20s');
                         renderWorkers(tile.querySelector('[data-field="workers"]'), tideWorkers(host));
