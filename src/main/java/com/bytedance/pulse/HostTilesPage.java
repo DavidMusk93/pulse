@@ -359,6 +359,7 @@ public final class HostTilesPage {
                       display: flex;
                       flex-direction: column;
                       width: min(1360px, 96vw);
+                      height: min(92vh, 760px);
                       max-height: 92vh;
                       overflow: hidden;
                       border: 1px solid rgba(148,163,184,.32);
@@ -370,20 +371,57 @@ public final class HostTilesPage {
                       color: var(--color-foreground);
                       box-shadow: 0 28px 90px rgba(15,23,42,.34);
                     }
+                    .task-panel-head {
+                      display: flex;
+                      align-items: center;
+                      justify-content: space-between;
+                      gap: var(--space-4);
+                      flex: 0 0 auto;
+                      padding: 14px var(--space-5) 0;
+                    }
+                    .task-panel-title {
+                      color: var(--color-muted-fg);
+                      font: 700 12px/1 var(--font-num);
+                      letter-spacing: .08em;
+                      text-transform: uppercase;
+                    }
+                    .task-panel-close {
+                      display: inline-flex;
+                      align-items: center;
+                      justify-content: center;
+                      width: 36px;
+                      height: 36px;
+                      border: 1px solid var(--color-border-strong);
+                      border-radius: 999px;
+                      background: #ffffff;
+                      color: var(--color-foreground);
+                      font: 700 18px/1 var(--font-num);
+                      cursor: pointer;
+                    }
+                    .task-panel-close:hover {
+                      border-color: var(--color-ring);
+                      color: var(--color-ring);
+                    }
+                    .task-panel-close:focus-visible {
+                      outline: none;
+                      box-shadow: 0 0 0 3px rgba(37,99,235,.35);
+                    }
                     .task-shell {
                       display: grid;
                       grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
                       gap: var(--space-5);
+                      flex: 1 1 auto;
                       min-height: 0;
-                      max-height: 92vh;
-                      overflow: auto;
-                      padding: var(--space-5);
+                      overflow: hidden;
+                      padding: var(--space-4) var(--space-5) var(--space-5);
                     }
                     .task-sidebar {
                       display: grid;
                       gap: var(--space-4);
                       align-content: start;
                       min-width: 0;
+                      min-height: 0;
+                      overflow: auto;
                     }
                     .task-hero {
                       display: grid;
@@ -503,9 +541,10 @@ public final class HostTilesPage {
                     }
                     .task-workspace {
                       display: grid;
-                      grid-template-rows: auto minmax(0, 1fr);
-                      gap: var(--space-5);
+                      grid-template-rows: minmax(86px, auto) minmax(0, 1fr);
+                      gap: var(--space-4);
                       min-height: 0;
+                      overflow: hidden;
                     }
                     .task-card {
                       min-width: 0;
@@ -535,9 +574,11 @@ public final class HostTilesPage {
                     }
                     .task-card.completion-card {
                       display: grid;
-                      gap: var(--space-4);
+                      grid-template-rows: auto auto minmax(0, 1fr);
+                      gap: var(--space-3);
                       grid-column: span 1;
                       min-height: 0;
+                      overflow: hidden;
                     }
                     .task-list {
                       display: grid;
@@ -602,8 +643,8 @@ public final class HostTilesPage {
                     }
                     .completion-strip {
                       display: grid;
-                      grid-template-columns: repeat(6, minmax(104px, 1fr));
-                      gap: var(--space-3);
+                      grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+                      gap: var(--space-2);
                     }
                     .completion-strip div {
                       min-width: 0;
@@ -656,8 +697,8 @@ public final class HostTilesPage {
                       font-weight: 750;
                     }
                     .task-output {
-                      min-height: 430px;
-                      height: min(56vh, 620px);
+                      min-height: 0;
+                      height: auto;
                       overflow: auto;
                       overflow-x: hidden;
                       border: 1px solid #dbe3ed;
@@ -716,6 +757,13 @@ public final class HostTilesPage {
                     @media (max-width: 860px) {
                       .task-shell {
                         grid-template-columns: 1fr;
+                        overflow: auto;
+                      }
+                      .task-sidebar {
+                        overflow: visible;
+                      }
+                      .task-panel {
+                        height: 92vh;
                       }
                     }
                   </style>
@@ -731,6 +779,10 @@ public final class HostTilesPage {
                   </main>
                   <div id="task-modal" class="task-modal" aria-hidden="true">
                     <section class="task-panel" role="dialog" aria-modal="true" aria-labelledby="task-title">
+                      <div class="task-panel-head">
+                        <div class="task-panel-title">Remote Task Runner</div>
+                        <button id="task-close-x" class="task-panel-close" type="button" aria-label="Close task runner">×</button>
+                      </div>
                       <div class="task-shell">
                         <aside class="task-sidebar">
                           <div class="task-hero">
@@ -794,6 +846,7 @@ public final class HostTilesPage {
                       const taskRun = document.getElementById('task-run');
                       const taskPop = document.getElementById('task-pop');
                       const taskClose = document.getElementById('task-close');
+                      const taskCloseX = document.getElementById('task-close-x');
                       let activeTaskAgentId = '';
                       let activeCompletionTaskId = '';
                       let activeRunTaskId = '';
@@ -801,6 +854,7 @@ public final class HostTilesPage {
                       let taskSnapshotInFlight = false;
                       let activeTaskLabel = '';
                       let activeOutputText = '';
+                      let renderedOutputText = null;
                       let renderOutputVersion = 0;
                       let outputEditor = null;
                       let monacoReady = null;
@@ -1306,6 +1360,13 @@ public final class HostTilesPage {
 
                       function renderOutput(text) {
                         activeOutputText = text || '';
+                        if (activeOutputText === renderedOutputText) {
+                          if (outputEditor) {
+                            window.requestAnimationFrame(() => outputEditor && outputEditor.layout());
+                          }
+                          return;
+                        }
+                        renderedOutputText = activeOutputText;
                         const version = ++renderOutputVersion;
                         disposeOutputEditor();
                         if (!activeOutputText) {
@@ -1365,14 +1426,29 @@ public final class HostTilesPage {
                             return;
                           }
                           const model = outputEditor.getModel();
+                          const viewState = outputEditor.saveViewState();
+                          const scrollTop = outputEditor.getScrollTop();
+                          const scrollLeft = outputEditor.getScrollLeft();
                           model.setValue(text);
                           window.monaco.editor.setModelLanguage(model, language);
                           outputEditor.layout();
+                          if (viewState) {
+                            outputEditor.restoreViewState(viewState);
+                          }
+                          outputEditor.setScrollPosition({scrollTop, scrollLeft});
                           if (allowAutoFormat && language === 'json' && text.length <= 100000) {
                             window.setTimeout(() => {
                               const formatAction = outputEditor.getAction('editor.action.formatDocument');
                               if (formatAction) {
-                                formatAction.run();
+                                const beforeFormatState = outputEditor.saveViewState();
+                                const beforeFormatTop = outputEditor.getScrollTop();
+                                const beforeFormatLeft = outputEditor.getScrollLeft();
+                                formatAction.run().then(() => {
+                                  if (beforeFormatState) {
+                                    outputEditor.restoreViewState(beforeFormatState);
+                                  }
+                                  outputEditor.setScrollPosition({scrollTop: beforeFormatTop, scrollLeft: beforeFormatLeft});
+                                });
                               }
                             }, 0);
                           }
@@ -1520,14 +1596,26 @@ public final class HostTilesPage {
                         }
                       };
 
-                      taskClose.onclick = () => {
+                      function closeTaskModal() {
                         stopTaskPolling();
                         taskModal.classList.remove('open');
                         taskModal.setAttribute('aria-hidden', 'true');
                         activeTaskAgentId = '';
                         activeRunTaskId = '';
                         activeCompletionTaskId = '';
-                      };
+                      }
+                      taskClose.onclick = closeTaskModal;
+                      taskCloseX.onclick = closeTaskModal;
+                      taskModal.addEventListener('click', event => {
+                        if (event.target === taskModal) {
+                          closeTaskModal();
+                        }
+                      });
+                      window.addEventListener('keydown', event => {
+                        if (event.key === 'Escape' && taskModal.classList.contains('open')) {
+                          closeTaskModal();
+                        }
+                      });
 
                       function clusterHue(cluster, index) {
                         if (!cluster) {
