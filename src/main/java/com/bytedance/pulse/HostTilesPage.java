@@ -470,14 +470,7 @@ public final class HostTilesPage {
                       overflow-wrap: anywhere;
                     }
                     .task-trace {
-                      margin-top: 8px;
-                      color: #64748b;
-                      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-                      font-size: 12px;
-                      overflow: hidden;
-                      overflow-wrap: anywhere;
-                      text-overflow: ellipsis;
-                      white-space: nowrap;
+                      display: none;
                     }
                     .task-toolbar {
                       display: grid;
@@ -499,8 +492,15 @@ public final class HostTilesPage {
                                   transform var(--motion-fast) var(--motion-ease-out);
                     }
                     .task-toolbar select {
+                      appearance: none;
+                      -webkit-appearance: none;
                       grid-column: 1 / -1;
                       min-width: 0;
+                      padding-right: 42px;
+                      background:
+                        linear-gradient(45deg, transparent 50%, #334155 50%) calc(100% - 20px) 50% / 6px 6px no-repeat,
+                        linear-gradient(135deg, #334155 50%, transparent 50%) calc(100% - 16px) 50% / 6px 6px no-repeat,
+                        rgba(255,255,255,.9);
                     }
                     .task-toolbar button {
                       cursor: pointer;
@@ -705,53 +705,10 @@ public final class HostTilesPage {
                       font: 600 13px/1.3 var(--font-num);
                       font-variant-numeric: tabular-nums;
                     }
-                    .completion-context {
-                      display: grid;
-                      grid-template-columns: 1fr;
-                      gap: var(--space-2);
-                      margin-top: var(--space-2);
-                      color: #475569;
-                      font: 600 12px/1.35 var(--font-mono);
-                      font-variant-numeric: tabular-nums;
-                    }
-                    .completion-context span {
-                      min-width: 0;
-                      overflow: hidden;
-                      text-overflow: ellipsis;
-                      white-space: nowrap;
-                      border: 1px solid var(--color-border);
-                      border-radius: var(--radius-sm);
-                      background: rgba(248,250,252,.78);
-                      padding: 8px 10px;
-                    }
                     .incoming-task {
                       margin-bottom: 8px;
                       border-color: #bfdbfe;
                       background: #eff6ff;
-                    }
-                    .task-output-tabs {
-                      display: flex;
-                      flex-wrap: wrap;
-                      gap: 8px;
-                      align-items: center;
-                      justify-content: space-between;
-                      margin: 0;
-                    }
-                    .task-sidebar .editor-hint {
-                      display: none;
-                    }
-                    .task-output-tags {
-                      display: flex;
-                      flex-wrap: wrap;
-                      gap: 8px;
-                    }
-                    .task-output-tags span {
-                      border-radius: 999px;
-                      background: #eef2ff;
-                      color: #334155;
-                      padding: 5px 9px;
-                      font-size: 12px;
-                      font-weight: 750;
                     }
                     .task-output {
                       min-height: 0;
@@ -878,10 +835,6 @@ public final class HostTilesPage {
                           <section class="task-card completion-meta-card">
                             <h3>Completion Queue</h3>
                             <div id="task-completion-meta"></div>
-                            <div class="task-output-tabs">
-                              <div id="task-output-tags" class="task-output-tags"></div>
-                              <div class="editor-hint">Monaco Editor · lazy load · auto wrap · context menu copy/format</div>
-                            </div>
                           </section>
                         </aside>
                         <main class="task-workspace">
@@ -909,7 +862,6 @@ public final class HostTilesPage {
                       const taskExecution = document.getElementById('task-execution');
                       const taskCompletionMeta = document.getElementById('task-completion-meta');
                       const taskOutput = document.getElementById('task-output');
-                      const taskOutputTags = document.getElementById('task-output-tags');
                       const taskType = document.getElementById('task-type');
                       const taskRun = document.getElementById('task-run');
                       const taskPop = document.getElementById('task-pop');
@@ -1293,7 +1245,6 @@ public final class HostTilesPage {
                         taskCurrent.textContent = 'Loading';
                         taskCompletionCount.textContent = '0';
                         taskCompletionMeta.innerHTML = '<div class="task-empty">Waiting for task snapshot...</div>';
-                        taskOutputTags.innerHTML = '';
                         renderOutput('');
                         taskModal.classList.add('open');
                         taskModal.setAttribute('aria-hidden', 'false');
@@ -1365,13 +1316,11 @@ public final class HostTilesPage {
                           taskCompletionMeta.innerHTML = renderCompletionMeta(latest, activeRunTaskId && latest.task_id !== activeRunTaskId);
                           const outputText = taskOutputText(latest);
                           renderOutput(outputText);
-                          taskOutputTags.innerHTML = renderOutputTags(outputText, latest);
                         } else {
                           taskCompletionMeta.innerHTML = '<div class="task-empty">No completion yet. This panel auto-refreshes every 2s while the dialog is open.</div>';
                           renderOutput(currentExecution
                             ? 'Waiting for agent heartbeat result for ' + (currentExecution.task_id || 'task') + '...'
                             : '');
-                          taskOutputTags.innerHTML = renderOutputTags(activeOutputText, null);
                         }
                       }
 
@@ -1428,11 +1377,6 @@ public final class HostTilesPage {
                             <div><span>Bytes</span><strong>${escapeHtml(result.output_bytes ?? '-')}</strong></div>
                             <div><span>SHA256</span><strong title="${escapeHtml(result.output_sha256 || '')}">${escapeHtml(shortHash(result.output_sha256 || ''))}</strong></div>
                           </div>
-                          <div class="completion-context">
-                            <span title="${escapeHtml(result.task_id || '')}">task ${escapeHtml(result.task_type || '-')} · ${escapeHtml(shortHash(result.task_id || ''))}</span>
-                            <span title="${escapeHtml(result.trace_id || '')}">trace ${escapeHtml(shortHash(result.trace_id || ''))}</span>
-                            <span>started ${escapeHtml(formatTime(result.started_at_ms))}</span>
-                          </div>
                         `;
                       }
 
@@ -1450,14 +1394,6 @@ public final class HostTilesPage {
                       function outputLengthLabel(result) {
                         const length = taskOutputText(result).length;
                         return length + ' chars';
-                      }
-
-                      function renderOutputTags(text, result) {
-                        const tags = [`<span>${detectOutputType(text).toUpperCase()}</span>`, `<span>${text.length} chars</span>`];
-                        if (result && result.output_sha256) {
-                          tags.push(`<span>sha256 ${escapeHtml(shortHash(result.output_sha256))}</span>`);
-                        }
-                        return tags.join('');
                       }
 
                       function renderOutput(text) {
