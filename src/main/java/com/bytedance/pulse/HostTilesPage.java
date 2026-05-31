@@ -13,12 +13,55 @@ public final class HostTilesPage {
                   <meta charset="utf-8">
                   <meta name="viewport" content="width=device-width, initial-scale=1">
                   <title>Pulse Coordinator Hosts</title>
+                  <link rel="preconnect" href="https://fonts.googleapis.com">
+                  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+                  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@400;500;600;700&display=swap">
                   <style>
                     :root {
                       color-scheme: light;
                       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
                       background: #f6f8fb;
                       color: #172033;
+                      /* ui-ux-pro-max design tokens */
+                      --color-primary: #1d4ed8;
+                      --color-primary-hover: #1e3a8a;
+                      --color-on-primary: #ffffff;
+                      --color-accent: #b45309;
+                      --color-surface: #ffffff;
+                      --color-surface-muted: #f8fafc;
+                      --color-foreground: #172033;
+                      --color-muted-fg: #64748b;
+                      --color-border: #e2e8f0;
+                      --color-border-strong: #cbd5e1;
+                      --color-ring: #2563eb;
+                      --color-success: #15803d;
+                      --color-success-bg: #dcfce7;
+                      --color-danger: #b91c1c;
+                      --color-danger-bg: #fee2e2;
+                      --space-1: 4px;
+                      --space-2: 8px;
+                      --space-3: 12px;
+                      --space-4: 16px;
+                      --space-5: 24px;
+                      --space-6: 32px;
+                      --radius-sm: 12px;
+                      --radius-md: 16px;
+                      --radius-lg: 22px;
+                      --radius-xl: 28px;
+                      --motion-fast: 150ms;
+                      --motion-base: 220ms;
+                      --motion-slow: 320ms;
+                      --motion-ease-out: cubic-bezier(.2,.8,.2,1);
+                      --font-mono: "Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                      --font-num: "Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                    }
+                    @media (prefers-reduced-motion: reduce) {
+                      *, *::before, *::after {
+                        animation-duration: 0ms !important;
+                        animation-iteration-count: 1 !important;
+                        transition-duration: 0ms !important;
+                        scroll-behavior: auto !important;
+                      }
                     }
                     body {
                       margin: 0;
@@ -257,12 +300,24 @@ public final class HostTilesPage {
                       display: none;
                       align-items: center;
                       justify-content: center;
-                      padding: 24px;
+                      padding: var(--space-5);
                       background: rgba(15,23,42,.58);
                       backdrop-filter: blur(12px);
                     }
                     .task-modal.open {
                       display: flex;
+                      animation: task-modal-fade var(--motion-base) var(--motion-ease-out);
+                    }
+                    .task-modal.open .task-panel {
+                      animation: task-panel-rise var(--motion-base) var(--motion-ease-out);
+                    }
+                    @keyframes task-modal-fade {
+                      from { opacity: 0; }
+                      to { opacity: 1; }
+                    }
+                    @keyframes task-panel-rise {
+                      from { opacity: 0; transform: translateY(8px) scale(.98); }
+                      to { opacity: 1; transform: translateY(0) scale(1); }
                     }
                     .task-panel {
                       display: flex;
@@ -271,26 +326,26 @@ public final class HostTilesPage {
                       max-height: 92vh;
                       overflow: hidden;
                       border: 1px solid rgba(148,163,184,.32);
-                      border-radius: 28px;
+                      border-radius: var(--radius-xl);
                       background:
                         radial-gradient(circle at 0% 0%, rgba(37,99,235,.16), transparent 28%),
                         radial-gradient(circle at 100% 0%, rgba(14,165,233,.12), transparent 26%),
                         linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-                      color: #172033;
+                      color: var(--color-foreground);
                       box-shadow: 0 28px 90px rgba(15,23,42,.34);
                     }
                     .task-shell {
                       display: grid;
                       grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-                      gap: 22px;
+                      gap: var(--space-5);
                       min-height: 0;
                       max-height: 92vh;
                       overflow: auto;
-                      padding: 24px;
+                      padding: var(--space-5);
                     }
                     .task-sidebar {
                       display: grid;
-                      gap: 16px;
+                      gap: var(--space-4);
                       align-content: start;
                       min-width: 0;
                     }
@@ -334,29 +389,51 @@ public final class HostTilesPage {
                     .task-toolbar {
                       display: flex;
                       flex-direction: column;
-                      gap: 10px;
+                      gap: var(--space-3);
                     }
                     .task-toolbar button,
                     .task-toolbar select {
-                      border: 1px solid #cbd5e1;
-                      border-radius: 16px;
+                      border: 1px solid var(--color-border-strong);
+                      border-radius: var(--radius-md);
                       background: rgba(255,255,255,.88);
-                      color: #172033;
+                      color: var(--color-foreground);
                       padding: 11px 14px;
-                      font-weight: 750;
+                      font: 600 14px/1.2 inherit;
+                      transition: background-color var(--motion-fast) var(--motion-ease-out),
+                                  border-color var(--motion-fast) var(--motion-ease-out),
+                                  box-shadow var(--motion-fast) var(--motion-ease-out),
+                                  transform var(--motion-fast) var(--motion-ease-out);
                     }
                     .task-toolbar button {
                       cursor: pointer;
                     }
+                    .task-toolbar button:hover:not(:disabled),
+                    .task-toolbar select:hover {
+                      border-color: var(--color-ring);
+                      background: #ffffff;
+                    }
+                    .task-toolbar button:active:not(:disabled) {
+                      transform: scale(.98);
+                    }
+                    .task-toolbar button:focus-visible,
+                    .task-toolbar select:focus-visible {
+                      outline: none;
+                      box-shadow: 0 0 0 3px rgba(37,99,235,.35);
+                      border-color: var(--color-ring);
+                    }
                     .task-toolbar button:disabled {
                       cursor: not-allowed;
-                      opacity: .52;
+                      opacity: .45;
                     }
                     .task-primary {
-                      border-color: #2563eb !important;
-                      background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
-                      color: white !important;
+                      border-color: var(--color-primary) !important;
+                      background: linear-gradient(135deg, #2563eb, var(--color-primary)) !important;
+                      color: var(--color-on-primary) !important;
                       box-shadow: 0 10px 24px rgba(37,99,235,.22);
+                    }
+                    .task-primary:hover:not(:disabled) {
+                      background: linear-gradient(135deg, #1d4ed8, var(--color-primary-hover)) !important;
+                      box-shadow: 0 12px 28px rgba(37,99,235,.32);
                     }
                     .task-close-button {
                       width: 100%;
@@ -369,15 +446,15 @@ public final class HostTilesPage {
                     .task-stat {
                       min-width: 0;
                       padding: 14px 16px;
-                      border: 1px solid #e2e8f0;
-                      border-radius: 20px;
+                      border: 1px solid var(--color-border);
+                      border-radius: var(--radius-lg);
                       background: rgba(255,255,255,.78);
                     }
                     .task-stat span {
                       display: block;
-                      color: #64748b;
+                      color: var(--color-muted-fg);
                       font-size: 11px;
-                      font-weight: 800;
+                      font-weight: 700;
                       letter-spacing: .08em;
                       text-transform: uppercase;
                     }
@@ -385,41 +462,44 @@ public final class HostTilesPage {
                       display: block;
                       margin-top: 6px;
                       overflow-wrap: anywhere;
-                      font-size: 16px;
+                      font: 600 16px/1.3 var(--font-num);
+                      font-variant-numeric: tabular-nums;
                     }
                     .task-workspace {
                       display: grid;
                       grid-template-rows: auto minmax(0, 1fr);
-                      gap: 18px;
+                      gap: var(--space-5);
                       min-height: 0;
                     }
                     .task-card {
                       min-width: 0;
                       border: 1px solid #dbe3ed;
-                      border-radius: 24px;
+                      border-radius: var(--radius-lg);
                       background: rgba(255,255,255,.86);
-                      padding: 18px;
+                      padding: 20px 22px;
                       box-shadow: 0 12px 34px rgba(15,23,42,.06);
                     }
                     .task-card h3 {
-                      margin: 0 0 14px;
+                      margin: 0 0 var(--space-3);
                       font-size: 15px;
+                      font-weight: 700;
                       letter-spacing: -.02em;
                     }
                     .task-card.execution-card {
                       display: grid;
-                      gap: 12px;
+                      gap: var(--space-3);
                       align-self: stretch;
                       overflow: hidden;
                     }
                     .execution-card #task-execution {
-                      max-height: 220px;
-                      overflow: auto;
-                      padding-right: 2px;
+                      max-height: 240px;
+                      overflow-y: auto;
+                      overflow-x: hidden;
+                      padding-right: var(--space-1);
                     }
                     .task-card.completion-card {
                       display: grid;
-                      gap: 16px;
+                      gap: var(--space-4);
                       grid-column: span 1;
                       min-height: 0;
                     }
@@ -467,40 +547,40 @@ public final class HostTilesPage {
                       text-transform: uppercase;
                     }
                     .task-badge.completed {
-                      background: #dcfce7;
-                      color: #15803d;
+                      background: var(--color-success-bg);
+                      color: var(--color-success);
                     }
                     .task-badge.failed,
                     .task-badge.rejected,
                     .task-badge.timeout,
                     .task-badge.timed_out {
-                      background: #fee2e2;
-                      color: #b91c1c;
+                      background: var(--color-danger-bg);
+                      color: var(--color-danger);
                     }
                     .task-detail {
                       color: #475569;
-                      font-size: 11px;
-                      line-height: 1.45;
+                      font: 11px/1.55 var(--font-mono);
+                      font-variant-numeric: tabular-nums;
                       overflow-wrap: anywhere;
                       word-break: break-word;
                     }
                     .completion-strip {
                       display: grid;
                       grid-template-columns: repeat(6, minmax(104px, 1fr));
-                      gap: 10px;
+                      gap: var(--space-3);
                     }
                     .completion-strip div {
                       min-width: 0;
-                      border: 1px solid #e2e8f0;
-                      border-radius: 14px;
-                      background: #f8fafc;
-                      padding: 10px;
+                      border: 1px solid var(--color-border);
+                      border-radius: var(--radius-sm);
+                      background: var(--color-surface-muted);
+                      padding: 10px 12px;
                     }
                     .completion-strip span {
                       display: block;
-                      color: #64748b;
+                      color: var(--color-muted-fg);
                       font-size: 10px;
-                      font-weight: 850;
+                      font-weight: 700;
                       letter-spacing: .08em;
                       text-transform: uppercase;
                     }
@@ -510,7 +590,8 @@ public final class HostTilesPage {
                       overflow: hidden;
                       text-overflow: ellipsis;
                       white-space: nowrap;
-                      font-size: 13px;
+                      font: 600 13px/1.3 var(--font-num);
+                      font-variant-numeric: tabular-nums;
                     }
                     .incoming-task {
                       margin-bottom: 8px;
@@ -542,9 +623,14 @@ public final class HostTilesPage {
                       min-height: 430px;
                       height: min(56vh, 620px);
                       overflow: auto;
+                      overflow-x: hidden;
                       border: 1px solid #dbe3ed;
-                      border-radius: 18px;
-                      background: #ffffff;
+                      border-radius: var(--radius-md);
+                      background: var(--color-surface);
+                    }
+                    .task-output:focus-within {
+                      border-color: var(--color-ring);
+                      box-shadow: 0 0 0 3px rgba(37,99,235,.18);
                     }
                     .task-output-pre {
                       box-sizing: border-box;
@@ -555,7 +641,8 @@ public final class HostTilesPage {
                       white-space: pre-wrap;
                       overflow-wrap: anywhere;
                       word-break: break-word;
-                      font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                      font: 12px/1.6 var(--font-mono);
+                      font-variant-numeric: tabular-nums;
                     }
                     .task-output-lazy {
                       display: grid;
