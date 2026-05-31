@@ -17,7 +17,9 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 public class CoordinatorHttpServer {
     private final CoordinatorService service;
@@ -38,7 +40,7 @@ public class CoordinatorHttpServer {
         this.peerForwarder = peerForwarder;
         this.server = HttpServer.create(new InetSocketAddress(bindHost, port), 0);
         this.server.createContext("/", this::handle);
-        this.server.setExecutor(Executors.newCachedThreadPool());
+        this.server.setExecutor(httpExecutor());
     }
 
     public void start() {
@@ -140,6 +142,30 @@ public class CoordinatorHttpServer {
         exchange.sendResponseHeaders(status, bytes.length);
         try (OutputStream output = exchange.getResponseBody()) {
             output.write(bytes);
+        }
+    }
+
+    private static ThreadPoolExecutor httpExecutor() {
+        int maxThreads = positiveInt("PULSE_HTTP_MAX_THREADS", Math.max(32, Runtime.getRuntime().availableProcessors() * 4));
+        int coreThreads = Math.min(8, maxThreads);
+        int queueSize = positiveInt("PULSE_HTTP_QUEUE_SIZE", 2_048);
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(
+                coreThreads,
+                maxThreads,
+                60,
+                TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(queueSize),
+                new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.allowCoreThreadTimeOut(true);
+        return executor;
+    }
+
+    private static int positiveInt(String key, int fallback) {
+        try {
+            int value = Integer.parseInt(System.getenv().getOrDefault(key, String.valueOf(fallback)));
+            return value > 0 ? value : fallback;
+        } catch (NumberFormatException exception) {
+            return fallback;
         }
     }
 

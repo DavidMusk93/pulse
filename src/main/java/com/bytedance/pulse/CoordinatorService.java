@@ -13,6 +13,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class CoordinatorService {
     private static final long ALIVE_CONFIRMATION_WINDOW_MS = 20_000;
     private static final int ALIVE_CONFIRMATION_THRESHOLD = 3;
+    private static final long DEFAULT_HOST_SNAPSHOT_TTL_MS = 1_000;
+    private static final long DEFAULT_GROUP_RECOMPUTE_INTERVAL_MS = 1_000;
 
     private final String coordinatorId;
     private final Clock clock;
@@ -22,6 +24,14 @@ public class CoordinatorService {
     private final int groupSizeLimit;
     private final int groupLeaderPort;
     private final RemoteTaskService taskService;
+    private final long hostSnapshotTtlMs;
+    private final long groupRecomputeIntervalMs;
+    private final Object hostSnapshotLock = new Object();
+    private final Object groupRecomputeLock = new Object();
+    private volatile List<HostView> hostSnapshot = List.of();
+    private volatile long hostSnapshotAtMs = Long.MIN_VALUE;
+    private volatile boolean groupRecomputeDirty = true;
+    private volatile long lastGroupRecomputeAtMs = Long.MIN_VALUE;
 
     public CoordinatorService(String coordinatorId, Clock clock) {
         this.coordinatorId = coordinatorId;
@@ -29,6 +39,8 @@ public class CoordinatorService {
         this.groupSizeLimit = Math.max(1, Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_SIZE_LIMIT", "7")));
         this.groupLeaderPort = Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_PORT", "9977"));
         this.taskService = new RemoteTaskService(clock);
+        this.hostSnapshotTtlMs = positiveLong("PULSE_HOST_SNAPSHOT_TTL_MS", DEFAULT_HOST_SNAPSHOT_TTL_MS);
+        this.groupRecomputeIntervalMs = positiveLong("PULSE_GROUP_RECOMPUTE_INTERVAL_MS", DEFAULT_GROUP_RECOMPUTE_INTERVAL_MS);
     }
 
     public String coordinatorId() {
@@ -45,7 +57,7 @@ public class CoordinatorService {
                 taskService.handleReplies(agent.agentId(), agent.messages());
                 agentResponses.add(new AgentHeartbeatResponse(agent.agentId(), acceptedSeq, List.of()));
             }
-            recomputeGroups(now);
+            maybeRecomputeGroups(now, false);
             agentResponses = agentResponses.stream()
                     .map(response -> new AgentHeartbeatResponse(
                             response.agentId(),
@@ -58,7 +70,7 @@ public class CoordinatorService {
         AgentHeartbeat heartbeat = request.toSingleAgentHeartbeat();
         long acceptedSeq = merge(heartbeat, "direct", now, heartbeat.messages());
         taskService.handleReplies(heartbeat.agentId(), heartbeat.messages());
-        recomputeGroups(now);
+        maybeRecomputeGroups(now, false);
         return HeartbeatResponse.single(coordinatorId, acceptedSeq, responseMessages(heartbeat.agentId()));
     }
 
@@ -80,21 +92,16 @@ public class CoordinatorService {
                 merged++;
             }
         }
-        recomputeGroups(clock.millis());
+        maybeRecomputeGroups(clock.millis(), false);
         return new HeartbeatForwardResponse(true, coordinatorId, accepted, merged);
     }
 
     public List<HostView> hosts() {
-        long now = clock.millis();
-        return states.values().stream()
-                .map(state -> state.toHostView(now))
-                .sorted(Comparator.comparing(HostView::cluster)
-                        .thenComparing(HostView::status)
-                        .thenComparing(HostView::agentId))
-                .toList();
+        return hostSnapshot(clock.millis());
     }
 
     public List<GroupView> groups() {
+        maybeRecomputeGroups(clock.millis(), true);
         return groupViews.values().stream()
                 .sorted(Comparator.comparing(GroupView::groupId))
                 .toList();
@@ -144,6 +151,9 @@ public class CoordinatorService {
     }
 
     private List<PulseMessage> responseMessages(String agentId) {
+        if (groupRecomputeDirty && !groupPlans.containsKey(agentId)) {
+            maybeRecomputeGroups(clock.millis(), true);
+        }
         List<PulseMessage> messages = new ArrayList<>();
         messages.add(groupPlanMessage(agentId));
         taskService.nextCommand(agentId).ifPresent(messages::add);
@@ -153,6 +163,7 @@ public class CoordinatorService {
     private long merge(AgentHeartbeat heartbeat, String source, long observedAtMs, List<PulseMessage> messages) {
         NodeState incoming = NodeState.fromHeartbeat(heartbeat, source, observedAtMs, messages);
         states.merge(heartbeat.agentId(), incoming, NodeState::newer);
+        markStateChanged();
         return states.get(heartbeat.agentId()).seq;
     }
 
@@ -161,12 +172,61 @@ public class CoordinatorService {
         NodeState existing = states.get(state.agentId());
         NodeState selected = existing == null ? incoming : NodeState.newer(existing, incoming);
         states.put(state.agentId(), selected);
+        markStateChanged();
         return selected == incoming;
+    }
+
+    private void markStateChanged() {
+        groupRecomputeDirty = true;
+        hostSnapshotAtMs = Long.MIN_VALUE;
+    }
+
+    private List<HostView> hostSnapshot(long now) {
+        List<HostView> snapshot = hostSnapshot;
+        if (!isStale(now, hostSnapshotAtMs, hostSnapshotTtlMs)) {
+            return snapshot;
+        }
+        synchronized (hostSnapshotLock) {
+            if (!isStale(now, hostSnapshotAtMs, hostSnapshotTtlMs)) {
+                return hostSnapshot;
+            }
+            List<HostView> rebuilt = buildHosts(now, true);
+            hostSnapshot = rebuilt;
+            hostSnapshotAtMs = now;
+            return rebuilt;
+        }
+    }
+
+    private List<HostView> buildHosts(long now, boolean sorted) {
+        List<HostView> hosts = new ArrayList<>(states.size());
+        for (NodeState state : states.values()) {
+            hosts.add(state.toHostView(now));
+        }
+        if (sorted) {
+            hosts.sort(Comparator.comparing(HostView::cluster)
+                    .thenComparing(HostView::status)
+                    .thenComparing(HostView::agentId));
+        }
+        return List.copyOf(hosts);
+    }
+
+    private void maybeRecomputeGroups(long now, boolean force) {
+        if (!force && (!groupRecomputeDirty || !isStale(now, lastGroupRecomputeAtMs, groupRecomputeIntervalMs))) {
+            return;
+        }
+        synchronized (groupRecomputeLock) {
+            if (!force && (!groupRecomputeDirty || !isStale(now, lastGroupRecomputeAtMs, groupRecomputeIntervalMs))) {
+                return;
+            }
+            recomputeGroups(now);
+            lastGroupRecomputeAtMs = now;
+            groupRecomputeDirty = false;
+        }
     }
 
     private void recomputeGroups(long now) {
         Map<String, List<HostView>> buckets = new HashMap<>();
-        for (HostView host : hosts()) {
+        for (HostView host : buildHosts(now, false)) {
             if (!"alive".equals(host.status())) {
                 continue;
             }
@@ -250,6 +310,19 @@ public class CoordinatorService {
         } catch (Exception ignored) {
             return "1/" + host.agentId();
         }
+    }
+
+    private static long positiveLong(String key, long fallback) {
+        try {
+            long value = Long.parseLong(System.getenv().getOrDefault(key, String.valueOf(fallback)));
+            return value > 0 ? value : fallback;
+        } catch (NumberFormatException exception) {
+            return fallback;
+        }
+    }
+
+    private static boolean isStale(long now, long lastBuiltAtMs, long ttlMs) {
+        return lastBuiltAtMs == Long.MIN_VALUE || now < lastBuiltAtMs || now - lastBuiltAtMs >= ttlMs;
     }
 
     private static final class NodeState {
