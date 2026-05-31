@@ -419,30 +419,31 @@ public final class HostTilesPage {
                     }
                     .task-shell {
                       display: grid;
-                      grid-template-columns: minmax(0, 1fr);
-                      grid-template-rows: auto minmax(0, 1fr);
-                      gap: var(--space-4);
+                      grid-template-columns: minmax(310px, 380px) minmax(0, 1fr);
+                      grid-template-rows: minmax(0, 1fr);
+                      gap: 18px;
                       flex: 1 1 auto;
                       min-height: 0;
                       overflow: hidden;
-                      padding: 20px;
+                      padding: 18px;
                     }
                     .task-sidebar {
                       display: grid;
                       grid-template-columns: minmax(0, 1fr);
-                      gap: var(--space-3);
-                      align-items: stretch;
+                      gap: 12px;
+                      align-content: start;
                       min-width: 0;
                       min-height: 0;
-                      overflow: visible;
+                      overflow: auto;
+                      padding-right: 2px;
                     }
                     .task-hero {
                       display: grid;
-                      grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
-                      gap: var(--space-3);
-                      align-items: center;
+                      grid-template-columns: minmax(0, 1fr);
+                      gap: 12px;
+                      align-items: stretch;
                       min-width: 0;
-                      padding: 14px 16px;
+                      padding: 16px;
                       border: 1px solid #dbeafe;
                       border-radius: 26px;
                       background:
@@ -480,7 +481,7 @@ public final class HostTilesPage {
                     }
                     .task-toolbar {
                       display: grid;
-                      grid-template-columns: minmax(220px, 1fr) minmax(120px, auto) minmax(96px, auto) minmax(84px, auto);
+                      grid-template-columns: 1fr 1fr;
                       gap: var(--space-2);
                       align-items: center;
                     }
@@ -498,7 +499,7 @@ public final class HostTilesPage {
                                   transform var(--motion-fast) var(--motion-ease-out);
                     }
                     .task-toolbar select {
-                      grid-column: auto;
+                      grid-column: 1 / -1;
                       min-width: 0;
                     }
                     .task-toolbar button {
@@ -533,11 +534,11 @@ public final class HostTilesPage {
                       box-shadow: 0 12px 28px rgba(37,99,235,.32);
                     }
                     .task-close-button {
-                      min-width: 92px;
+                      min-width: 0;
                     }
                     .task-summary {
                       display: grid;
-                      grid-template-columns: repeat(3, minmax(0, 1fr));
+                      grid-template-columns: 1fr;
                       gap: var(--space-2);
                     }
                     .task-stat {
@@ -564,8 +565,8 @@ public final class HostTilesPage {
                     }
                     .task-workspace {
                       display: grid;
-                      grid-template-rows: minmax(52px, max-content) minmax(0, 1fr);
-                      gap: var(--space-3);
+                      grid-template-rows: minmax(0, 1fr);
+                      gap: 0;
                       min-height: 0;
                       overflow: hidden;
                     }
@@ -585,27 +586,27 @@ public final class HostTilesPage {
                     }
                     .task-card.execution-card {
                       display: grid;
-                      grid-template-columns: auto minmax(0, 1fr);
-                      gap: var(--space-3);
-                      align-items: center;
+                      grid-template-columns: 1fr;
+                      gap: var(--space-2);
+                      align-items: stretch;
                       align-self: stretch;
                       overflow: hidden;
-                      padding-block: 10px;
+                      padding-block: 12px;
                     }
                     .task-card.execution-card h3 {
-                      margin: 0;
+                      margin: 0 0 2px;
                       white-space: nowrap;
                     }
                     .execution-card #task-execution {
-                      max-height: 52px;
+                      max-height: 112px;
                       overflow-y: auto;
                       overflow-x: hidden;
                       padding-right: var(--space-1);
                     }
                     .task-card.completion-card {
                       display: grid;
-                      grid-template-rows: auto auto auto minmax(0, 1fr);
-                      gap: var(--space-2);
+                      grid-template-rows: auto minmax(0, 1fr);
+                      gap: var(--space-3);
                       grid-column: span 1;
                       min-height: 0;
                       overflow: hidden;
@@ -677,7 +678,7 @@ public final class HostTilesPage {
                     }
                     .completion-strip {
                       display: grid;
-                      grid-template-columns: repeat(8, minmax(86px, 1fr));
+                      grid-template-columns: repeat(2, minmax(0, 1fr));
                       gap: var(--space-2);
                     }
                     .completion-strip div {
@@ -706,7 +707,7 @@ public final class HostTilesPage {
                     }
                     .completion-context {
                       display: grid;
-                      grid-template-columns: minmax(180px, 1fr) minmax(150px, .7fr) minmax(170px, .8fr);
+                      grid-template-columns: 1fr;
                       gap: var(--space-2);
                       margin-top: var(--space-2);
                       color: #475569;
@@ -735,6 +736,9 @@ public final class HostTilesPage {
                       align-items: center;
                       justify-content: space-between;
                       margin: 0;
+                    }
+                    .task-sidebar .editor-hint {
+                      display: none;
                     }
                     .task-output-tags {
                       display: flex;
@@ -867,19 +871,22 @@ public final class HostTilesPage {
                             <div class="task-stat"><span>Current run</span><strong id="task-current">Idle</strong></div>
                             <div class="task-stat"><span>Completion queue</span><strong id="task-completion-count">0</strong></div>
                           </div>
-                        </aside>
-                        <main class="task-workspace">
                           <section class="task-card execution-card">
                             <h3>Execution Queue</h3>
                             <div id="task-execution"></div>
                           </section>
-                          <section class="task-card completion-card">
+                          <section class="task-card completion-meta-card">
                             <h3>Completion Queue</h3>
                             <div id="task-completion-meta"></div>
                             <div class="task-output-tabs">
                               <div id="task-output-tags" class="task-output-tags"></div>
                               <div class="editor-hint">Monaco Editor · lazy load · auto wrap · context menu copy/format</div>
                             </div>
+                          </section>
+                        </aside>
+                        <main class="task-workspace">
+                          <section class="task-card completion-card">
+                            <h3>Completion Editor</h3>
                             <div id="task-output" class="task-output"></div>
                           </section>
                         </main>
