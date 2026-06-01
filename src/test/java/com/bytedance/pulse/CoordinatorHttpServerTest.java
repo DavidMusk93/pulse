@@ -222,6 +222,11 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("windowStart"));
         assertTrue(response.body().contains("displayAvg"));
         assertTrue(response.body().contains("sampledAtMs"));
+        assertTrue(response.body().contains("recordLoadSamples(this.state.hosts)"));
+        assertTrue(!response.body().contains("""
+                        updateTiles(grid, hosts) {
+                          recordLoadSamples(hosts);
+                """));
         assertTrue(!response.body().contains("sum: sample"));
         assertTrue(!response.body().contains("count: 1,"));
         assertTrue(!response.body().contains("265, 338"));

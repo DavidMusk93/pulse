@@ -1177,3 +1177,32 @@ mvn package
 - macOS 风格关闭点位于标题栏，不覆盖任务卡片。
 - `5min AVG` 在窗口内保持稳定。
 - 未发现新的溢出、横向滚动、hostname 泄漏或高光样式回归。
+
+### `5min AVG` 跨 Cluster 复测
+
+浏览器调试追加发现：
+
+- 初版修复把 `recordLoadSamples(hosts)` 放在每个 cluster 渲染入口内。
+- 由于 `recordLoadSamples` 会清理本轮未出现的 agent，不同 cluster 轮流渲染会误删其他 cluster 的窗口状态。
+- 结果是部分 tile 在下一轮刷新时重新采样，看起来仍在窗口内频繁更新。
+
+修复：
+
+- 将采样移动到 dashboard 入口：`recordLoadSamples(this.state.hosts)`。
+- `updateTiles(grid, hosts)` 只负责排序和 DOM 更新，不再执行采样。
+- 每轮 refresh 只对全量 hosts 采样一次，避免跨 cluster 互相清理。
+
+复测：
+
+- 本地 coordinator：`PULSE_PORT=9971`。
+- 两个固定 IPv6，分属不同 cluster：
+  - `fdbd:dc05:11:634::101` 初始 `1.20`，随后输入 `9.90`
+  - `fdbd:dc05:11:634::102` 初始 `2.20`，随后输入 `8.80`
+- 同一 5 分钟窗口内等待 5.8s 后再次读取同一 DOM key。
+
+结果：
+
+| IPv6 | First | Second | Stable |
+| --- | ---: | ---: | --- |
+| `fdbd:dc05:11:634::101` | `1.20` | `1.20` | yes |
+| `fdbd:dc05:11:634::102` | `2.20` | `2.20` | yes |

@@ -1120,6 +1120,7 @@ public final class HostTilesPage {
                             return;
                           }
                           this.ensureDashboardMode();
+                          recordLoadSamples(this.state.hosts);
                           this.updateClusters(groupByCluster(this.state.hosts));
                         },
                         renderMessage(className, text) {
@@ -1213,7 +1214,6 @@ public final class HostTilesPage {
                           this.render();
                         },
                         updateTiles(grid, hosts) {
-                          recordLoadSamples(hosts);
                           const sortedHosts = sortHosts(hosts);
                           const maxLoad = Math.max(0, ...sortedHosts.map(loadSortValue));
                           const activeAgents = new Set();
