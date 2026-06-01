@@ -38,8 +38,11 @@
   - 使用 Ant Design `Card`、`Statistic`、`Button`、`Select`、`Modal`、`Tabs`、`Badge`、`Progress`、`List` 等成熟组件替代粗糙手写组件。
   - 保留 `window.scrollX/scrollY` 与磁贴内部 scroll cursor，禁止整页刷新和整块重建。
   - 磁贴改为正方形，内部支持滚动，禁止文字覆盖。
-  - 磁贴 header 只保留时间、在线绿点和任务按钮；不显示“在线”文字，不在 header 展示确认数。
+  - 磁贴 header 只保留紧凑单行时间和任务按钮；在线绿点固定在磁贴角落，不显示“在线”文字，不在 header 展示确认数。
   - `Confirm` 放入磁贴正文指标区，任务按钮放入 header 右侧。
+  - `Seen` 时间使用 `MM/DD HH:mm:ss` 或更短单行格式，禁止默认 datetime 在窄磁贴中断成多行。
+  - 任务按钮只保留文字，不展示图标。
+  - tide worker 区改成紧凑属性行，展示更多 `pid/cpu/mem/port/version` 信息，超出内容由 `.tile-scroll` 滚动承载。
   - 修复 Ant Design Card 内部 flex 高度，确保 `.tile-scroll` 是真实可滚动容器。
   - 不同 cluster 使用不同低饱和冷静色，避免紫色、红色等高刺激亮色。
   - cluster 内按固定窗口 `5min AVG` 降序排序。

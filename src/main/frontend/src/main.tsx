@@ -20,7 +20,7 @@ import {
   Typography,
   theme
 } from 'antd';
-import { PlayCircleOutlined, InboxOutlined } from '@ant-design/icons';
+import { InboxOutlined } from '@ant-design/icons';
 import 'antd/dist/reset.css';
 import './style.css';
 
@@ -113,7 +113,9 @@ function formatLoad(value: number) {
 function formatTime(ms?: number) {
   if (!ms) return '-';
   try {
-    return new Date(ms).toLocaleString('zh-CN', { hour12: false });
+    const date = new Date(ms);
+    const pad = (value: number) => String(value).padStart(2, '0');
+    return `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
   } catch {
     return '-';
   }
@@ -213,7 +215,7 @@ function App() {
   const alive = hosts.filter(host => host.status === 'alive').length;
   const avgLoad = hosts.length ? hosts.reduce((sum, host) => sum + averageLoad(host), 0) / hosts.length : 0;
 
-  return <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm, token: { borderRadius: 18, colorPrimary: '#2563eb', fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' } }}>
+  return <ConfigProvider autoInsertSpaceInButton={false} theme={{ algorithm: theme.defaultAlgorithm, token: { borderRadius: 18, colorPrimary: '#2563eb', fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' } }}>
     <main className="pulse-page">
       <section className="pulse-hero">
         <Card className="hero-main" variant="outlined">
@@ -295,11 +297,11 @@ function HostTile({ host, onRun }: { host: HostView; onRun: () => void }) {
   const confirmations = host.heartbeat_confirmations ?? host.heartbeatConfirmations ?? 0;
   const workers = Array.isArray(host.state?.workers) ? host.state?.workers : Array.isArray(host.state?.tide_workers) ? host.state?.tide_workers : [];
   return <Card className="host-tile" style={{ ['--load-level' as any]: level }} data-agent-key={hostKey(host)} variant="borderless">
+    <Badge className="status-dot corner-status-dot" status={statusColor(host.status) as any} />
     <Flex className="tile-header" justify="space-between" align="start" gap={8}>
       <Typography.Text className="seen">{formatTime(host.observed_at_ms || host.observedAtMs)}</Typography.Text>
       <Space size={8} className="tile-actions">
-        <Badge className="status-dot" status={statusColor(host.status) as any} />
-        <Button className="run-button" type="primary" size="small" icon={<PlayCircleOutlined />} onClick={onRun} disabled={confirmations < 3 || host.status !== 'alive'}>任务</Button>
+        <Button className="run-button" type="primary" size="small" onClick={onRun} disabled={confirmations < 3 || host.status !== 'alive'}>任务</Button>
       </Space>
     </Flex>
     <div className="tile-scroll">
@@ -310,10 +312,15 @@ function HostTile({ host, onRun }: { host: HostView; onRun: () => void }) {
         <Col span={24}><Statistic title="Confirm" value={confirmations} /></Col>
       </Row>
       <Progress percent={Math.round(level * 100)} showInfo={false} strokeColor="hsl(var(--cluster-hue) 48% 24%)" trailColor="rgba(15,23,42,.24)" />
-      {workers.length > 0 && <List className="worker-list" size="small" dataSource={workers.slice(0, 4)} renderItem={(worker: any) => <List.Item>
-        <Typography.Text>pid {String(worker.pid || '')}</Typography.Text>
-        <Typography.Text type="secondary">cpu {String(worker.cpu_percent || '')}</Typography.Text>
-      </List.Item>} />}
+      {workers.length > 0 && <div className="worker-list">
+        {workers.slice(0, 12).map((worker: any, index: number) => <div className="worker-row" key={`${worker.pid || 'worker'}-${index}`}>
+          <Typography.Text className="worker-pid">pid {String(worker.pid || '-')}</Typography.Text>
+          <Typography.Text className="worker-metric">cpu {String(worker.cpu_percent || '-')}</Typography.Text>
+          <Typography.Text className="worker-metric">mem {String(worker.mem_percent || '-')}</Typography.Text>
+          {worker.port1 && <Typography.Text className="worker-metric">port {String(worker.port1)}</Typography.Text>}
+          {worker.component_version && <Typography.Text className="worker-version">{String(worker.component_version)}</Typography.Text>}
+        </div>)}
+      </div>}
     </div>
   </Card>;
 }

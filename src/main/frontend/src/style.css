@@ -92,6 +92,7 @@ body {
 .host-tile {
   aspect-ratio: 1 / 1;
   overflow: hidden;
+  position: relative;
   background: hsl(var(--cluster-hue) 42% calc(76% - var(--load-level) * 28%)) !important;
   border: 0 !important;
 }
@@ -105,23 +106,41 @@ body {
 }
 .tile-header {
   flex: 0 0 auto;
-  min-height: 28px;
+  min-height: 26px;
+  padding-left: 14px;
 }
 .tile-actions {
   flex: 0 0 auto;
+}
+.corner-status-dot {
+  position: absolute;
+  top: 16px;
+  left: 14px;
+  z-index: 1;
+  width: 8px;
+  height: 8px;
+  line-height: 1;
+}
+.corner-status-dot .ant-badge-status-dot {
+  position: static !important;
+  display: block !important;
+  top: 0 !important;
+  width: 8px;
+  height: 8px;
 }
 .status-dot .ant-badge-status-text {
   display: none;
 }
 .status-dot .ant-badge-status-dot {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
 }
 .seen {
   color: rgba(15, 23, 42, .72);
-  font-size: 11px;
-  line-height: 1.25;
+  font-size: 12px;
+  line-height: 24px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .ip-title.ant-typography {
   margin: 0 0 8px;
@@ -152,9 +171,34 @@ body {
 .host-tile .ant-statistic-content {
   font-size: 13px;
 }
-.worker-list .ant-list-item {
-  padding: 4px 0;
-  border-block-end-color: rgba(255,255,255,.18) !important;
+.worker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 8px;
+}
+.worker-row {
+  display: grid;
+  grid-template-columns: minmax(52px, .8fr) minmax(46px, .7fr) minmax(46px, .7fr);
+  gap: 4px 6px;
+  padding: 6px 0;
+  border-top: 1px solid rgba(255, 255, 255, .18);
+}
+.worker-pid,
+.worker-metric,
+.worker-version {
+  min-width: 0;
+  color: rgba(255, 255, 255, .92) !important;
+  font-size: 10px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.worker-version {
+  grid-column: 1 / -1;
+  color: rgba(255, 255, 255, .72) !important;
 }
 .run-button {
   flex: 0 0 auto;

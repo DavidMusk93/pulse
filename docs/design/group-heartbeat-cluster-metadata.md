@@ -491,9 +491,12 @@ Web 页面按 `cluster` 进行一级分组：
 - 磁贴不做额外交互动效，保持自然滚动；禁止持续播放的水波、扫光、果冻抖动或背景动态。
 - cluster 只用于 section/group 表达，不在单个 agent 磁贴中重复展示。
 - 磁贴不展示 hostname，不展示 `Seq` 和 `Rank`；所有可见节点地址只展示 IPv6。
-- 磁贴 header 展示 `Seen` datetime、在线状态点和任务按钮；在线状态只显示绿色点，不显示“在线”等文字。
+- 磁贴 header 展示紧凑单行 `Seen` 时间和任务按钮；在线状态点固定在磁贴角落，参考 Apple 式克制状态提示，只显示绿色点，不显示“在线”等文字。
 - 磁贴正文展示 `IP`、`Area`、`5min AVG`、`Confirm`。
 - `Confirm` 不放在 header，必须放入磁贴正文指标区。
+- `Seen` 时间禁止使用浏览器默认 `toLocaleString` 长格式，必须压缩为 `MM/DD HH:mm:ss` 或更短的单行格式，避免窄磁贴中断成多行。
+- 任务按钮只展示文字，不展示播放等图标，避免操作区过重。
+- tide worker 列表必须展示更多进程属性，至少包含 `pid`、`cpu_percent`、`mem_percent`、`port1`、`component_version` 中可用字段，并通过磁贴内部滚动承载更多行。
 - 卡片内不展示瞬时 `Load`，避免 5s 轮询导致数值抖动和频繁重排。
 - `5min AVG` 由前端在本地固定窗口计算；每个 5 分钟窗口开始时只采样计算一次，窗口内禁止继续累计或更新展示值，避免 5s 轮询造成视觉抖动。
 - `Area` 和 `Zone` 语义重复时只展示 `Area`，不展示 `Zone`。

@@ -1579,3 +1579,75 @@ SHA256：
 - `Confirm` 保留在磁贴正文指标区。
 - `.tile-scroll` 在真实线上数据下存在 overflow 且可滚动。
 - 页面继续保持 IPv6-only 和本地静态资源，无外部 CDN。
+
+## Apple 式磁贴信息密度修复
+
+验证时间：2026-06-01 14:30 CST。
+
+需求：
+
+- 沉淀 `.tmp/` 使用规范，避免临时脚本和数据污染项目结构。
+- datetime 展示不能在窄磁贴中断成多行。
+- tide worker `pid` 及其属性展示更多。
+- `任务` 按钮不需要图标。
+- 在线状态绿点放在角落里，参考 Apple 的克制状态提示。
+
+实现结果：
+
+- 新增 `.skill/tmp.md`，后续临时脚本、日志、数据、报告统一放入 `.tmp/`，且 `.tmp/` 已由 `.gitignore` 忽略。
+- `Seen` 时间从浏览器默认 datetime 改为 `MM/DD HH:mm:ss`，并通过 `white-space: nowrap` 保持单行。
+- 状态点改为 `.corner-status-dot`，绝对定位在磁贴左上角，只保留点，不显示文字。
+- `任务` 按钮移除播放图标，并关闭 Ant Design 中文按钮自动插空。
+- tide worker 展示从最多 4 行 `pid/cpu` 扩展为最多 12 行 `pid/cpu/mem/port/version`，由 `.tile-scroll` 承载溢出滚动。
+
+本地构建：
+
+```bash
+cd src/main/frontend
+npm run build
+cd /Users/bytedance/Documents/01_Projects/pulse
+mvn test
+mvn package
+```
+
+结果：
+
+- `npm run build`：成功。
+- `mvn test`：`22 tests, 0 failures, 0 errors`。
+- `mvn package`：构建成功。
+
+SHA256：
+
+| 文件 | SHA256 |
+| --- | --- |
+| `target/pulse-0.1.0-SNAPSHOT.jar` | `7a9725adef1c8e25fc0d14544b9f2de580c2310d8826f19e8ed040e3ceeb47ba` |
+| `src/main/resources/static/pulse-hosts.js` | `da2f67ba6b6319ec5d569873a1f836d7fbc5de1823ca76f12ae3df86b941e417` |
+| `src/main/resources/static/pulse-hosts.css` | `6dc6bce47e0a6671dac2e3a395f20960ee9cdcbe1bbe2b94e1253acdc9087057` |
+
+浏览器验证：
+
+- 启动本地 coordinator：`PULSE_PORT=9975`。
+- 使用 `.tmp/scripts/check-host-tile-apple.js` 通过 Chrome DevTools Protocol 检查 DOM 与布局。
+- 验证报告保留在 `.tmp/reports/check-host-tile-apple.json`，不进入提交。
+
+测量结果：
+
+| 项目 | 结果 |
+| --- | --- |
+| `headerText` | `06/01 14:30:24\n任务` |
+| `seenText` | `06/01 14:30:24` |
+| `seenLines` | `1` |
+| `seenNoWrap` | `nowrap` |
+| `runText` | `任务` |
+| `runHasIcon` | `false` |
+| `cornerDotExists` | `true` |
+| `dotNearCorner` | `true` |
+| `headerHasOnlineText` | `false` |
+| `headerHasConfirm` | `false` |
+| `workerRowCount` | `12` |
+| `workerHasMem` | `true` |
+| `workerHasPort` | `true` |
+| `workerHasVersion` | `true` |
+| `scrollHeight` | `924` |
+| `scrollMoved` | `true` |
+| `overflowY` | `auto` |
