@@ -491,12 +491,13 @@ Web 页面按 `cluster` 进行一级分组：
 - 磁贴不做额外交互动效，保持自然滚动；禁止持续播放的水波、扫光、果冻抖动或背景动态。
 - cluster 只用于 section/group 表达，不在单个 agent 磁贴中重复展示。
 - 磁贴不展示 hostname，不展示 `Seq` 和 `Rank`；所有可见节点地址只展示 IPv6。
-- 磁贴 header 采用三段式克制布局：左侧独立状态点，中间单行短时间，右侧纯文字任务按钮；禁止状态点与任务按钮挤在一起。
+- 磁贴 header 只展示单行短时间与纯文字任务按钮；取消独立状态点，agent 状态通过 `任务` 按钮背景色表达。
 - 磁贴正文展示 `IP`、`Area`、`5min AVG`、`Confirm`。
 - `Confirm` 不放在 header，必须放入磁贴正文指标区。
-- `Seen` 时间禁止使用浏览器默认 `toLocaleString` 长格式；磁贴内只展示 `HH:mm:ss` 或同等短格式，完整时间只允许进入 `title/tooltip`，避免窄磁贴中断成多行。
-- 任务按钮只展示文字，不展示播放等图标，避免操作区过重。
+- `Seen` 时间禁止使用浏览器默认 `toLocaleString` 长格式；磁贴内展示 `YYYY/MM/DD HH:mm:ss`，并保持单行不换行。
+- 任务按钮只展示文字，不展示播放等图标；按钮背景色承载状态语义，`alive` 使用绿色系，`warming` 使用黄色系，`expired` 使用灰色系。
 - 磁贴最小宽度必须足够承载 header 与进程卡片，禁止为了密度把磁贴压缩到导致 header 换行或 pid 信息拥挤的宽度。
+- 对 `Coordinator`、磁贴时间、IPv6 等超长单行文本，前端应优先在容器内自适应缩小字号，避免直接溢出、裁切主体信息或把布局撑坏。
 - tide worker 列表必须以轻量进程卡片展示，避免表格硬塞；至少包含 `pid`、总 `cpu_percent`、`user_cpu_percent`、`sys_cpu_percent`、`rss_kb`、`mem_percent`、`threads`、`port1`、`component_version` 中可用字段，并通过磁贴内部滚动承载更多行。
 - 卡片内不展示瞬时 `Load`，避免 5s 轮询导致数值抖动和频繁重排。
 - `5min AVG` 由前端在本地固定窗口计算；每个 5 分钟窗口开始时只采样计算一次，窗口内禁止继续累计或更新展示值，避免 5s 轮询造成视觉抖动。
@@ -509,8 +510,8 @@ Web 页面按 `cluster` 进行一级分组：
 - 任务按钮必须水平排列，禁止按钮文字竖排或因空间挤压折行。
 - Run UI 不再展示“执行任务”标题，由执行按钮承担语义；任务类型选择控件必须展开为操作栏主区域，避免左侧任务框被压缩。
 - Run UI 关闭控件参考 macOS 窗口控制点，放在独立标题栏内，禁止绝对定位覆盖业务 UI。
-- 任务执行中状态必须从当前 host 的 `state.async_tasks` 读取，并在 agent 已接收或正在执行时优先显示。
-- Run UI 的 completion 输出必须展示，不允许空白吞掉 JSON；当输出是 JSON 时必须提供一键格式化、拷贝和基础高亮能力，优先用 Ant Design `Typography`、`Button`、`Segmented` 等成熟组件组合实现，不再手写粗糙纯文本框。
+- 任务执行中状态必须从当前 host 的 `state.async_tasks` 读取，并在 agent 已接收或正在执行时在结果区顶部用显著提示条展示。
+- Run UI 的 completion 输出必须展示，不允许空白吞掉 JSON；当输出是 JSON 时必须提供一键格式化、拷贝和基础高亮能力，结果区域必须是内部滚动容器，禁止大 JSON 撑破 modal 或页面。
 - `prepare_disk_layout_dry_run` 的 agent 端脚本来源为 olap-toolbox 的 `tidelet/prepare-disk-layout.sh`；更新时必须先同步到 Pulse 仓库 `docs/task/prepare-disk-layout.sh`，再分发到所有 agent 的 `/data24/otf/pulse/tasks/prepare-disk-layout.sh`。
 
 UI 开发门禁：
@@ -532,7 +533,7 @@ UI 开发门禁：
 - 中文排版参考 Apple 官网的克制表达：减少负字距，增加留白，标题避免过密、过重、过长。
 - 所有可见节点标识必须经过 IPv6-only 归一化，hostname、FQDN 和内部域名不得出现在页面文本或 DOM 标识里。
 - `5min AVG` 的排序与展示必须使用同一份固定窗口开窗采样结果，禁止窗口内每次轮询更新样本、均值或排序权重。
-- Run UI 和磁贴 UI 的最终验收必须在 coordinator 线上页面完成，使用真实浏览器确认 header 不换行、状态点与任务按钮分离、pid 卡片可读、completion JSON 可展示/格式化/拷贝、高亮、agent 执行中状态、IPv6-only 和无高光样式。
+- Run UI 和磁贴 UI 的最终验收必须在 coordinator 线上页面完成，使用真实浏览器确认 header 不换行、无独立状态点、任务按钮承载状态色、pid 卡片可读、completion JSON 可展示/格式化/拷贝、高亮、agent 执行中状态、IPv6-only 和无高光样式。
 - 远程任务脚本更新必须验证本地 `bash -n`、`--help`、SHA 一致性，并通过 auto-ops dry-run 确认全量 agent 范围后再分发；分发脚本不得重启 agent。
 
 ## 部署设计

@@ -1830,3 +1830,43 @@ JSON 格式化确认：
 - pid 信息已从拥挤 inline 文本变成进程卡片，可读性提升，且展示 user/sys/rss/threads。
 - 真实任务 JSON completion 已展示，支持格式化、拷贝和高亮。
 - 验证在 coordinator 线上服务完成，并实际执行任务确认展示。
+
+## 文本自适应缩放修复
+
+验证时间：2026-06-01 15:35 CST。
+
+需求：
+
+- `Coordinator` 卡片中的 IPv6 文本过长，当前会直接溢出。
+- 长时间文本和长 IPv6 应优先缩小字号，避免把卡片撑破。
+
+实现结果：
+
+- 新增前端 `AutoFitText` 组件，使用 `ResizeObserver` 在容器变化后重新测量文本宽高。
+- `Coordinator` 指标卡使用 `AutoFitText`，在 `14px ~ 28px` 范围内自适应缩小字号。
+- 磁贴 `Seen` 时间同样接入 `AutoFitText`，在 `9px ~ 11px` 范围内自适应缩小。
+- 对超长单行文本保留 `nowrap`，优先缩小，再做省略，避免主体内容直接溢出。
+
+本地构建：
+
+```bash
+cd src/main/frontend
+npm run build
+cd /Users/bytedance/Documents/01_Projects/pulse
+mvn test
+mvn package
+```
+
+结果：
+
+- `npm run build`：成功。
+- `mvn test`：`22 tests, 0 failures, 0 errors`。
+- `mvn package`：成功。
+
+SHA256：
+
+| 文件 | SHA256 |
+| --- | --- |
+| `target/pulse-0.1.0-SNAPSHOT.jar` | `b9265cfcc695a7d8a9b82944df638a5892070e7c729cc055e9b6aad2e03848ec` |
+| `src/main/resources/static/pulse-hosts.js` | `757cc960eb51fd5fb6d51d79041026aa5353d4faa103d074f52ccb49a80c94e6` |
+| `src/main/resources/static/pulse-hosts.css` | `dc57877d3ca12505f7f8f02aecd8d17ff97466df302e7c2075dc03a6155434c6` |

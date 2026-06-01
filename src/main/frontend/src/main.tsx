@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
+  Alert,
   Badge,
   Button,
   Card,
@@ -127,7 +128,7 @@ function formatSeenTime(ms?: number) {
   try {
     const date = new Date(ms);
     const pad = (value: number) => String(value).padStart(2, '0');
-    return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+    return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
   } catch {
     return '-';
   }
@@ -266,7 +267,7 @@ function App() {
         <Col xs={12} md={4}><Card><Statistic title="主机" value={hosts.length} suffix="台" loading={loading}/></Card></Col>
         <Col xs={12} md={4}><Card><Statistic title="在线率" value={hosts.length ? Math.round(alive * 100 / hosts.length) : 0} suffix="%"/></Card></Col>
         <Col xs={12} md={4}><Card><Statistic title="5min AVG" value={formatLoad(avgLoad)}/></Card></Col>
-        <Col xs={12} md={4}><Card><Statistic title="Coordinator" value={normalizeAddress(window.location.host)}/></Card></Col>
+        <Col xs={12} md={4}><Card><Statistic title="Coordinator" valueRender={() => <AutoFitText className="metric-fit-value" text={normalizeAddress(window.location.host)} minFontSize={14} maxFontSize={28} />} /></Card></Col>
         <Col xs={12} md={4}><Card><Statistic title="刷新" value="5s"/></Card></Col>
         <Col xs={12} md={4}><Card><Statistic title="框架" value="Ant Design"/></Card></Col>
       </Row>
@@ -321,11 +322,8 @@ function HostTile({ host, onRun }: { host: HostView; onRun: () => void }) {
   const observedAt = host.observed_at_ms || host.observedAtMs;
   return <Card className="host-tile" style={{ ['--load-level' as any]: level }} data-agent-key={hostKey(host)} variant="borderless">
     <Flex className="tile-header" justify="space-between" align="center" gap={10}>
-      <Space size={8} className="tile-seen" title={formatTime(observedAt)}>
-        <span className={`status-led status-led-${statusColor(host.status)}`} />
-        <Typography.Text className="seen">{formatSeenTime(observedAt)}</Typography.Text>
-      </Space>
-      <Button className="run-button" type="primary" size="small" onClick={onRun} disabled={confirmations < 3 || host.status !== 'alive'}>任务</Button>
+      <AutoFitText className="seen" title={formatTime(observedAt)} text={formatSeenTime(observedAt)} minFontSize={9} maxFontSize={11} />
+      <Button className="run-button" data-status={statusColor(host.status)} type="primary" size="small" onClick={onRun} disabled={confirmations < 3 || host.status !== 'alive'}>任务</Button>
     </Flex>
     <div className="tile-scroll">
       <Typography.Title level={4} className="ip-title" data-field="ip_title">{normalizeAddress(host.ip)}</Typography.Title>
@@ -373,6 +371,7 @@ function TaskModal(props: {
   const executions = props.snapshot?.execution_queue || [];
   const latestCompletion = completions[0];
   const completionText = props.output || (latestCompletion ? completionOutput(latestCompletion) : (agentTask ? runningTaskText(agentTask) : ''));
+  const asyncTask = agentTask || executions[0];
   return <Modal open={props.open} onCancel={props.onClose} footer={null} width="min(1320px, calc(100vw - 44px))" className="task-modal" title={null} closeIcon={<span className="mac-close" />}>
     <div className="task-shell">
       <Space direction="vertical" size={12} className="task-sidebar">
@@ -391,7 +390,14 @@ function TaskModal(props: {
         </Card>
       </Space>
       <Card className="task-workspace" title="结果查看" variant="outlined">
-        <Tabs items={[{ key: 'output', label: 'Completion', children: <CompletionViewer value={completionText} /> }, { key: 'trace', label: 'Trace', children: <List dataSource={props.snapshot?.traces || []} renderItem={(trace: any) => <List.Item><Typography.Text>{formatTime(trace.observed_at_ms || trace.observedAtMs)} · {trace.event || trace.status || '-'}</Typography.Text></List.Item>} /> }]} />
+        {asyncTask && !latestCompletion && <Alert
+          className="agent-async-alert"
+          type={asyncTask.status === 'running' ? 'info' : 'warning'}
+          showIcon
+          message={`agent ${statusLabel(asyncTask.status)}，等待 completion`}
+          description={`${taskLabels[asyncTask.task_type] || asyncTask.task_type || '-'} · ${asyncTask.task_id || ''}`}
+        />}
+        <Tabs items={[{ key: 'output', label: 'Completion', children: <CompletionViewer value={completionText} /> }, { key: 'trace', label: 'Trace', children: <List className="trace-list" dataSource={props.snapshot?.traces || []} renderItem={(trace: any) => <List.Item><Typography.Text>{formatTime(trace.observed_at_ms || trace.observedAtMs)} · {trace.event || trace.status || '-'}</Typography.Text></List.Item>} /> }]} />
       </Card>
     </div>
   </Modal>;
@@ -413,6 +419,47 @@ function CompletionViewer({ value }: { value: string }) {
       ? <pre className="task-output json-output" dangerouslySetInnerHTML={{ __html: highlightJson(display) }} />
       : <pre className="task-output">{display}</pre>}
   </div>;
+}
+
+function AutoFitText({
+  text,
+  className,
+  title,
+  minFontSize = 10,
+  maxFontSize = 24
+}: {
+  text: string;
+  className?: string;
+  title?: string;
+  minFontSize?: number;
+  maxFontSize?: number;
+}) {
+  const wrapperRef = useRef<HTMLSpanElement | null>(null);
+  const textRef = useRef<HTMLSpanElement | null>(null);
+
+  useLayoutEffect(() => {
+    const wrapper = wrapperRef.current;
+    const node = textRef.current;
+    if (!wrapper || !node) return;
+
+    const fit = () => {
+      let size = maxFontSize;
+      node.style.fontSize = `${size}px`;
+      while (size > minFontSize && (node.scrollWidth > wrapper.clientWidth || node.scrollHeight > wrapper.clientHeight)) {
+        size -= 1;
+        node.style.fontSize = `${size}px`;
+      }
+    };
+
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(wrapper);
+    return () => observer.disconnect();
+  }, [text, minFontSize, maxFontSize]);
+
+  return <span className={`auto-fit ${className || ''}`.trim()} ref={wrapperRef} title={title || text}>
+    <span className="auto-fit-content" ref={textRef}>{text}</span>
+  </span>;
 }
 
 function runningTaskText(task: any) {

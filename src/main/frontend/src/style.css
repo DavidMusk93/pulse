@@ -73,6 +73,27 @@ body {
 .metric-row .ant-card-body {
   padding: 14px 16px !important;
 }
+.auto-fit {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+.auto-fit-content {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  white-space: nowrap;
+  line-height: inherit;
+}
+.metric-fit-value {
+  font-weight: 600;
+  line-height: 1.15;
+}
+.metric-fit-value .auto-fit-content {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .error-card {
   margin-bottom: 16px;
 }
@@ -107,37 +128,15 @@ body {
 .tile-header {
   flex: 0 0 auto;
   min-height: 28px;
-}
-.tile-seen {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-.status-led {
-  flex: 0 0 auto;
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: rgba(100, 116, 139, .65);
-}
-.status-led-success {
-  background: #34c759;
-}
-.status-led-processing {
-  background: #0a84ff;
-}
-.status-led-warning {
-  background: #ff9f0a;
-}
-.status-led-error {
-  background: #ff453a;
+  gap: 8px !important;
 }
 .seen {
+  min-width: 0;
+  flex: 1 1 auto;
   color: rgba(15, 23, 42, .72);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 24px;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 .ip-title.ant-typography {
   margin: 0 0 8px;
@@ -214,8 +213,27 @@ body {
 }
 .run-button {
   flex: 0 0 auto;
+  min-width: 44px;
+  padding-inline: 10px !important;
   white-space: nowrap;
   writing-mode: horizontal-tb;
+  border: 0 !important;
+  color: #fff !important;
+}
+.run-button[data-status="success"] {
+  background: #34c759 !important;
+}
+.run-button[data-status="processing"] {
+  background: #0a84ff !important;
+}
+.run-button[data-status="warning"] {
+  background: #ff9f0a !important;
+}
+.run-button[data-status="error"],
+.run-button[data-status="default"],
+.run-button:disabled {
+  background: rgba(100, 116, 139, .68) !important;
+  color: rgba(255, 255, 255, .84) !important;
 }
 .ant-modal-content {
   box-shadow: none !important;
@@ -264,10 +282,32 @@ body {
 .task-workspace .ant-card-body {
   height: calc(100% - 57px);
   padding: 0 14px 14px !important;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.agent-async-alert {
+  flex: 0 0 auto;
+  margin-bottom: 10px;
+}
+.task-workspace .ant-tabs {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.task-workspace .ant-tabs-content-holder,
+.task-workspace .ant-tabs-content,
+.task-workspace .ant-tabs-tabpane {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 .task-output {
   min-height: 0;
   height: calc(61.8vh - 148px);
+  max-height: 100%;
   margin: 0;
   padding: 14px;
   overflow: auto;
@@ -290,7 +330,13 @@ body {
 }
 .completion-viewer .task-output {
   flex: 1 1 auto;
-  height: auto;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+}
+.trace-list {
+  height: 100%;
+  overflow: auto;
 }
 .json-output {
   white-space: pre;
