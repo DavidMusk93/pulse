@@ -1206,3 +1206,46 @@ mvn package
 | --- | ---: | ---: | --- |
 | `fdbd:dc05:11:634::101` | `1.20` | `1.20` | yes |
 | `fdbd:dc05:11:634::102` | `2.20` | `2.20` | yes |
+
+### 线上二次升级与最终浏览器验证
+
+升级时间：2026-06-01 12:04 CST。
+
+部署结果：
+
+- 仅升级 3 台 coordinator。
+- Jar SHA256：`00d30a71173e25a860d4e347c2fe2e8dab7c2e505ccc973382a65cb41fecb129`。
+- `summary: total=3 ok=3 failed=0 elapsed=2s`。
+- 三台 `pulse-coordinator.service` 均为 `active`。
+
+远端浏览器验证：
+
+- 访问：`http://[fdbd:dc05:11:634::45]:9966/hosts`，Chrome 通过 `socks5://127.0.0.1:6699` 代理。
+- 样本 tile：`fdbd:dc02:1a:34::16`。
+- 同一 5 分钟窗口内读取两次：
+  - 第一次：`274.24`，窗口位置 `150675ms`。
+  - 第二次：`274.24`，窗口位置 `156482ms`。
+  - `loadStableSameTileWithinWindow=true`。
+- 页面源码确认：
+  - `hasGlobalSampling=true`。
+  - `hasTileSampling=false`。
+
+UI 指标：
+
+| 项目 | 结果 |
+| --- | --- |
+| `tileCount` | `471` |
+| `aliveTileCount` | `471` |
+| `h1` | `心跳平台，连接运维现场` |
+| `subtitle` | `任务、资源、监控与告警，沿一条消息链自然流动。` |
+| `titleToolbarSameRow` | `true` |
+| `closeOverlapsHero` | `false` |
+| `taskAgent` | `fdbd:dc02:1a:34::16` |
+| `visibleTextHasHostname` | `false` |
+| `htmlHasForbiddenStyle` | `false` |
+| `htmlHasForbiddenData` | `false` |
+| `workspaceToSidebar` | `1.618` |
+| `panelToViewportHeight` | `0.621` |
+| `outputBelowCompletion` | `false` |
+| `outputBelowPanel` | `false` |
+| `horizontal` | `false` |
