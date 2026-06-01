@@ -69,12 +69,12 @@ public final class HostTilesPage {
                       background: #f3f6fb;
                     }
                     header {
-                      padding: 28px clamp(18px, 4vw, 56px) 18px;
+                      padding: clamp(42px, 7vw, 88px) clamp(22px, 6vw, 96px) 28px;
                     }
                     .hero-shell {
                       display: grid;
-                      grid-template-columns: minmax(0, 1.618fr) minmax(280px, 1fr);
-                      gap: 22px;
+                      grid-template-columns: minmax(0, 1.42fr) minmax(300px, .86fr);
+                      gap: clamp(24px, 4vw, 56px);
                       align-items: stretch;
                     }
                     .hero-card,
@@ -85,7 +85,7 @@ public final class HostTilesPage {
                       background: #ffffff;
                     }
                     .hero-card {
-                      padding: clamp(22px, 3vw, 34px);
+                      padding: clamp(28px, 4vw, 52px);
                     }
                     .hero-eyebrow {
                       display: inline-flex;
@@ -100,35 +100,37 @@ public final class HostTilesPage {
                     }
                     h1 {
                       margin: 0;
-                      max-width: 760px;
-                      font-size: clamp(34px, 5vw, 64px);
-                      line-height: .96;
-                      font-weight: 900;
-                      letter-spacing: -0.075em;
+                      max-width: 860px;
+                      font-size: clamp(40px, 5.8vw, 78px);
+                      line-height: 1.06;
+                      font-weight: 780;
+                      letter-spacing: -0.025em;
                       color: #111827;
                     }
                     .subtitle {
-                      max-width: 680px;
-                      margin-top: 16px;
+                      max-width: 720px;
+                      margin-top: 22px;
                       color: #475569;
-                      font-size: clamp(15px, 1.6vw, 18px);
-                      line-height: 1.55;
+                      font-size: clamp(17px, 1.8vw, 24px);
+                      line-height: 1.45;
+                      letter-spacing: -.01em;
                     }
                     .hero-actions {
                       display: flex;
                       flex-wrap: wrap;
                       gap: 12px;
-                      margin-top: 22px;
+                      margin-top: 34px;
                     }
                     .hero-cta,
                     .hero-secondary {
                       display: inline-flex;
                       align-items: center;
                       justify-content: center;
-                      min-height: 44px;
+                      min-height: 50px;
                       border-radius: 999px;
-                      padding: 0 18px;
-                      font-weight: 850;
+                      padding: 0 24px;
+                      font-size: 16px;
+                      font-weight: 760;
                       text-decoration: none;
                     }
                     .hero-cta {
@@ -522,44 +524,36 @@ public final class HostTilesPage {
                       color: var(--color-foreground);
                     }
                     .task-panel-head {
-                      position: absolute;
-                      top: 14px;
-                      right: var(--space-5);
-                      left: var(--space-5);
-                      z-index: 1;
                       display: flex;
                       align-items: center;
-                      justify-content: flex-end;
-                      gap: var(--space-4);
-                      pointer-events: none;
+                      min-height: 42px;
+                      padding: 0 18px;
+                      border-bottom: 1px solid var(--color-border);
+                      background: #f8fafc;
                     }
-                    .task-panel-title {
-                      display: none;
-                      color: var(--color-muted-fg);
-                      font: 700 12px/1 var(--font-num);
-                      letter-spacing: .08em;
-                      text-transform: uppercase;
+                    .task-window-controls {
+                      display: flex;
+                      align-items: center;
+                      gap: 8px;
                     }
                     .task-panel-close {
                       display: inline-flex;
                       align-items: center;
                       justify-content: center;
-                      width: 36px;
-                      height: 36px;
-                      border: 1px solid var(--color-border-strong);
+                      width: 13px;
+                      height: 13px;
+                      border: 1px solid #dc2626;
                       border-radius: 999px;
-                      background: #ffffff;
-                      color: var(--color-foreground);
-                      font: 700 18px/1 var(--font-num);
+                      background: #ff5f57;
+                      color: transparent;
+                      font-size: 0;
                       cursor: pointer;
-                      pointer-events: auto;
                     }
                     .task-panel-close:hover {
-                      border-color: var(--color-ring);
-                      color: var(--color-ring);
+                      background: #e0443e;
                     }
                     .task-panel-close:focus-visible {
-                      outline: 2px solid var(--color-ring);
+                      outline: 2px solid #2563eb;
                       outline-offset: 2px;
                     }
                     .task-shell {
@@ -584,9 +578,9 @@ public final class HostTilesPage {
                     }
                     .task-hero {
                       display: grid;
-                      grid-template-columns: minmax(0, 1fr);
-                      gap: 12px;
-                      align-items: stretch;
+                      grid-template-columns: minmax(116px, .72fr) minmax(0, 1.28fr);
+                      gap: 14px;
+                      align-items: center;
                       min-width: 0;
                       padding: 16px;
                       border: 1px solid #dbeafe;
@@ -597,18 +591,13 @@ public final class HostTilesPage {
                       min-width: 0;
                     }
                     .task-eyebrow {
-                      margin: 0 0 6px;
-                      color: #2563eb;
-                      font-size: 12px;
-                      font-weight: 800;
-                      letter-spacing: .12em;
-                      text-transform: uppercase;
+                      display: none;
                     }
                     .task-hero h2 {
                       margin: 0;
-                      font-size: clamp(20px, 2.2vw, 26px);
+                      font-size: clamp(20px, 2.1vw, 25px);
                       line-height: 1.08;
-                      letter-spacing: -.05em;
+                      letter-spacing: -.03em;
                       overflow-wrap: anywhere;
                     }
                     .task-trace {
@@ -619,6 +608,7 @@ public final class HostTilesPage {
                       flex-wrap: nowrap;
                       gap: var(--space-2);
                       align-items: center;
+                      min-width: 0;
                     }
                     .task-toolbar button,
                     .task-toolbar select {
@@ -628,6 +618,7 @@ public final class HostTilesPage {
                       color: var(--color-foreground);
                       padding: 11px 14px;
                       font: 600 14px/1.2 inherit;
+                      white-space: nowrap;
                       transition: background-color var(--motion-fast) var(--motion-ease-out),
                                   border-color var(--motion-fast) var(--motion-ease-out),
                                   transform var(--motion-fast) var(--motion-ease-out);
@@ -635,6 +626,7 @@ public final class HostTilesPage {
                     .task-toolbar select {
                       flex: 1 1 auto;
                       min-width: 0;
+                      max-width: 100%;
                       padding-right: 12px;
                       background: #ffffff;
                     }
@@ -971,11 +963,11 @@ public final class HostTilesPage {
                     <div class="hero-shell">
                       <section class="hero-card">
                         <p class="hero-eyebrow">Pulse 心跳平台</p>
-                        <h1>心跳驱动运维闭环</h1>
-                        <div class="subtitle">用一条精简消息链连接任务、资源、监控与告警。</div>
+                        <h1>心跳平台，连接运维现场</h1>
+                        <div class="subtitle">任务、资源、监控与告警，沿一条消息链自然流动。</div>
                         <div class="hero-actions">
-                          <a class="hero-cta" href="#pulse-app">查看主机</a>
-                          <a class="hero-secondary" href="#pulse-app">查看能力</a>
+                          <a class="hero-cta" href="#pulse-app">主机</a>
+                          <a class="hero-secondary" href="#pulse-app">能力</a>
                         </div>
                       </section>
                       <aside class="demo-stack" aria-label="平台能力概览">
@@ -1003,25 +995,24 @@ public final class HostTilesPage {
                   <div id="task-modal" class="task-modal" aria-hidden="true">
                     <section class="task-panel" role="dialog" aria-modal="true" aria-labelledby="task-title">
                       <div class="task-panel-head">
-                        <div class="task-panel-title">远程任务</div>
-                        <button id="task-close-x" class="task-panel-close" type="button" aria-label="关闭任务面板">×</button>
+                        <div class="task-window-controls">
+                          <button id="task-close-x" class="task-panel-close" type="button" aria-label="关闭任务面板"></button>
+                        </div>
                       </div>
                       <div class="task-shell">
                         <aside class="task-sidebar">
                           <div class="task-hero">
                             <div>
-                              <p class="task-eyebrow">任务执行</p>
                               <h2 id="task-title">执行任务</h2>
                               <div id="task-trace" class="task-trace">trace: pending</div>
                             </div>
                             <div class="task-toolbar">
                               <select id="task-type" aria-label="任务类型">
-                                <option value="prepare_disk_layout_dry_run">prepare_disk_layout_dry_run</option>
-                                <option value="analyze_block_layout_dry_run">analyze_block_layout_dry_run</option>
+                                <option value="prepare_disk_layout_dry_run">磁盘布局 dry-run</option>
+                                <option value="analyze_block_layout_dry_run">块分布 dry-run</option>
                               </select>
-                              <button id="task-run" class="task-primary">执行 dry-run</button>
+                              <button id="task-run" class="task-primary">执行</button>
                               <button id="task-pop">弹出结果</button>
-                              <button id="task-close" class="task-close-button" aria-label="关闭">关闭</button>
                             </div>
                           </div>
                           <div class="task-summary">
@@ -1066,7 +1057,6 @@ public final class HostTilesPage {
                       const taskType = document.getElementById('task-type');
                       const taskRun = document.getElementById('task-run');
                       const taskPop = document.getElementById('task-pop');
-                      const taskClose = document.getElementById('task-close');
                       const taskCloseX = document.getElementById('task-close-x');
                       const loadAverageWindowMs = 5 * 60 * 1000;
                       const loadWindows = new Map();
@@ -1337,36 +1327,22 @@ public final class HostTilesPage {
                       function recordLoadSamples(hosts) {
                         const now = Date.now();
                         const activeAgents = new Set();
+                        const windowStart = now - (now % loadAverageWindowMs);
                         hosts.forEach(host => {
                           const agentId = host.agent_id || host.ip || '';
                           if (!agentId) {
                             return;
                           }
                           activeAgents.add(agentId);
-                          const sample = loadValue(host);
-                          const windowStart = now - (now % loadAverageWindowMs);
                           let state = loadWindows.get(agentId);
-                          if (!state) {
+                          if (!state || state.windowStart !== windowStart) {
                             loadWindows.set(agentId, {
                               windowStart,
-                              sum: sample,
-                              count: 1,
-                              displayAvg: sample
+                              displayAvg: loadValue(host),
+                              sampledAtMs: now
                             });
                             return;
                           }
-                          if (state.windowStart !== windowStart) {
-                            state = {
-                              windowStart,
-                              sum: sample,
-                              count: 1,
-                              displayAvg: state.count ? state.sum / state.count : state.displayAvg
-                            };
-                            loadWindows.set(agentId, state);
-                            return;
-                          }
-                          state.sum += sample;
-                          state.count += 1;
                         });
                         [...loadWindows.keys()].forEach(agentId => {
                           if (!activeAgents.has(agentId)) {
@@ -1927,7 +1903,6 @@ public final class HostTilesPage {
                         activeRunTaskId = '';
                         activeCompletionTaskId = '';
                       }
-                      taskClose.onclick = closeTaskModal;
                       taskCloseX.onclick = closeTaskModal;
                       taskModal.addEventListener('click', event => {
                         if (event.target === taskModal) {

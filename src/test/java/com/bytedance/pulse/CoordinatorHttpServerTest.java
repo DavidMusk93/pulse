@@ -123,8 +123,8 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("Pulse 心跳平台"));
         assertTrue(response.body().contains("data-framework=\"PulseView\""));
         assertTrue(response.body().contains("fetch('/api/hosts'"));
-        assertTrue(response.body().contains("心跳驱动运维闭环"));
-        assertTrue(response.body().contains("用一条精简消息链连接任务、资源、监控与告警。"));
+        assertTrue(response.body().contains("心跳平台，连接运维现场"));
+        assertTrue(response.body().contains("任务、资源、监控与告警，沿一条消息链自然流动。"));
         assertTrue(response.body().contains("cluster-section"));
         assertTrue(response.body().contains("aspect-ratio: 1 / 1"));
         assertTrue(response.body().contains("tile-scroll"));
@@ -143,7 +143,9 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("data-field=\"seen\""));
         assertTrue(response.body().contains("data-action=\"run-task\""));
         assertTrue(response.body().contains("task-modal"));
-        assertTrue(response.body().contains("任务执行"));
+        assertTrue(!response.body().contains("任务执行"));
+        assertTrue(response.body().contains("task-window-controls"));
+        assertTrue(response.body().contains("task-panel-close"));
         assertTrue(response.body().contains("task-summary"));
         assertTrue(response.body().contains("结果队列"));
         assertTrue(response.body().contains("目标节点"));
@@ -163,6 +165,8 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("每 2 秒自动刷新一次"));
         assertTrue(response.body().contains("prepare_disk_layout_dry_run"));
         assertTrue(response.body().contains("analyze_block_layout_dry_run"));
+        assertTrue(response.body().contains("磁盘布局 dry-run"));
+        assertTrue(response.body().contains("块分布 dry-run"));
         assertTrue(!response.body().contains("shell command"));
         assertTrue(response.body().contains("border-radius: 28px"));
         assertTrue(response.body().contains("border-radius: 16px"));
@@ -217,6 +221,9 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("const loadWindows = new Map()"));
         assertTrue(response.body().contains("windowStart"));
         assertTrue(response.body().contains("displayAvg"));
+        assertTrue(response.body().contains("sampledAtMs"));
+        assertTrue(!response.body().contains("sum: sample"));
+        assertTrue(!response.body().contains("count: 1,"));
         assertTrue(!response.body().contains("265, 338"));
         assertTrue(!response.body().contains("http-equiv=\"refresh\""));
     }

@@ -493,13 +493,15 @@ Web 页面按 `cluster` 进行一级分组：
 - 磁贴 header 展示 `Seen` datetime 与 status。
 - 磁贴正文展示 `IP`、`Area`、`5min AVG`、`Confirm`。
 - 卡片内不展示瞬时 `Load`，避免 5s 轮询导致数值抖动和频繁重排。
-- `5min AVG` 由前端在本地自行聚合，但必须采用固定 5 分钟窗口；窗口开始后仅累计样本，不更新展示值，窗口切换时再提交上一窗口均值。
+- `5min AVG` 由前端在本地固定窗口计算；每个 5 分钟窗口开始时只采样计算一次，窗口内禁止继续累计或更新展示值，避免 5s 轮询造成视觉抖动。
 - `Area` 和 `Zone` 语义重复时只展示 `Area`，不展示 `Zone`。
 - 磁贴不展示 `Role` 和 `Source`。
 - 磁贴展示每个 `tide_worker` 的 `pid`、`cpu_percent`、`mem_percent`、`PORT1`、`TIDELET_COMPONENT_VERSION`；`pid` 变化用于判断进程重启。
 - Run UI 页面宽高与主页面留白使用黄金分割思路控制，避免占满视口或形成狭窄弹窗。
 - Run UI 左侧信息区与右侧 completion 展示区按 `1 : 1.618` 分栏，completion 承担主要阅读空间。
 - 任务按钮必须水平排列，禁止按钮文字竖排或因空间挤压折行。
+- Run UI 标题和任务操作必须并排，避免“任务执行/执行任务”语义重复和左侧任务框被压缩。
+- Run UI 关闭控件参考 macOS 窗口控制点，放在独立标题栏内，禁止绝对定位覆盖业务 UI。
 - 任务执行中状态必须从当前 host 的 `state.async_tasks` 读取，并在 agent 已接收或正在执行时优先显示。
 
 UI 开发门禁：
@@ -515,8 +517,9 @@ UI 开发门禁：
 - 磁贴动效不得抢占视觉焦点，当前禁止 `jelly-scroll`、`water-ripple`、`liquid-flow` 一类额外动效。
 - 禁止使用 `box-shadow`、`backdrop-filter`、`linear-gradient`、`radial-gradient` 或其他高光/发光/模糊表达。
 - 所有面对用户的 UI 文案必须使用简洁中文，禁止课程化、营销化和英文 slogan。
+- 中文排版参考 Apple 官网的克制表达：减少负字距，增加留白，标题避免过密、过重、过长。
 - 所有可见节点标识必须经过 IPv6-only 归一化，hostname、FQDN 和内部域名不得出现在页面文本或 DOM 标识里。
-- `5min AVG` 的排序与展示必须使用同一份固定窗口结果，禁止每次轮询都重新计算滑动均值并触发卡片重排。
+- `5min AVG` 的排序与展示必须使用同一份固定窗口开窗采样结果，禁止窗口内每次轮询更新样本、均值或排序权重。
 - Run UI 必须用真实浏览器验证黄金比例、按钮水平排列、agent 执行中状态、IPv6-only 和无高光样式。
 
 ## 部署设计

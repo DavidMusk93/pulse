@@ -41,14 +41,17 @@
   - cluster 内按固定窗口 `5min AVG` 降序排序。
   - `5min AVG` 越高磁贴色彩越重，并展示深色轨道和 cluster 深色填充的 load bar。
   - 卡片不展示瞬时 `Load`，只展示前端本地聚合的固定窗口 `5min AVG`。
-  - `5min AVG` 在窗口开始后冻结展示值，窗口切换时再提交上一窗口均值，避免频繁重排和视觉抖动。
+  - `5min AVG` 在每个 5 分钟窗口开始时只采样计算一次，窗口内不继续累计、不更新展示值、不更新排序权重，避免频繁重排和视觉抖动。
   - 去掉额外交互动效，保持自然滚动，禁止 `jelly-scroll`、持续水波或扫光背景动态。
   - 去掉 UI 高光表达，禁止 `box-shadow`、`backdrop-filter`、`linear-gradient`、`radial-gradient` 等发光、模糊或渐变效果。
   - 任意可见位置只展示 IPv6；hostname、FQDN 和内部域名不得进入文案、DOM data key 或任务标题。
   - 页面描述保持心跳平台定位，精简表达任务、集群、资源、监控和告警能力，避免重复叙述。
+  - 中文排版学习 Apple 官网的留白、克制字重和舒展字距，避免大标题拥挤。
   - Run UI 按黄金分割组织：面板尺寸约为主页面视口的黄金比例，左侧信息区与右侧 completion 区约为 `1 : 1.618`。
   - Run UI 从 `state.async_tasks` 展示 agent `accepted/running` 状态，在 completion 结果返回前给出执行中反馈。
   - 任务按钮和工具栏按钮水平排列，禁止竖排、折行和压缩成不可读状态。
+  - Run UI 标题和任务操作并排，去掉“任务执行/执行任务”重复表达。
+  - 关闭控件改为 macOS 风格窗口控制点，放在独立标题栏，不覆盖业务内容。
 
 ## 阶段 2.1：减压型分组策略设计补充
 
@@ -123,6 +126,8 @@
   - 验证 `/hosts` 包含 `normalizeAddress`、`data-agent-key`、`renderAgentTasks`、`activeAgentTask`、`task-progress-row`、`statusLabel`。
   - 验证 Run UI 包含黄金分割 CSS：`height: min(820px, 61.8vh)` 与 `grid-template-columns: minmax(300px, 1fr) minmax(0, 1.618fr)`。
   - 验证任务按钮包含 `white-space: nowrap` 与 `writing-mode: horizontal-tb`。
+  - 验证 `recordLoadSamples` 仅在窗口开始时写入 `displayAvg`，窗口内不累计 `sum/count`。
+  - 使用浏览器验证中文主标题不拥挤、任务标题与操作并排、macOS 风格关闭按钮不与内容重叠。
 - 执行：
 
 ```bash

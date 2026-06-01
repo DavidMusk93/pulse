@@ -1095,3 +1095,85 @@ Forbidden UI 确认不包含：
 - `outputBelowPanel=false`。
 - `horizontal=false`。
 - 任务按钮与工具栏按钮均为 `nowrap/horizontal-tb`。
+
+## Apple 风格排版与 Run UI 纠偏验证
+
+验证时间：2026-06-01 11:56 CST。
+
+需求：
+
+- 中文展示学习 Apple 官网，减少拥挤感。
+- 去掉“任务执行/执行任务”重复表达。
+- 任务类型选择与执行按钮和标题并排，避免任务框压缩。
+- 关闭按钮改为类似 macOS 软件窗口控制点，不覆盖业务 UI。
+- `5min AVG` 只在窗口开始时计算一次，窗口内不频繁更新。
+- 继续通过浏览器调试检查其他问题。
+
+实现结果：
+
+- Hero 标题改为 `心跳平台，连接运维现场`，放宽字距、行高和留白。
+- 副标题改为 `任务、资源、监控与告警，沿一条消息链自然流动。`。
+- Run UI 标题区改为两列：左侧 `执行任务`，右侧任务类型选择和操作按钮。
+- 任务类型 option 展示为短中文：`磁盘布局 dry-run`、`块分布 dry-run`，value 保持原 allowlist。
+- 移除工具栏 `关闭` 按钮，保留标题栏左侧 macOS 风格关闭点。
+- `recordLoadSamples` 改为每个固定 5 分钟窗口开始时只写入一次 `displayAvg` 与 `sampledAtMs`，窗口内不再维护 `sum/count`。
+
+本地验证：
+
+```bash
+mvn test
+mvn package
+```
+
+结果：
+
+- `mvn test`：`22 tests, 0 failures, 0 errors`。
+- `mvn package`：构建成功。
+- Jar SHA256：`dccdc07a1bb7015ea7801e8fb2183ce217ead066cc671515047fd741307a9c8d`。
+
+浏览器验证：
+
+- 启动本地 coordinator：`PULSE_PORT=9970`。
+- 注入测试心跳，初始 `load=1.20`，随后同一 5 分钟窗口内更新为 `load=9.90`。
+- 使用 headless Chrome + CDP 打开 `http://127.0.0.1:9970/hosts`，点击首个 `任务` 按钮并测量 DOM。
+
+浏览器测量结果：
+
+| 项目 | 结果 |
+| --- | --- |
+| `h1` | `心跳平台，连接运维现场` |
+| `h1Style.letterSpacing` | `-1.856px` |
+| `h1Style.fontWeight` | `780` |
+| `subtitle` | `任务、资源、监控与告警，沿一条消息链自然流动。` |
+| `titleToolbarSameRow` | `true` |
+| `closeOverlapsHero` | `false` |
+| `taskAgent` | `fdbd:dc05:11:634::45` |
+| `taskCurrent` | `执行中` |
+| `agentTaskStatusVisible` | `true` |
+| `visibleTextHasHostname` | `false` |
+| `htmlHasForbiddenStyle` | `false` |
+| `htmlHasForbiddenData` | `false` |
+| `workspaceToSidebar` | `1.618` |
+| `panelToViewportHeight` | `0.621` |
+| `outputBelowCompletion` | `false` |
+| `outputBelowPanel` | `false` |
+| `horizontal` | `false` |
+| `firstLoad` | `1.20` |
+| `secondLoadAfterInputChange` | `1.20` |
+| `loadStableWithinWindow` | `true` |
+
+按钮测量：
+
+| 按钮 | 结果 |
+| --- | --- |
+| 磁贴任务按钮 | `nowrap/horizontal-tb/38x21` |
+| `执行` | `nowrap/horizontal-tb/57x43` |
+| `弹出结果` | `nowrap/horizontal-tb/84x43` |
+
+结论：
+
+- 中文标题不再使用过密负字距。
+- 任务标题与任务操作已并排。
+- macOS 风格关闭点位于标题栏，不覆盖任务卡片。
+- `5min AVG` 在窗口内保持稳定。
+- 未发现新的溢出、横向滚动、hostname 泄漏或高光样式回归。
