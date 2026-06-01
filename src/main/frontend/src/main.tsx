@@ -35,10 +35,24 @@ type HostView = {
   observedAtMs?: number;
   expire_at_ms?: number;
   expireAtMs?: number;
+  last_observed_age_ms?: number;
+  lastObservedAgeMs?: number;
   heartbeat_confirmations?: number;
   heartbeatConfirmations?: number;
   status?: string;
   source?: string;
+  group_id?: string;
+  groupId?: string;
+  group_mode?: string;
+  groupMode?: string;
+  leader_agent_id?: string;
+  leaderAgentId?: string;
+  leader_url?: string;
+  leaderUrl?: string;
+  group_size?: number;
+  groupSize?: number;
+  group_size_limit?: number;
+  groupSizeLimit?: number;
   host?: string;
   ip?: string;
   cluster?: string;
@@ -71,6 +85,15 @@ function normalizeAddress(value?: string) {
   const raw = String(value || '').replaceAll('[', '').replaceAll(']', '');
   if (!raw || raw.includes('.')) return '-';
   return raw;
+}
+
+function normalizeUrlHost(value?: string) {
+  if (!value) return '-';
+  try {
+    return normalizeAddress(new URL(value).hostname);
+  } catch {
+    return normalizeAddress(value);
+  }
 }
 
 function agentId(host: HostView) {
@@ -132,6 +155,13 @@ function formatSeenTime(ms?: number) {
   } catch {
     return '-';
   }
+}
+
+function formatAge(ms?: number) {
+  if (ms === undefined || ms === null || !Number.isFinite(ms)) return '-';
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60_000)}m${String(Math.floor((ms % 60_000) / 1000)).padStart(2, '0')}s`;
 }
 
 function statusLabel(status?: string) {
@@ -206,6 +236,11 @@ function clusterNeedsAttention(hosts: HostView[]) {
 function workerValue(worker: any, key: string, fallback = '-') {
   const value = worker?.[key];
   return value === undefined || value === null || value === '' ? fallback : String(value);
+}
+
+function hostDebugValue(host: HostView, snakeKey: keyof HostView, camelKey: keyof HostView, fallback: any = '-') {
+  const value = host[snakeKey] ?? host[camelKey];
+  return value === undefined || value === null || value === '' ? fallback : value;
 }
 
 function formatRssMb(worker: any) {
@@ -413,6 +448,12 @@ function HostTile({ host, onRun }: { host: HostView; onRun: () => void }) {
   const confirmations = host.heartbeat_confirmations ?? host.heartbeatConfirmations ?? 0;
   const workers = Array.isArray(host.state?.workers) ? host.state?.workers : Array.isArray(host.state?.tide_workers) ? host.state?.tide_workers : [];
   const observedAt = host.observed_at_ms || host.observedAtMs;
+  const lastObservedAge = hostDebugValue(host, 'last_observed_age_ms', 'lastObservedAgeMs', undefined) as number | undefined;
+  const groupId = String(hostDebugValue(host, 'group_id', 'groupId'));
+  const groupMode = String(hostDebugValue(host, 'group_mode', 'groupMode'));
+  const leaderUrl = String(hostDebugValue(host, 'leader_url', 'leaderUrl'));
+  const groupSize = hostDebugValue(host, 'group_size', 'groupSize', '-');
+  const groupSizeLimit = hostDebugValue(host, 'group_size_limit', 'groupSizeLimit', '-');
   return <Card className="host-tile" style={{ ['--load-level' as any]: level }} data-agent-key={hostKey(host)} variant="borderless">
     <Flex className="tile-header" justify="space-between" align="center" gap={10}>
       <AutoFitText className="seen" title={formatTime(observedAt)} text={formatSeenTime(observedAt)} minFontSize={9} maxFontSize={11} />
@@ -423,8 +464,18 @@ function HostTile({ host, onRun }: { host: HostView; onRun: () => void }) {
       <Row gutter={[8, 8]}>
         <Col span={12}><Statistic title="Area" value={host.area || '-'} /></Col>
         <Col span={12}><Statistic title="5min AVG" value={formatLoad(avg)} valueStyle={{ fontSize: 18 }} /></Col>
-        <Col span={24}><Statistic title="Confirm" value={confirmations} /></Col>
+        <Col span={24}><Statistic title="20s确认" value={confirmations} /></Col>
       </Row>
+      <div className="debug-panel">
+        <Typography.Text className="debug-title">调试</Typography.Text>
+        <div className="debug-grid">
+          <span>age {formatAge(lastObservedAge)}</span>
+          <span>mode {groupMode}</span>
+          <span>group {groupId}</span>
+          <span>size {groupSize}/{groupSizeLimit}</span>
+          <span>leader {normalizeUrlHost(leaderUrl)}</span>
+        </div>
+      </div>
       <Progress percent={Math.round(level * 100)} showInfo={false} strokeColor="hsl(var(--cluster-hue) 48% 24%)" trailColor="rgba(15,23,42,.24)" />
       {workers.length > 0 && <div className="worker-list">
         {workers.slice(0, 8).map((worker: any, index: number) => <div className="worker-card" key={`${worker.pid || 'worker'}-${index}`}>

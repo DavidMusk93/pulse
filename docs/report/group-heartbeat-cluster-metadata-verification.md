@@ -2048,3 +2048,54 @@ Coordinator-only 线上升级验证：
   - 三台 `/assets/pulse-hosts.js` 均包含 `pulse.cluster-collapse.v1` 与 `异常展开`
   - 三台 `/assets/pulse-hosts.css` 均包含 `cluster-section-collapsed` 与 `cluster-toggle-button`
   - 三台 `/hosts` 均继续加载 `/assets/pulse-hosts.js` 与 `/assets/pulse-hosts.css`
+
+## Group 调试字段展示
+
+验证时间：2026-06-01 20:20 CST。
+
+需求：
+
+- 按 group leader 聚合行为分析建议，为 host view 增加只读调试字段。
+- 让 UI 能解释 transient warming、group leader 聚合和 lazy sync，而不是只展示一个容易误解的确认数。
+
+实现结果：
+
+- `/api/hosts` 顶层新增：
+  - `last_observed_age_ms`
+  - `group_id`
+  - `group_mode`
+  - `leader_agent_id`
+  - `leader_url`
+  - `group_size`
+  - `group_size_limit`
+- 前端磁贴新增 `调试` 区，展示 `age`、`mode`、`group`、`size`、`leader`。
+- 可见 leader 使用 `leader_url` 中的 IPv6 归一化展示，避免 hostname/FQDN 进入 UI。
+- `Confirm` 文案改为 `20s确认`，降低被误解为 coordinator 数或 group size 的风险。
+
+本地验证：
+
+- `npm run build`：通过。
+- `mvn test`：通过，22 个测试全部通过。
+- `mvn package`：通过。
+
+Coordinator-only 线上升级验证：
+
+- 目标：
+  - `fdbd:dc05:11:634::45`
+  - `fdbd:dc05:13:10c::40`
+  - `fdbd:dc07:0:810::44`
+- 部署结果：`summary: total=3 ok=3 failed=0`
+- 远端 `/api/hosts` 校验：三台均返回完整调试字段。
+
+远端样本：
+
+| coordinator | host_count | sample `group_id` | sample `group_mode` | sample `leader_url` | sample `group_size` |
+| --- | ---: | --- | --- | --- | --- |
+| `fdbd:dc05:11:634::45` | `471` | `cdn2/hl/000` | `leader` | `http://[fdbd:dc02:1a:34::13]:9977` | `7/7` |
+| `fdbd:dc05:13:10c::40` | `471` | `cdn2/hl/000` | `leader` | `http://[fdbd:dc02:1a:34::13]:9977` | `7/7` |
+| `fdbd:dc07:0:810::44` | `471` | `cdn2/hl/000` | `leader` | `http://[fdbd:dc02:1a:34::13]:9977` | `7/7` |
+
+远端静态资源校验：
+
+- 三台 `/assets/pulse-hosts.js` 均包含 `20s确认`、`debug-panel`、`last_observed_age_ms`、`group_id`、`leader_url`、`调试`。
+- 三台 `/assets/pulse-hosts.css` 均包含 `.debug-panel` 与 `.debug-grid`。

@@ -494,6 +494,9 @@ Web 页面按 `cluster` 进行一级分组：
 - 磁贴不展示 hostname，不展示 `Seq` 和 `Rank`；所有可见节点地址只展示 IPv6。
 - 磁贴 header 只展示单行短时间与纯文字任务按钮；取消独立状态点，agent 状态通过 `任务` 按钮背景色表达。
 - 磁贴正文展示 `IP`、`Area`、`5min AVG`、`Confirm`。
+- 磁贴必须提供轻量只读调试字段，帮助解释 group heartbeat 聚合行为；至少包含 `last_observed_age_ms`、`group_id`、`group_mode`、`leader_agent_id`、`group_size`、`group_size_limit`，用于区分 transient warming、leader 聚合和 lazy sync 收敛。
+- 调试字段只用于观测，不参与 agent 获取 plan，也不新增控制 API；group plan 仍只能通过 heartbeat response 的 `cmd.group_plan` 下发。
+- `Confirm` 文案应避免被理解为 coordinator 数或 group size，UI 中应使用 `20s确认` 或等价文案。
 - `Confirm` 不放在 header，必须放入磁贴正文指标区。
 - `Seen` 时间禁止使用浏览器默认 `toLocaleString` 长格式；磁贴内展示 `YYYY/MM/DD HH:mm:ss`，并保持单行不换行。
 - 任务按钮只展示文字，不展示播放等图标；按钮背景色承载状态语义，`alive` 使用绿色系，`warming` 使用黄色系，`expired` 使用灰色系。

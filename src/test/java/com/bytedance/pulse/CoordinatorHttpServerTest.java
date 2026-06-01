@@ -79,6 +79,11 @@ class CoordinatorHttpServerTest {
         HttpResponse<String> hosts = get("/api/hosts");
         assertEquals(200, hosts.statusCode());
         assertTrue(hosts.body().contains("host-a"));
+        assertTrue(hosts.body().contains("last_observed_age_ms"));
+        assertTrue(hosts.body().contains("group_id"));
+        assertTrue(hosts.body().contains("group_mode"));
+        assertTrue(hosts.body().contains("leader_agent_id"));
+        assertTrue(hosts.body().contains("group_size_limit"));
     }
 
     @Test
@@ -144,6 +149,12 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("ResizeObserver"));
         assertTrue(js.body().contains("auto-fit"));
         assertTrue(js.body().contains("confirmations"));
+        assertTrue(js.body().contains("20s确认"));
+        assertTrue(js.body().contains("last_observed_age_ms"));
+        assertTrue(js.body().contains("group_id"));
+        assertTrue(js.body().contains("leader_url"));
+        assertTrue(js.body().contains("debug-panel"));
+        assertTrue(js.body().contains("调试"));
         assertTrue(js.body().contains("pulse.cluster-collapse.v1"));
         assertTrue(js.body().contains("localStorage"));
         assertTrue(js.body().contains("warming"));
@@ -193,6 +204,8 @@ class CoordinatorHttpServerTest {
         assertTrue(css.body().contains(".run-button[data-status=success]"));
         assertTrue(!css.body().contains(".status-led"));
         assertTrue(css.body().contains(".worker-card"));
+        assertTrue(css.body().contains(".debug-panel"));
+        assertTrue(css.body().contains(".debug-grid"));
         assertTrue(css.body().contains(".completion-viewer"));
         assertTrue(css.body().contains(".agent-async-alert"));
         assertTrue(css.body().contains(".trace-list"));

@@ -31,6 +31,13 @@ class CoordinatorServiceTest {
         assertEquals("area-a", host.area());
         assertEquals("alive", host.status());
         assertEquals(3, host.heartbeatConfirmations());
+        assertEquals(0, host.lastObservedAgeMs());
+        assertEquals("cluster-a/area-a/000", host.groupId());
+        assertEquals("leader", host.groupMode());
+        assertEquals("agent-1", host.leaderAgentId());
+        assertEquals("http://10.0.0.1:9977", host.leaderUrl());
+        assertEquals(1, host.groupSize());
+        assertEquals(7, host.groupSizeLimit());
         assertEquals("cmd.group_plan", response.messages().get(0).type());
     }
 
@@ -263,6 +270,8 @@ class CoordinatorServiceTest {
         HostView host = service.hosts().get(0);
         assertEquals("host-1", host.host());
         assertEquals("cdn2/yg/000", host.source());
+        assertEquals("direct", host.groupId());
+        assertEquals("direct", host.groupMode());
         assertEquals(1, host.state().size());
     }
 

@@ -200,7 +200,7 @@ public class CoordinatorService {
     private List<HostView> buildHosts(long now, boolean sorted) {
         List<HostView> hosts = new ArrayList<>(states.size());
         for (NodeState state : states.values()) {
-            hosts.add(state.toHostView(now));
+            hosts.add(state.toHostView(now, groupPlans.getOrDefault(state.agentId, AgentGroupPlan.direct(state.agentId, groupSizeLimit))));
         }
         if (sorted) {
             hosts.sort(Comparator.comparing(HostView::cluster)
@@ -401,9 +401,10 @@ public class CoordinatorService {
             return new NodeState(agentId, epoch, seq, ttlMs, observedAtMs, nextConfirmations, source, state);
         }
 
-        private HostView toHostView(long now) {
+        private HostView toHostView(long now, AgentGroupPlan plan) {
             int confirmations = recentConfirmations(now);
             String status = now > expireAtMs ? "expired" : confirmations >= ALIVE_CONFIRMATION_THRESHOLD ? "alive" : "warming";
+            AgentGroupPlan debugPlan = plan == null ? AgentGroupPlan.direct(agentId, 1) : plan;
             return new HostView(
                     agentId,
                     epoch,
@@ -411,9 +412,16 @@ public class CoordinatorService {
                     ttlMs,
                     observedAtMs,
                     expireAtMs,
+                    Math.max(0, now - observedAtMs),
                     confirmations,
                     status,
                     source,
+                    debugPlan.groupId(),
+                    debugPlan.groupMode(),
+                    debugPlan.leaderAgentId(),
+                    debugPlan.leaderUrl(),
+                    debugPlan.members().size(),
+                    debugPlan.sizeLimit(),
                     value("host", agentId),
                     value("ip", "-"),
                     value("cluster", "unknown"),
