@@ -1651,3 +1651,51 @@ SHA256：
 | `scrollHeight` | `924` |
 | `scrollMoved` | `true` |
 | `overflowY` | `auto` |
+
+线上部署与验证：
+
+- 升级时间：2026-06-01 14:32 CST。
+- 仅升级 3 台 coordinator，未重启 agent。
+- Jar SHA256：`7a9725adef1c8e25fc0d14544b9f2de580c2310d8826f19e8ed040e3ceeb47ba`。
+- `summary: total=3 ok=3 failed=0 elapsed=2s`。
+- 三台 `pulse-coordinator.service` 均为 `active`。
+
+远端浏览器验证：
+
+- 访问：`http://[fdbd:dc05:11:634::45]:9966/hosts`，Chrome 通过 `socks5://127.0.0.1:6699` 代理。
+- 使用 `.tmp/scripts/check-remote-host-tile-apple.js` 通过 Chrome DevTools Protocol 检查 DOM 与布局。
+- 验证报告保留在 `.tmp/reports/check-remote-host-tile-apple.json`，不进入提交。
+
+测量结果：
+
+| 项目 | 结果 |
+| --- | --- |
+| `tileCount` | `471` |
+| `headerText` | `06/01 14:32:28\n任务` |
+| `seenText` | `06/01 14:32:28` |
+| `seenLines` | `1` |
+| `seenNoWrap` | `nowrap` |
+| `runText` | `任务` |
+| `runHasIcon` | `false` |
+| `cornerDotExists` | `true` |
+| `dotNearCorner` | `true` |
+| `headerHasOnlineText` | `false` |
+| `headerHasConfirm` | `false` |
+| `workerRowCount` | `4` |
+| `firstWorkerText` | `pid 1005155\ncpu 1467.04\nmem 5.64\nport 7511\n1.1.0.6371` |
+| `workerHasMem` | `true` |
+| `workerHasPort` | `true` |
+| `workerHasVersion` | `true` |
+| `scrollHeight` | `452` |
+| `scrollMoved` | `true` |
+| `overflowY` | `auto` |
+| `hasHostnameLiteral` | `false` |
+| `hasExternalAsset` | `false` |
+
+结论：
+
+- 线上 datetime 已压缩为单行短格式，不再断成 4 行。
+- `任务` 按钮无图标且无中文自动插空。
+- 在线绿点已固定到磁贴角落，header 不再承担状态展示。
+- tide worker 区展示更多属性，线上可见 `pid/cpu/mem/port/version`。
+- `.tile-scroll` 继续支持真实滚动，页面保持 IPv6-only 和本地静态资源。
