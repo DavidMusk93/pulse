@@ -60,6 +60,7 @@ type TaskSnapshot = {
 const loadAverageWindowMs = 5 * 60 * 1000;
 const palette = [205, 188, 168, 146, 126, 95, 48, 215, 200, 178];
 const loadWindows = new Map<string, { windowStart: number; displayAvg: number; sampledAtMs: number }>();
+const clusterCollapseStorageKey = 'pulse.cluster-collapse.v1';
 
 const taskLabels: Record<string, string> = {
   prepare_disk_layout_dry_run: '磁盘布局 dry-run',
@@ -163,12 +164,43 @@ function groupByCluster(hosts: HostView[]) {
   return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
 }
 
+function loadCollapsedClusters() {
+  try {
+    const raw = window.localStorage.getItem(clusterCollapseStorageKey);
+    const parsed = raw ? JSON.parse(raw) : {};
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter(([, value]) => value === true));
+  } catch {
+    return {};
+  }
+}
+
+function persistCollapsedClusters(value: Record<string, boolean>) {
+  try {
+    window.localStorage.setItem(clusterCollapseStorageKey, JSON.stringify(value));
+  } catch {
+    // Ignore storage failures and keep UI usable.
+  }
+}
+
 function clusterHue(index: number) {
   return palette[index % palette.length];
 }
 
 function sortHosts(hosts: HostView[]) {
   return [...hosts].sort((left, right) => averageLoad(right) - averageLoad(left) || normalizeAddress(left.ip).localeCompare(normalizeAddress(right.ip)));
+}
+
+function taskNeedsAttention(task: any) {
+  const status = String(task?.status || '');
+  return ['queued', 'delivered', 'accepted', 'running', 'failed', 'timeout', 'timed_out', 'rejected'].includes(status);
+}
+
+function clusterNeedsAttention(hosts: HostView[]) {
+  return hosts.some(host => {
+    if (host.status === 'warming' || host.status === 'expired') return true;
+    return activeHostTasks(host).some(taskNeedsAttention);
+  });
 }
 
 function workerValue(worker: any, key: string, fallback = '-') {
@@ -195,6 +227,7 @@ function App() {
   const [snapshot, setSnapshot] = useState<TaskSnapshot | null>(null);
   const [output, setOutput] = useState('');
   const [taskType, setTaskType] = useState('prepare_disk_layout_dry_run');
+  const [collapsedClusters, setCollapsedClusters] = useState<Record<string, boolean>>(() => loadCollapsedClusters());
   const viewport = useRef({ left: 0, top: 0 });
 
   async function refreshHosts() {
@@ -234,8 +267,27 @@ function App() {
   }, [activeHost?.ip, activeHost?.agent_id, activeHost?.agentId]);
 
   const groups = useMemo(() => groupByCluster(hosts), [hosts]);
+  const attentionClusters = useMemo(() => new Set(groups.filter(([, clusterHosts]) => clusterNeedsAttention(clusterHosts)).map(([cluster]) => cluster)), [groups]);
   const alive = hosts.filter(host => host.status === 'alive').length;
   const avgLoad = hosts.length ? hosts.reduce((sum, host) => sum + averageLoad(host), 0) / hosts.length : 0;
+
+  useEffect(() => {
+    setCollapsedClusters(prev => {
+      let changed = false;
+      const next = { ...prev };
+      attentionClusters.forEach(cluster => {
+        if (next[cluster]) {
+          delete next[cluster];
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [attentionClusters]);
+
+  useEffect(() => {
+    persistCollapsedClusters(collapsedClusters);
+  }, [collapsedClusters]);
 
   return <ConfigProvider autoInsertSpaceInButton={false} theme={{ algorithm: theme.defaultAlgorithm, token: { borderRadius: 18, colorPrimary: '#2563eb', fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' } }}>
     <main className="pulse-page">
@@ -273,7 +325,25 @@ function App() {
       {error && <Card className="error-card"><Typography.Text type="danger">{error}</Typography.Text></Card>}
 
       <section id="clusters" className="clusters">
-        {groups.map(([cluster, clusterHosts], index) => <ClusterSection key={cluster} cluster={cluster} hosts={clusterHosts} hue={clusterHue(index)} onRun={host => { setActiveHost(host); setSnapshot(null); setOutput(''); }} />)}
+        {groups.map(([cluster, clusterHosts], index) => <ClusterSection
+          key={cluster}
+          cluster={cluster}
+          hosts={clusterHosts}
+          hue={clusterHue(index)}
+          collapsed={!!collapsedClusters[cluster] && !attentionClusters.has(cluster)}
+          needsAttention={attentionClusters.has(cluster)}
+          onToggle={() => setCollapsedClusters(prev => {
+            const next = { ...prev };
+            if (attentionClusters.has(cluster)) {
+              delete next[cluster];
+              return next;
+            }
+            if (next[cluster]) delete next[cluster];
+            else next[cluster] = true;
+            return next;
+          })}
+          onRun={host => { setActiveHost(host); setSnapshot(null); setOutput(''); }}
+        />)}
       </section>
 
       <TaskModal
@@ -306,12 +376,34 @@ function App() {
   </ConfigProvider>;
 }
 
-function ClusterSection({ cluster, hosts, hue, onRun }: { cluster: string; hosts: HostView[]; hue: number; onRun: (host: HostView) => void }) {
+function ClusterSection({
+  cluster,
+  hosts,
+  hue,
+  collapsed,
+  needsAttention,
+  onToggle,
+  onRun
+}: {
+  cluster: string;
+  hosts: HostView[];
+  hue: number;
+  collapsed: boolean;
+  needsAttention: boolean;
+  onToggle: () => void;
+  onRun: (host: HostView) => void;
+}) {
   const sorted = sortHosts(hosts);
-  return <Card className="cluster-section" style={{ ['--cluster-hue' as any]: hue }} title={<Space><span>{cluster}</span><Tag>{hosts.length} 台</Tag></Space>} variant="outlined">
-    <div className="tile-grid">
+  return <Card
+    className={`cluster-section ${collapsed ? 'cluster-section-collapsed' : ''}`.trim()}
+    style={{ ['--cluster-hue' as any]: hue }}
+    title={<Space size={8}><span>{cluster}</span><Tag>{hosts.length} 台</Tag>{needsAttention && <Tag color="warning">需关注</Tag>}</Space>}
+    extra={<Button size="small" type="text" className="cluster-toggle-button" onClick={onToggle} disabled={needsAttention}>{needsAttention ? '异常展开' : (collapsed ? '展开' : '折叠')}</Button>}
+    variant="outlined"
+  >
+    {!collapsed && <div className="tile-grid">
       {sorted.map(host => <HostTile host={host} key={hostKey(host)} onRun={() => onRun(host)} />)}
-    </div>
+    </div>}
   </Card>;
 }
 

@@ -143,6 +143,17 @@ body {
 .cluster-section .ant-card-head {
   min-height: 54px;
 }
+.cluster-section.cluster-section-collapsed .ant-card-body {
+  display: none;
+}
+.cluster-toggle-button {
+  padding-inline: 6px !important;
+  color: #52627a !important;
+  font-weight: 500;
+}
+.cluster-toggle-button:disabled {
+  color: #9aa8bc !important;
+}
 .tile-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));

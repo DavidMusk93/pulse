@@ -144,6 +144,13 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("ResizeObserver"));
         assertTrue(js.body().contains("auto-fit"));
         assertTrue(js.body().contains("confirmations"));
+        assertTrue(js.body().contains("pulse.cluster-collapse.v1"));
+        assertTrue(js.body().contains("localStorage"));
+        assertTrue(js.body().contains("warming"));
+        assertTrue(js.body().contains("timed_out"));
+        assertTrue(js.body().contains("异常展开"));
+        assertTrue(js.body().contains("折叠"));
+        assertTrue(js.body().contains("展开"));
         assertTrue(js.body().contains("component_version"));
         assertTrue(js.body().contains("user_cpu_percent"));
         assertTrue(js.body().contains("sys_cpu_percent"));
@@ -177,6 +184,8 @@ class CoordinatorHttpServerTest {
         assertTrue(css.body().contains(".metric-row>.ant-col"));
         assertTrue(css.body().contains(".metric-row>.ant-col>.ant-card"));
         assertTrue(css.body().contains(".metric-row .ant-statistic"));
+        assertTrue(css.body().contains(".cluster-toggle-button"));
+        assertTrue(css.body().contains(".cluster-section.cluster-section-collapsed"));
         assertTrue(css.body().contains("writing-mode:horizontal-tb"));
         assertTrue(css.body().contains("overflow:hidden auto") || css.body().contains("overflow-y:auto"));
         assertTrue(css.body().contains("flex:1 1 0"));

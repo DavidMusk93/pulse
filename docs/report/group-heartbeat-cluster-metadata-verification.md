@@ -2012,3 +2012,39 @@ task_id: task-bb5f66ba-e753-42ff-9dae-71becfabe461
 - `allMetricFontSizesEqual=true`
 - `allMetricLineHeightsEqual=true`
 - `allMetricTopsEqual=true`
+
+## 集群折叠恢复
+
+验证时间：2026-06-01 18:07 CST。
+
+需求：
+
+- 恢复集群折叠功能。
+- 默认不折叠监控主视图。
+- 页面刷新后保留用户上一次的折叠选择。
+- 异常集群不能被默认折叠隐藏。
+
+实现结果：
+
+- cluster section 标题区恢复折叠/展开按钮，默认所有集群展开。
+- 折叠状态写入本地 `localStorage`，key 为 `pulse.cluster-collapse.v1`。
+- 当 cluster 中存在 `warming`、`expired`、失败任务或执行中任务时，前端会清除该集群的折叠标记并强制展开。
+- 异常 cluster 的按钮文案固定为 `异常展开`，避免用户把异常直接折叠藏起来。
+
+本地验证：
+
+- `npm run build`：通过。
+- `mvn -Dtest=CoordinatorHttpServerTest test`：通过。
+- `mvn package`：通过，22 个测试全部通过。
+
+Coordinator-only 线上升级验证：
+
+- 目标：
+  - `fdbd:dc05:11:634::45`
+  - `fdbd:dc05:13:10c::40`
+  - `fdbd:dc07:0:810::44`
+- 部署结果：`summary: total=3 ok=3 failed=0`
+- 远端静态资源校验：
+  - 三台 `/assets/pulse-hosts.js` 均包含 `pulse.cluster-collapse.v1` 与 `异常展开`
+  - 三台 `/assets/pulse-hosts.css` 均包含 `cluster-section-collapsed` 与 `cluster-toggle-button`
+  - 三台 `/hosts` 均继续加载 `/assets/pulse-hosts.js` 与 `/assets/pulse-hosts.css`

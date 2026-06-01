@@ -49,6 +49,8 @@
   - 调整 `结果查看` 卡片 head/body 留白和 completion 工具栏顶部间距，让标题区与格式化/拷贝按钮之间更舒展。
   - 顶部指标区改为等高卡片布局：列容器拉伸、卡片 `height: 100%`、`Statistic` 基线统一，避免 `Coordinator` 长值导致行内高度不齐。
   - 顶部指标区进一步统一默认数值字号和行高；`Coordinator` 的 `AutoFitText` 以与其他指标相同的默认字号渲染，只有真实溢出时才递减，避免“空间充足但字体仍不对齐”。
+  - 恢复 cluster 折叠功能，但默认展开所有集群；折叠状态持久化到本地，刷新后恢复。
+  - 对存在异常节点、失败任务或执行中任务的 cluster 强制展开，避免异常被默认折叠隐藏。
   - tide worker 区改成轻量进程卡片，展示 `pid/cpu/user/sys/rss/mem/threads/port/version`，超出内容由 `.tile-scroll` 滚动承载。
   - agent 侧从 `/proc/$pid/stat` 计算 user/sys CPU percent，从 `/proc/$pid/status` 读取 `VmRSS` 和 `Threads`，环境变量字段保持不变。
   - 修复 Ant Design Card 内部 flex 高度，确保 `.tile-scroll` 是真实可滚动容器。
@@ -137,6 +139,7 @@
   - 验证 `/hosts` 顶部文案和任务面板文案为简洁中文。
   - 验证 `/hosts` 包含 `PulseView`、`fetch('/api/hosts'` 和精简中文刷新文案。
   - 验证 `/hosts` 包含 `clusterSections`、`tiles`、`updateClusters`、`updateTiles`、`placeChild`、`restoreViewportScroll`、固定窗口 `5min AVG` 状态和低饱和 palette。
+  - 验证 `/hosts` 包含 cluster 折叠状态读写、本地持久化 key 和异常集群自动展开逻辑。
   - 验证 `/hosts` 不再展示 `Load` 字段，只展示 `5min AVG`。
   - 验证 `/hosts` 不包含 `jelly-scroll`、`liquid-flow`、`water-ripple`、`repeating-radial-gradient` 和白色 load bar 填充。
   - 验证 `/hosts` 不包含 `box-shadow`、`backdrop-filter`、`gradient`、`hostname`、`.byted.org`、`data-agent-id`、`data-coordinator-id`。
