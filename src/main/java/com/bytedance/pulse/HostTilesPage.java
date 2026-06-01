@@ -8,11 +8,11 @@ public final class HostTilesPage {
     public static String render(String coordinatorId, List<HostView> hosts) {
         return """
                 <!doctype html>
-                <html lang="en">
+                <html lang="zh-CN">
                 <head>
                   <meta charset="utf-8">
                   <meta name="viewport" content="width=device-width, initial-scale=1">
-                  <title>Pulse Coordinator Hosts</title>
+                  <title>Pulse 心跳平台</title>
                   <link rel="preconnect" href="https://fonts.googleapis.com">
                   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
                   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@400;500;600;700&display=swap">
@@ -431,7 +431,7 @@ public final class HostTilesPage {
                       display: block;
                       width: calc(18% + var(--load-level) * 82%);
                       height: 100%;
-                      background: linear-gradient(90deg, #fef08a, #fb7185, #8b5cf6);
+                      background: hsl(var(--cluster-hue) 48% 24%);
                       box-shadow: 0 0 0 1px rgba(255,255,255,.26) inset;
                     }
                     .empty {
@@ -991,77 +991,77 @@ public final class HostTilesPage {
                   <header>
                     <div class="hero-shell">
                       <section class="hero-card">
-                        <p class="hero-eyebrow">Remote Ops Academy</p>
-                        <h1>Master every host cohort in one vibrant workspace.</h1>
-                        <div class="subtitle">Coordinator __COORDINATOR_ID__ becomes a live course campus: browse cluster catalogs, track progress, and launch safe dry-runs without losing Pulse's keyed DOM performance.</div>
+                        <p class="hero-eyebrow">Pulse 心跳平台</p>
+                        <h1>统一查看主机心跳、任务与资源状态</h1>
+                        <div class="subtitle">Coordinator __COORDINATOR_ID__ 通过精简消息机制承载任务管理、集群运维、资源管理、资源监控与告警。</div>
                         <div class="hero-actions">
-                          <a class="hero-cta" href="#pulse-app">Enroll in live monitoring</a>
-                          <a class="hero-secondary" href="#pulse-app">Explore course catalog</a>
+                          <a class="hero-cta" href="#pulse-app">查看主机</a>
+                          <a class="hero-secondary" href="#pulse-app">查看能力</a>
                         </div>
                       </section>
-                      <aside class="demo-stack" aria-label="Educational platform preview">
+                      <aside class="demo-stack" aria-label="平台能力概览">
                         <section class="demo-card">
-                          <h2>Course Catalog Preview</h2>
+                          <h2>平台能力</h2>
                           <div class="catalog-preview">
-                            <div class="catalog-pill"><strong>Cluster Foundations</strong><span>Collapse cohorts, keep refresh cheap.</span></div>
-                            <div class="catalog-pill"><strong>Dry-run Lab</strong><span>Launch agent tasks from each card.</span></div>
-                            <div class="catalog-pill"><strong>Load Mastery</strong><span>Sort by 5m average progress.</span></div>
-                            <div class="catalog-pill"><strong>Completion Studio</strong><span>Review JSON in the editor workspace.</span></div>
+                            <div class="catalog-pill"><strong>任务管理</strong><span>通过消息下发和回收执行结果。</span></div>
+                            <div class="catalog-pill"><strong>集群运维</strong><span>按 cluster 与 group 编排节点动作。</span></div>
+                            <div class="catalog-pill"><strong>资源管理</strong><span>按固定窗口聚合资源指标。</span></div>
+                            <div class="catalog-pill"><strong>监控告警</strong><span>基于心跳识别异常节点与趋势。</span></div>
                           </div>
                         </section>
                         <section class="testimonial-card">
-                          <h2>Student Testimonials</h2>
-                          <blockquote>"The dashboard now feels like a guided lab: clear cohorts, visible progress, and safe actions right where operators need them."</blockquote>
-                          <cite>Pulse SRE cohort</cite>
+                          <h2>平台说明</h2>
+                          <blockquote>统一消息面，统一心跳面，统一运维视图。页面只展示关键状态，避免无效噪声。</blockquote>
+                          <cite>Pulse Coordinator</cite>
                         </section>
                       </aside>
                     </div>
                   </header>
                   <div id="pulse-status" class="app-status"></div>
                   <main id="pulse-app" data-framework="PulseView">
-                    <section class="empty">Loading hosts from /api/hosts...</section>
+                    <section class="empty">正在加载主机状态...</section>
                   </main>
                   <div id="task-modal" class="task-modal" aria-hidden="true">
                     <section class="task-panel" role="dialog" aria-modal="true" aria-labelledby="task-title">
                       <div class="task-panel-head">
-                        <div class="task-panel-title">Remote Task Runner</div>
-                        <button id="task-close-x" class="task-panel-close" type="button" aria-label="Close task runner">×</button>
+                        <div class="task-panel-title">远程任务</div>
+                        <button id="task-close-x" class="task-panel-close" type="button" aria-label="关闭任务面板">×</button>
                       </div>
                       <div class="task-shell">
                         <aside class="task-sidebar">
                           <div class="task-hero">
                             <div>
-                              <p class="task-eyebrow">Remote dry-run executor</p>
-                              <h2 id="task-title">Run Task</h2>
+                              <p class="task-eyebrow">任务执行</p>
+                              <h2 id="task-title">执行任务</h2>
                               <div id="task-trace" class="task-trace">trace: pending</div>
                             </div>
                             <div class="task-toolbar">
-                              <select id="task-type" aria-label="Task type">
+                              <select id="task-type" aria-label="任务类型">
                                 <option value="prepare_disk_layout_dry_run">prepare_disk_layout_dry_run</option>
                                 <option value="analyze_block_layout_dry_run">analyze_block_layout_dry_run</option>
                               </select>
-                              <button id="task-run" class="task-primary">Run dry-run</button>
-                              <button id="task-pop">Pop result</button>
-                              <button id="task-close" class="task-close-button" aria-label="Close">Close</button>
+                              <button id="task-run" class="task-primary">执行 dry-run</button>
+                              <button id="task-pop">弹出结果</button>
+                              <button id="task-close" class="task-close-button" aria-label="关闭">关闭</button>
                             </div>
                           </div>
                           <div class="task-summary">
-                            <div class="task-stat"><span>Target IP</span><strong id="task-agent">-</strong></div>
-                            <div class="task-stat"><span>Current run</span><strong id="task-current">Idle</strong></div>
-                            <div class="task-stat"><span>Completion queue</span><strong id="task-completion-count">0</strong></div>
+                            <div class="task-stat"><span>目标节点</span><strong id="task-agent">-</strong></div>
+                            <div class="task-stat"><span>当前任务</span><strong id="task-current">空闲</strong></div>
+                            <div class="task-stat"><span>结果队列</span><strong id="task-completion-count">0</strong></div>
                           </div>
                           <section class="task-card execution-card">
-                            <h3>Execution Queue</h3>
+                            <h3>执行队列</h3>
                             <div id="task-execution"></div>
                           </section>
                           <section class="task-card completion-meta-card">
-                            <h3>Completion Queue</h3>
+                            <h3>结果队列</h3>
                             <div id="task-completion-meta"></div>
                           </section>
                         </aside>
                         <main class="task-workspace">
                           <section class="task-card completion-card">
-                            <h3>Completion Editor</h3>
+                            <h3>结果查看</h3>
                             <div id="task-output" class="task-output"></div>
                           </section>
                         </main>
@@ -1090,7 +1090,7 @@ public final class HostTilesPage {
                       const taskClose = document.getElementById('task-close');
                       const taskCloseX = document.getElementById('task-close-x');
                       const loadAverageWindowMs = 5 * 60 * 1000;
-                      const loadSamples = new Map();
+                      const loadWindows = new Map();
                       let activeTaskAgentId = '';
                       let activeCompletionTaskId = '';
                       let activeRunTaskId = '';
@@ -1139,15 +1139,15 @@ public final class HostTilesPage {
                         },
                         renderApp() {
                           if (this.state.error) {
-                            this.renderMessage('error', 'Failed to refresh /api/hosts: ' + this.state.error);
+                            this.renderMessage('error', '刷新 /api/hosts 失败：' + this.state.error);
                             return;
                           }
                           if (this.state.loading) {
-                            this.renderMessage('empty', 'Loading hosts from /api/hosts...');
+                            this.renderMessage('empty', '正在加载主机状态...');
                             return;
                           }
                           if (!this.state.hosts.length) {
-                            this.renderMessage('empty', 'No hosts yet. POST /heartbeat to light up the board.');
+                            this.renderMessage('empty', '暂无主机心跳，请先写入 /heartbeat。');
                             return;
                           }
                           this.ensureDashboardMode();
@@ -1189,7 +1189,7 @@ public final class HostTilesPage {
                             }
                             section.querySelector('[data-cluster-name]').textContent = cluster;
                             section.querySelector('[data-cluster-count]').textContent =
-                              hosts.length + ' host' + (hosts.length === 1 ? '' : 's');
+                              hosts.length + ' 台';
                             if (collapsed) {
                               // Skip DOM diffing of tiles when collapsed: avoids wide-area
                               // re-renders on the polling cadence.
@@ -1288,16 +1288,16 @@ public final class HostTilesPage {
                       function renderStatus(state) {
                         const alive = state.hosts.filter(host => host.status === 'alive').length;
                         const expired = state.hosts.filter(host => host.status === 'expired').length;
-                        const updated = state.updatedAt ? state.updatedAt.toLocaleTimeString() : 'pending';
+                        const updated = state.updatedAt ? state.updatedAt.toLocaleTimeString() : '等待中';
                         const aliveProgress = state.hosts.length ? Math.round((alive / state.hosts.length) * 100) : 0;
                         const expiredProgress = state.hosts.length ? Math.round((expired / state.hosts.length) * 100) : 0;
                         return `
-                          <div class="status-card"><span>Coordinator</span><strong>${escapeHtml(coordinatorId)}</strong></div>
-                          <div class="status-card"><span>Catalog Size</span><strong>${state.hosts.length} hosts</strong><div class="progress-track"><i class="progress-fill" style="--progress:100%"></i></div></div>
-                          <div class="status-card"><span>Progress Alive</span><strong>${alive} · ${aliveProgress}%</strong><div class="progress-track"><i class="progress-fill" style="--progress:${aliveProgress}%"></i></div></div>
-                          <div class="status-card"><span>Needs Review</span><strong>${expired} · ${expiredProgress}%</strong><div class="progress-track"><i class="progress-fill" style="--progress:${expiredProgress}%"></i></div></div>
-                          <div class="status-card"><span>Last Lesson</span><strong>${escapeHtml(updated)}</strong></div>
-                          <div class="status-card"><span>Refresh Mode</span><strong>Keyed DOM</strong></div>
+                          <div class="status-card"><span>协调器</span><strong>${escapeHtml(coordinatorId)}</strong></div>
+                          <div class="status-card"><span>主机总数</span><strong>${state.hosts.length} 台</strong><div class="progress-track"><i class="progress-fill" style="--progress:100%"></i></div></div>
+                          <div class="status-card"><span>存活节点</span><strong>${alive} · ${aliveProgress}%</strong><div class="progress-track"><i class="progress-fill" style="--progress:${aliveProgress}%"></i></div></div>
+                          <div class="status-card"><span>待处理</span><strong>${expired} · ${expiredProgress}%</strong><div class="progress-track"><i class="progress-fill" style="--progress:${expiredProgress}%"></i></div></div>
+                          <div class="status-card"><span>最近刷新</span><strong>${escapeHtml(updated)}</strong></div>
+                          <div class="status-card"><span>刷新模式</span><strong>Keyed DOM</strong></div>
                         `;
                       }
 
@@ -1350,29 +1350,45 @@ public final class HostTilesPage {
                             return;
                           }
                           activeAgents.add(agentId);
-                          const samples = loadSamples.get(agentId) || [];
-                          samples.push({t: now, load: loadValue(host)});
-                          const cutoff = now - loadAverageWindowMs;
-                          while (samples.length && samples[0].t < cutoff) {
-                            samples.shift();
+                          const sample = loadValue(host);
+                          const windowStart = now - (now % loadAverageWindowMs);
+                          let state = loadWindows.get(agentId);
+                          if (!state) {
+                            loadWindows.set(agentId, {
+                              windowStart,
+                              sum: sample,
+                              count: 1,
+                              displayAvg: sample
+                            });
+                            return;
                           }
-                          loadSamples.set(agentId, samples);
+                          if (state.windowStart !== windowStart) {
+                            state = {
+                              windowStart,
+                              sum: sample,
+                              count: 1,
+                              displayAvg: state.count ? state.sum / state.count : state.displayAvg
+                            };
+                            loadWindows.set(agentId, state);
+                            return;
+                          }
+                          state.sum += sample;
+                          state.count += 1;
                         });
-                        [...loadSamples.keys()].forEach(agentId => {
+                        [...loadWindows.keys()].forEach(agentId => {
                           if (!activeAgents.has(agentId)) {
-                            loadSamples.delete(agentId);
+                            loadWindows.delete(agentId);
                           }
                         });
                       }
 
                       function averageLoad(host) {
                         const agentId = host.agent_id || host.ip || '';
-                        const samples = loadSamples.get(agentId) || [];
-                        if (!samples.length) {
+                        const state = loadWindows.get(agentId);
+                        if (!state) {
                           return loadValue(host);
                         }
-                        const total = samples.reduce((sum, sample) => sum + sample.load, 0);
-                        return total / samples.length;
+                        return state.displayAvg;
                       }
 
                       function loadSortValue(host) {
@@ -1389,15 +1405,14 @@ public final class HostTilesPage {
                               <div class="tile-agent" data-field="seen"></div>
                               <div class="tile-actions">
                                 <div class="status" data-field="status"></div>
-                                <button class="run-button" data-action="run-task" type="button">Run</button>
+                                <button class="run-button" data-action="run-task" type="button">任务</button>
                               </div>
                             </div>
                             <div class="tile-host" data-field="ip_title"></div>
                             <div class="tile-meta">
-                              <div><span>Load</span><span data-field="load"></span></div>
-                              <div><span>5m avg</span><span data-field="load_avg"></span></div>
-                              <div><span>Area</span><span data-field="area"></span></div>
-                              <div><span>Confirm</span><span data-field="confirmations"></span></div>
+                              <div><span>5min AVG</span><span data-field="load_avg"></span></div>
+                              <div><span>区域</span><span data-field="area"></span></div>
+                              <div><span>确认</span><span data-field="confirmations"></span></div>
                             </div>
                             <div class="worker-list" data-field="workers"></div>
                           </div>
@@ -1419,11 +1434,10 @@ public final class HostTilesPage {
                         const runButton = tile.querySelector('[data-action="run-task"]');
                         runButton.disabled = host.status !== 'alive';
                         runButton.onclick = () => openTaskModal(agentId, host.ip || agentId);
-                        setText(tile, 'ip_title', host.ip || 'unknown ip');
-                        setText(tile, 'load', host.load || '');
+                        setText(tile, 'ip_title', host.ip || '未知 IP');
                         setText(tile, 'load_avg', averageLoad(host).toFixed(2));
                         setText(tile, 'area', host.area || '');
-                        setText(tile, 'confirmations', String(host.heartbeat_confirmations || 0) + '/3 in 20s');
+                        setText(tile, 'confirmations', String(host.heartbeat_confirmations || 0) + '/3，20s');
                         renderWorkers(tile.querySelector('[data-field="workers"]'), tideWorkers(host));
                       }
 
@@ -1434,7 +1448,7 @@ public final class HostTilesPage {
 
                       function renderWorkers(container, workers) {
                         if (!workers.length) {
-                          container.innerHTML = '<div class="worker-card">No tide_worker detected</div>';
+                          container.innerHTML = '<div class="worker-card">未发现 tide_worker</div>';
                           return;
                         }
                         container.innerHTML = workers.map(worker => `
@@ -1463,12 +1477,12 @@ public final class HostTilesPage {
                         activeRunTaskId = '';
                         activeTaskLabel = agentId || '-';
                         activeOutputText = '';
-                        taskTitle.textContent = 'Run Task';
-                        taskTrace.textContent = 'trace: pending';
+                        taskTitle.textContent = '执行任务';
+                        taskTrace.textContent = 'trace: 等待中';
                         taskAgent.textContent = activeTaskLabel;
-                        taskCurrent.textContent = 'Loading';
+                        taskCurrent.textContent = '加载中';
                         taskCompletionCount.textContent = '0';
-                        taskCompletionMeta.innerHTML = '<div class="task-empty">Waiting for task snapshot...</div>';
+                        taskCompletionMeta.innerHTML = '<div class="task-empty">正在等待任务快照...</div>';
                         renderOutput('');
                         taskModal.classList.add('open');
                         taskModal.setAttribute('aria-hidden', 'false');
@@ -1503,7 +1517,7 @@ public final class HostTilesPage {
                           renderTaskSnapshot(await response.json());
                         } catch (error) {
                           if (!options.silent) {
-                            taskCompletionMeta.innerHTML = '<div class="task-empty">Failed to refresh task snapshot: ' + escapeHtml(error.message || String(error)) + '</div>';
+                            taskCompletionMeta.innerHTML = '<div class="task-empty">刷新任务快照失败：' + escapeHtml(error.message || String(error)) + '</div>';
                           }
                         } finally {
                           taskSnapshotInFlight = false;
@@ -1524,26 +1538,26 @@ public final class HostTilesPage {
                         const traceId = (latest && latest.trace_id)
                           || (currentExecution && currentExecution.trace_id)
                           || latestTraceId(snapshot.traces)
-                          || 'pending';
+                          || '等待中';
                         activeCompletionTaskId = latest ? latest.task_id : '';
                         taskTrace.textContent = 'trace: ' + traceId;
                         taskCurrent.textContent = currentCompletion
                           ? (currentCompletion.status || 'completed')
-                          : (currentExecution ? (currentExecution.status || 'queued') : (latest ? 'Previous result' : 'Idle'));
+                          : (currentExecution ? (currentExecution.status || 'queued') : (latest ? '上一条结果' : '空闲'));
                         taskCompletionCount.textContent = String(completions.length);
                         taskPop.disabled = !activeCompletionTaskId;
                         taskExecution.innerHTML = renderIncomingTasks(asyncTasks)
                           + (execution.length ? '<div class="task-list">'
                           + execution.map(renderExecutionTask).join('')
-                          + '</div>' : '<div class="task-empty">No queued command. Running tasks from agent heartbeat appear above.</div>');
+                          + '</div>' : '<div class="task-empty">当前没有待执行任务。来自 agent 心跳的任务会显示在上方。</div>');
                         if (latest) {
                           taskCompletionMeta.innerHTML = renderCompletionMeta(latest, activeRunTaskId && latest.task_id !== activeRunTaskId);
                           const outputText = taskOutputText(latest);
                           renderOutput(outputText);
                         } else {
-                          taskCompletionMeta.innerHTML = '<div class="task-empty">No completion yet. This panel auto-refreshes every 2s while the dialog is open.</div>';
+                          taskCompletionMeta.innerHTML = '<div class="task-empty">暂无结果。面板打开期间每 2 秒自动刷新一次。</div>';
                           renderOutput(currentExecution
-                            ? 'Waiting for agent heartbeat result for ' + (currentExecution.task_id || 'task') + '...'
+                            ? '正在等待 agent 心跳返回任务结果：' + (currentExecution.task_id || 'task') + '...'
                             : '');
                         }
                       }
@@ -1573,7 +1587,7 @@ public final class HostTilesPage {
                           + tasks.map(task => `
                             <div class="task-row compact incoming-task">
                               <div class="task-row-head">
-                                <div class="task-name">Incoming completion</div>
+                                <div class="task-name">待回收结果</div>
                                 <span class="task-badge ${escapeHtml(task.status || '')}">${escapeHtml(task.status || '')}</span>
                               </div>
                               <div class="task-detail">
@@ -1588,17 +1602,17 @@ public final class HostTilesPage {
 
                       function renderCompletionMeta(result, showingPreviousResult) {
                         const previousNotice = showingPreviousResult
-                          ? '<div class="task-empty">Current run is still waiting; showing the latest retained completion.</div>'
+                          ? '<div class="task-empty">当前任务仍在等待中，先展示最近一次保留结果。</div>'
                           : '';
                         return previousNotice + `
                           <div class="completion-strip">
-                            <div><span>Status</span><strong>${escapeHtml(result.status || '')}</strong></div>
-                            <div><span>Exit</span><strong>${escapeHtml(result.exit_code ?? '-')}</strong></div>
-                            <div><span>Duration</span><strong>${escapeHtml(result.duration_ms || 0)}ms</strong></div>
-                            <div><span>Finished</span><strong>${escapeHtml(formatTime(result.finished_at_ms))}</strong></div>
-                            <div><span>Type</span><strong>${escapeHtml(result.output_type || detectOutputType(taskOutputText(result)))}</strong></div>
-                            <div><span>Encoding</span><strong>${escapeHtml(result.output_encoding || '-')}</strong></div>
-                            <div><span>Bytes</span><strong>${escapeHtml(result.output_bytes ?? '-')}</strong></div>
+                            <div><span>状态</span><strong>${escapeHtml(result.status || '')}</strong></div>
+                            <div><span>退出码</span><strong>${escapeHtml(result.exit_code ?? '-')}</strong></div>
+                            <div><span>耗时</span><strong>${escapeHtml(result.duration_ms || 0)}ms</strong></div>
+                            <div><span>结束时间</span><strong>${escapeHtml(formatTime(result.finished_at_ms))}</strong></div>
+                            <div><span>类型</span><strong>${escapeHtml(result.output_type || detectOutputType(taskOutputText(result)))}</strong></div>
+                            <div><span>编码</span><strong>${escapeHtml(result.output_encoding || '-')}</strong></div>
+                            <div><span>字节数</span><strong>${escapeHtml(result.output_bytes ?? '-')}</strong></div>
                             <div><span>SHA256</span><strong title="${escapeHtml(result.output_sha256 || '')}">${escapeHtml(shortHash(result.output_sha256 || ''))}</strong></div>
                           </div>
                         `;
@@ -1660,18 +1674,18 @@ public final class HostTilesPage {
                         taskOutput.innerHTML = `
                           <div class="task-output-lazy">
                             <div>
-                              Large ${escapeHtml(language)} output is kept losslessly in memory (${text.length} chars).
-                              Rendering is lazy to keep the dashboard responsive.
+                              当前 ${escapeHtml(language)} 输出较大，结果已完整保存在内存中（${text.length} 字符）。
+                              为保持页面响应，编辑器按需加载。
                             </div>
-                            <button type="button" id="task-load-editor">Load full editor</button>
+                            <button type="button" id="task-load-editor">加载完整结果</button>
                           </div>
-                          <pre class="task-output-pre">${escapeHtml(preview)}\n\n... preview only. Click "Load full editor" for the complete output.</pre>
+                          <pre class="task-output-pre">${escapeHtml(preview)}\n\n... 当前仅展示预览，点击“加载完整结果”查看全部输出。</pre>
                         `;
                         const loadButton = document.getElementById('task-load-editor');
                         if (loadButton) {
                           loadButton.onclick = () => {
                             const version = ++renderOutputVersion;
-                            taskOutput.innerHTML = '<pre class="task-output-pre">Loading editor...</pre>';
+                            taskOutput.innerHTML = '<pre class="task-output-pre">正在加载编辑器...</pre>';
                             scheduleIdle(() => {
                               if (version !== renderOutputVersion) {
                                 return;
@@ -1838,7 +1852,7 @@ public final class HostTilesPage {
                           body: JSON.stringify({task_type: taskType.value})
                         });
                         if (!response.ok) {
-                          renderOutput('Run failed: HTTP ' + response.status);
+                          renderOutput('执行失败：HTTP ' + response.status);
                           return;
                         }
                         const snapshot = await response.json();

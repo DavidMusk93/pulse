@@ -82,7 +82,7 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
-    void hostsPageRendersFlatSquareLoadSortedTiles() throws Exception {
+    void hostsPageRendersFlatSquareChineseHeartbeatConsole() throws Exception {
         postJson("/heartbeat", """
                 {
                   "agent_id": "agent-1",
@@ -120,10 +120,10 @@ class CoordinatorHttpServerTest {
 
         assertEquals(200, response.statusCode());
         assertTrue(response.body().contains("tile-grid"));
-        assertTrue(response.body().contains("PulseView keyed dashboard"));
+        assertTrue(response.body().contains("Pulse 心跳平台"));
         assertTrue(response.body().contains("data-framework=\"PulseView\""));
         assertTrue(response.body().contains("fetch('/api/hosts'"));
-        assertTrue(response.body().contains("Keyed DOM refresh"));
+        assertTrue(response.body().contains("统一查看主机心跳、任务与资源状态"));
         assertTrue(response.body().contains("cluster-section"));
         assertTrue(response.body().contains("aspect-ratio: 1 / 1"));
         assertTrue(response.body().contains("tile-scroll"));
@@ -142,26 +142,26 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("data-field=\"seen\""));
         assertTrue(response.body().contains("data-action=\"run-task\""));
         assertTrue(response.body().contains("task-modal"));
-        assertTrue(response.body().contains("Remote dry-run executor"));
+        assertTrue(response.body().contains("任务执行"));
         assertTrue(response.body().contains("task-summary"));
-        assertTrue(response.body().contains("Completion Queue"));
-        assertTrue(response.body().contains("Target IP"));
-        assertTrue(response.body().contains("Monaco Editor"));
+        assertTrue(response.body().contains("结果队列"));
+        assertTrue(response.body().contains("目标节点"));
+        assertTrue(response.body().contains("结果查看"));
         assertTrue(response.body().contains("monaco-editor@0.49.0"));
         assertTrue(response.body().contains("setupMonacoEditor"));
         assertTrue(response.body().contains("editor.action.formatDocument"));
-        assertTrue(response.body().contains("context menu copy/format"));
+        assertTrue(response.body().contains("加载完整结果"));
         assertTrue(response.body().contains("completion-strip"));
         assertTrue(response.body().contains("output_sha256"));
-        assertTrue(response.body().contains("Incoming completion"));
+        assertTrue(response.body().contains("待回收结果"));
         assertTrue(response.body().contains("startTaskPolling"));
         assertTrue(response.body().contains("window.setInterval(() =>"));
-        assertTrue(response.body().contains("auto-refreshes every 2s"));
+        assertTrue(response.body().contains("每 2 秒自动刷新一次"));
         assertTrue(response.body().contains("prepare_disk_layout_dry_run"));
         assertTrue(response.body().contains("analyze_block_layout_dry_run"));
         assertTrue(!response.body().contains("shell command"));
-        assertTrue(response.body().contains("border-radius: 22px"));
-        assertTrue(response.body().contains("border-radius: 14px"));
+        assertTrue(response.body().contains("border-radius: 28px"));
+        assertTrue(response.body().contains("border-radius: 16px"));
         assertTrue(response.body().contains("border-radius: 999px"));
         assertTrue(response.body().contains("background: rgba(15, 23, 42, .24)"));
         assertTrue(response.body().contains("background: hsl(var(--cluster-hue) 48% 24%)"));
@@ -176,6 +176,8 @@ class CoordinatorHttpServerTest {
         assertTrue(!response.body().contains("<span>Source</span>"));
         assertTrue(!response.body().contains("<span>Zone</span>"));
         assertTrue(!response.body().contains("<span>Agent</span>"));
+        assertTrue(!response.body().contains("<span>Load</span>"));
+        assertTrue(response.body().contains("<span>5min AVG</span>"));
         assertTrue(!response.body().contains("Keep result"));
         assertTrue(!response.body().contains("id=\"task-keep\""));
         assertTrue(!response.body().contains("STDOUT"));
@@ -189,10 +191,13 @@ class CoordinatorHttpServerTest {
         assertTrue(!response.body().contains("repeating-radial-gradient"));
         assertTrue(!response.body().contains("jelly-scroll"));
         assertTrue(!response.body().contains("playJelly"));
-        assertTrue(response.body().contains("loadValue(right) - loadValue(left)"));
+        assertTrue(response.body().contains("loadSortValue(right) - loadSortValue(left)"));
         assertTrue(response.body().contains("window.PulseView = PulseView"));
         assertTrue(response.body().contains("data-agent-id"));
         assertTrue(response.body().contains("const palette = [205, 188, 168, 146, 126, 95, 48, 215, 200, 178]"));
+        assertTrue(response.body().contains("const loadWindows = new Map()"));
+        assertTrue(response.body().contains("windowStart"));
+        assertTrue(response.body().contains("displayAvg"));
         assertTrue(!response.body().contains("265, 338"));
         assertTrue(!response.body().contains("http-equiv=\"refresh\""));
     }

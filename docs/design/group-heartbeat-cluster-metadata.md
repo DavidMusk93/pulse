@@ -11,6 +11,26 @@ Pulse coordinator 已支持单机 agent 心跳和批量 `agents[]` group heartbe
 - 将 auto-ops 中的 `doubao`、`tlbmirror` 集群也接入 agent 列表。
 - 后续每个新需求都必须先补充 `docs/design` 与 `docs/plan` 文档，再进入开发、部署、验证。
 
+## 平台定位
+
+Pulse 的定位不是教学展示页，而是一个基于精简消息机制构建的心跳平台。
+
+平台内核：
+
+- 以 heartbeat + `PulseMessage` 作为统一控制面，尽量复用现有消息通道。
+- coordinator、group leader、agent 之间优先交换状态消息与命令消息，非必要不增加 API。
+- 通过心跳消息承载状态同步、任务分发、任务回执、资源快照和告警信号。
+
+平台能力边界：
+
+- 任务管理：通过消息下发 dry-run 或运维任务，并通过 heartbeat 回收执行状态与结果摘要。
+- 集群运维：基于 cluster/area/group 维度编排机器、执行批量运维动作。
+- 资源管理：通过 heartbeat 汇聚节点资源信息，为后续调度和容量判断提供输入。
+- 资源监控：通过 heartbeat 形成近实时主机、进程、集群视图。
+- 告警：通过消息或状态聚合识别异常节点、异常 group、异常资源趋势。
+
+UI 与产品表达必须围绕“心跳平台”展开，描述简洁、专业、中文化，禁止使用课程、校园、实验室、学员等教育化叙事。
+
 ## 目标
 
 - Group heartbeat 协议可用：一次请求可上报多个 agent，coordinator 返回每个 agent 的 `accepted_seq`。
@@ -42,7 +62,7 @@ Pulse coordinator 已支持单机 agent 心跳和批量 `agents[]` group heartbe
 | Group heartbeat 协议 | 已实现并验证 | 单次 `/heartbeat` 接收多个 `agents[]` | 仅协议具备能力，线上 agent 尚未使用 |
 | Agent 减压分组策略 | 需要迁移到 coordinator | 将同集群 agent 编排为小组，批量上报心跳 | 是 |
 
-因此，静态 group plan 只能作为验证手段，不能作为最终设计。最终分组逻辑必须位于 coordinator 的心跳处理逻辑中，由 coordinator 基于内存中的 `NodeState` 维护 group assignment，并通过 API 下发给 agent。agent 不应该依赖部署脚本生成的静态 CSV 来决定 leader/follower。
+因此，静态 group plan 只能作为验证手段，不能作为最终设计。最终分组逻辑必须位于 coordinator 的心跳处理逻辑中，由 coordinator 基于内存中的 `NodeState` 维护 group assignment，并通过 heartbeat response message 下发给 agent。agent 不应该依赖部署脚本生成的静态 CSV 来决定 leader/follower。
 
 ## 分组目标
 
@@ -457,14 +477,16 @@ Web 页面按 `cluster` 进行一级分组：
 - 每个 cluster 使用不同主色相，便于跨集群快速扫视。
 - cluster 调色板必须使用低饱和冷静色，禁止紫色、红色等高刺激亮色。
 - 组内 host 按 `load` 从高到低排序。
-- 同一 cluster 内，`load` 越高磁贴色彩越深，并提供底部 load bar；load bar 必须使用深色轨道和深色/cluster 色填充，禁止白底白条。
+- 同一 cluster 内，`5min AVG` 越高磁贴色彩越深，并提供底部 load bar；load bar 必须使用深色轨道和深色/cluster 色填充，禁止白底白条。
 - 磁贴内容超过可视区域时，必须在磁贴内部滚动，文字使用 `overflow-wrap`，禁止覆盖和溢出。
 - 磁贴、状态徽标、指标行、worker 小卡和底部 load bar 等矩形元素必须使用圆润边角，避免硬直方角。
 - 磁贴不做额外交互动效，保持自然滚动；禁止持续播放的水波、扫光、果冻抖动或背景动态。
 - cluster 只用于 section/group 表达，不在单个 agent 磁贴中重复展示。
 - 磁贴不展示 hostname，不展示 `Seq` 和 `Rank`。
 - 磁贴 header 展示 `Seen` datetime 与 status。
-- 磁贴正文展示 `IP`、`Area`、`Load`、`Confirm`。
+- 磁贴正文展示 `IP`、`Area`、`5min AVG`、`Confirm`。
+- 卡片内不展示瞬时 `Load`，避免 5s 轮询导致数值抖动和频繁重排。
+- `5min AVG` 由前端在本地自行聚合，但必须采用固定 5 分钟窗口；窗口开始后仅累计样本，不更新展示值，窗口切换时再提交上一窗口均值。
 - `Area` 和 `Zone` 语义重复时只展示 `Area`，不展示 `Zone`。
 - 磁贴不展示 `Role` 和 `Source`。
 - 磁贴展示每个 `tide_worker` 的 `pid`、`cpu_percent`、`mem_percent`、`PORT1`、`TIDELET_COMPONENT_VERSION`；`pid` 变化用于判断进程重启。
@@ -480,6 +502,8 @@ UI 开发门禁：
 - UI 调色板不得使用刺眼亮色，尤其避免紫色和红色作为 cluster 主色。
 - load 比例条必须在浅色和深色磁贴上都具备可读对比度。
 - 磁贴动效不得抢占视觉焦点，当前禁止 `jelly-scroll`、`water-ripple`、`liquid-flow` 一类额外动效。
+- 所有面对用户的 UI 文案必须使用简洁中文，禁止课程化、营销化和英文 slogan。
+- `5min AVG` 的排序与展示必须使用同一份固定窗口结果，禁止每次轮询都重新计算滑动均值并触发卡片重排。
 
 ## 部署设计
 

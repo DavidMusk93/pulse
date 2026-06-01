@@ -1,33 +1,33 @@
-# UI Browser Debug Runbook
+# UI Browser 调试手册
 
-This note captures the browser-debugging workflow used to fix the Pulse Run UI layout regressions.
+本文记录使用浏览器真实布局调试 Pulse UI 的方法，重点用于定位轮询刷新、模态框、Monaco、grid/flex 和滚动状态问题。
 
-## When to Use
+## 适用场景
 
-- A UI bug is layout-dependent and screenshots are not enough.
-- CSS changes appear correct in code but the deployed browser view still looks broken.
-- Monaco/editor, grid/flex, modal, or scroll behavior is involved.
-- A polling UI keeps re-rendering and the browser scroll position changes unexpectedly.
+- UI 问题依赖真实布局，单看代码或截图无法定位。
+- CSS 在本地看起来合理，但部署到 coordinator 后页面仍然错位。
+- 涉及 Monaco、grid/flex、modal、滚动条或轮询刷新。
+- 轮询刷新导致页面或组件滚动位置被重置。
 
-## Key Lessons
+## 调试原则
 
-- Do not rely on static CSS inspection for layout bugs. Measure real DOM boxes in a browser.
-- Avoid fixing only overflow symptoms. Find which grid/flex row is stealing space.
-- Count direct grid children and explicit grid rows. A missing row can push content into an implicit row with near-zero height.
-- Treat `overflow: auto` as a last resort for summary areas. If users must scroll several small boxes to understand status, the layout is not good enough.
-- Preserve editor state across polling. Rebuilding Monaco on every refresh resets scroll and feels broken.
-- Deploy before final verification when the UI is served from remote coordinator nodes; local jar success is not enough.
-- Commit and push immediately after each coherent fix so remote state and git history stay aligned.
+- 不要只看静态 CSS，必须在浏览器里测量真实 DOM 盒模型。
+- 不要只修 `overflow` 表象，要找到是谁抢走了高度或宽度。
+- 先数清楚直接子节点数量，再核对显式 grid row 定义。
+- `overflow: auto` 只作为末手段，不能让用户靠滚多个小面板理解状态。
+- 轮询 UI 必须保留编辑器和滚动状态，不能每次刷新都重建组件。
+- UI 由远端 coordinator 提供时，最终验证必须基于部署后的真实页面。
+- 每个独立修复点都要立即提交并推送，保证代码、jar、页面状态可追溯。
 
-## Setup
+## 准备
 
-Keep a port forward to one coordinator:
+先将本地端口转发到一个 coordinator：
 
 ```bash
 ssh -N -L 127.0.0.1:9967:127.0.0.1:9966 fdbd:dc05:11:634::45
 ```
 
-Start headless Chrome with DevTools Protocol enabled:
+启动开启 DevTools Protocol 的 headless Chrome：
 
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
@@ -41,32 +41,32 @@ Start headless Chrome with DevTools Protocol enabled:
   about:blank
 ```
 
-Check DevTools is alive:
+确认 DevTools 正常启动：
 
 ```bash
 curl -s http://127.0.0.1:9222/json/version
 ```
 
-## CDP Layout Probe
+## CDP 布局探测
 
-Use a small Python script with `websocket-client` to drive Chrome. Install once if needed:
+可用一个基于 `websocket-client` 的 Python 小脚本驱动 Chrome；如未安装先执行：
 
 ```bash
 python3 -m pip install --user websocket-client
 ```
 
-The probe should:
+探测脚本建议完成以下动作：
 
-- Open `http://127.0.0.1:9967/hosts`.
-- Set a realistic viewport, for example `1024x588`, matching the browser screenshot size.
-- Click the first enabled `Run` button or a preferred host tile.
-- Wait for `#task-modal.open`.
-- Optionally click `#task-run` and wait for JSON output.
-- Measure `getBoundingClientRect()` for modal, shell, workspace, execution card, completion card, output area, Monaco editor, and close button.
-- Compare output bottom against completion/panel bottom.
-- Capture a screenshot for visual confirmation.
+- 打开 `http://127.0.0.1:9967/hosts`。
+- 设置真实 viewport，例如 `1024x588`。
+- 点击第一个可用的 `任务` 按钮或目标 host 卡片。
+- 等待 `#task-modal.open`。
+- 需要时点击 `#task-run`，等待 JSON 输出。
+- 测量 modal、shell、workspace、execution card、completion card、output、Monaco、关闭按钮的 `getBoundingClientRect()`。
+- 比较 output 底部是否溢出 completion/panel。
+- 截图做最终视觉确认。
 
-Example metrics to collect:
+建议采集的指标示例：
 
 ```javascript
 (() => {
@@ -115,40 +115,39 @@ Example metrics to collect:
 })()
 ```
 
-## What Broke
+## 常见故障
 
-The Run UI had multiple regressions:
+Run UI 曾经出现过以下回归：
 
-- The completion card had four direct children: title, metadata, tabs, editor.
-- CSS defined only three explicit grid rows.
-- The tabs consumed the `1fr` row and the editor fell into an implicit fourth row.
-- The editor height became only a few pixels in a realistic viewport.
-- The completion metadata and execution card consumed too much vertical space.
-- The modal had too much outer chrome, so the actual workspace felt small.
-- Re-rendering output during polling rebuilt Monaco and reset the scroll position.
+- completion card 有四个直接子节点，但 CSS 只定义了三行 grid。
+- tabs 抢占了 `1fr` 行，editor 掉进隐式第四行。
+- editor 在真实 viewport 下只剩几像素高度。
+- completion metadata 和 execution card 占用了过多垂直空间。
+- modal 外层装饰太厚，真正工作区太小。
+- 轮询刷新时重建 Monaco，导致滚动位置重置。
 
-The browser measurements made the failure obvious:
+浏览器测量可以直接暴露问题：
 
-- `#task-output` height was `2px` in one broken state.
-- Monaco height was about `5px`.
-- `outputBelowCompletion=true` and `outputBelowPanel=true` before the grid fix.
-- After later visual changes, no overflow remained but the editor was still too small, so the layout was redesigned as a workbench.
+- 某个坏状态下 `#task-output` 高度只有 `2px`。
+- Monaco 高度只有约 `5px`。
+- grid 修复前，`outputBelowCompletion=true` 且 `outputBelowPanel=true`。
+- 后续视觉收敛后虽然不再溢出，但 editor 仍然偏小，因此布局进一步改造成工作台模式。
 
-## Fix Patterns
+## 修复模式
 
-- Define one explicit grid row per direct grid child.
-- Keep long, low-priority details out of the main vertical path.
-- Replace large detail blocks with compact metrics and a single-line context row.
-- Make empty execution queues compact; they should not consume the primary workspace.
-- Use a command-center header with actions and status summaries visible at a glance.
-- Give the editor the dominant width and a predictable remaining-height row.
-- Make modal chrome close to full-screen for operational tooling.
-- Keep the close button visible as an absolute overlay so it does not consume layout height.
+- 每个直接 grid 子节点都要有显式 grid row。
+- 低优先级长文本不要放在主纵向路径里。
+- 用紧凑指标条替代大段详情区。
+- 空执行队列必须收紧，不能吞掉主工作区高度。
+- 头部要像控制台，操作和状态一眼可见。
+- editor 必须拿到主宽度和可预期剩余高度。
+- 运维 modal 应尽量接近全屏工作台。
+- 关闭按钮使用绝对定位覆盖，不占布局高度。
 
-## Monaco Polling Rules
+## Monaco 轮询规则
 
-- If output text is unchanged, do not call `dispose()` or `setValue()`.
-- If output changes, save and restore Monaco view state:
+- 输出未变化时，不要调用 `dispose()` 或 `setValue()`。
+- 输出变化时，必须保存并恢复 Monaco 视图状态：
 
 ```javascript
 const viewState = outputEditor.saveViewState();
@@ -162,11 +161,21 @@ if (viewState) {
 outputEditor.setScrollPosition({scrollTop, scrollLeft});
 ```
 
-- If formatting JSON asynchronously, save/restore scroll around the format action too.
+- 如果异步格式化 JSON，也要在格式化前后恢复滚动位置。
 
-## Build, Deploy, Verify
+## `/hosts` 页面附加检查
 
-Build locally:
+浏览器调试 `/hosts` 时，除布局外还要确认：
+
+- 顶部和任务面板文案都是简洁中文。
+- 页面定位是“心跳平台”，不是课程、校园、实验室或教育产品。
+- 卡片不展示瞬时 `Load`，只展示固定窗口 `5min AVG`。
+- `5min AVG` 在窗口内不抖动，窗口切换时才更新。
+- 轮询刷新不会让页面滚动位置、卡片内部滚动位置或任务输出滚动位置回到起点。
+
+## 构建、部署、验证
+
+本地构建：
 
 ```bash
 mvn -q test
@@ -174,7 +183,7 @@ mvn -q -DskipTests package
 shasum -a 256 target/pulse-0.1.0-SNAPSHOT.jar
 ```
 
-Deploy to the three coordinator nodes:
+部署到三个 coordinator：
 
 ```bash
 PATH="/opt/homebrew/opt/coreutils/libexec/gnubin:$PATH" \
@@ -193,7 +202,7 @@ AUTO_OPS_REPORT_DIR=/Users/david/Documents/projects/pulse/docs/report \
        /data24/otf/pulse - cdn_new
 ```
 
-Verify remote jar and service:
+校验远端 jar 和服务：
 
 ```bash
 for h in 'fdbd:dc05:11:634::45' 'fdbd:dc05:13:10c::40' 'fdbd:dc07:0:810::44'; do
@@ -203,18 +212,18 @@ for h in 'fdbd:dc05:11:634::45' 'fdbd:dc05:13:10c::40' 'fdbd:dc07:0:810::44'; do
 done
 ```
 
-Re-run the CDP layout probe against the deployed coordinator. A fix is not complete until the measured browser boxes show:
+对已部署 coordinator 重新执行 CDP 探测。只有满足以下条件，修复才算完成：
 
 - `outputBelowCompletion=false`
 - `outputBelowPanel=false`
 - `horizontal=false`
-- close button has a visible bounding box
-- editor/output has meaningful height in the target viewport
-- JSON output keeps scroll position during polling
+- close button 有可见 bounding box
+- editor/output 在目标 viewport 中具有足够高度
+- JSON 输出在轮询期间保持滚动位置
 
-## Commit Discipline
+## 提交纪律
 
-After every coherent UI fix:
+每个独立 UI 修复完成后都要立即提交：
 
 ```bash
 git add src/main/java/com/bytedance/pulse/HostTilesPage.java
@@ -222,4 +231,4 @@ git commit -m "Describe the UI fix"
 git push
 ```
 
-Do not wait to batch multiple unrelated UI attempts. For remote UI debugging, the deployed jar SHA, browser measurements, and git commit should be traceable to each other.
+不要把多个无关 UI 尝试攒在一起。远端 UI 调试时，部署 jar 的 SHA、浏览器测量结果和 git commit 必须能一一对应。

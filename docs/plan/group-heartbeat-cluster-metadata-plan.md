@@ -29,7 +29,8 @@
 - `HostTilesPage`：
   - 按 `cluster` 渲染 `cluster-section`。
   - 磁贴增加 `Area` 展示。
-  - UI 重构为 `ui-ux-pro-max-skill` 取向的扁平化实时监控风格。
+  - UI 定位为心跳平台控制台，所有面向用户的描述统一为简洁中文。
+  - UI 重构为扁平化实时监控风格。
   - `/hosts` 改为前端 app shell，禁止 `<meta refresh>` 整页刷新。
   - 内嵌轻量 keyed runtime `PulseView`，不依赖公网 CDN；当前不引入 React。
   - `PulseView` 每 5s fetch `/api/hosts`，按 `cluster` 和 `agent_id` 复用 DOM 节点，仅更新文字、状态、排序和样式。
@@ -37,8 +38,10 @@
   - `PulseView` 通过 DOM 节点复用自然保留磁贴内部滚动 cursor，禁止整块重建 `#pulse-app`。
   - 磁贴改为正方形，内部支持滚动，禁止文字覆盖。
   - 不同 cluster 使用不同低饱和冷静色，避免紫色、红色等高刺激亮色。
-  - cluster 内按机器 `load` 降序排序。
-  - `load` 越高磁贴色彩越重，并展示深色轨道和 cluster 深色填充的 load bar。
+  - cluster 内按固定窗口 `5min AVG` 降序排序。
+  - `5min AVG` 越高磁贴色彩越重，并展示深色轨道和 cluster 深色填充的 load bar。
+  - 卡片不展示瞬时 `Load`，只展示前端本地聚合的固定窗口 `5min AVG`。
+  - `5min AVG` 在窗口开始后冻结展示值，窗口切换时再提交上一窗口均值，避免频繁重排和视觉抖动。
   - 去掉额外交互动效，保持自然滚动，禁止 `jelly-scroll`、持续水波或扫光背景动态。
 
 ## 阶段 2.1：减压型分组策略设计补充
@@ -103,10 +106,12 @@
   - 保持 group heartbeat per-agent `accepted_seq` 测试。
 - 更新 `CoordinatorHttpServerTest`：
   - 验证 `/hosts` 包含 `cluster-section` 和 cluster 名称。
-  - 验证 `/hosts` 包含正方形磁贴、内部滚动、load 排序和 keyed DOM refresh 相关 CSS/JS。
+  - 验证 `/hosts` 包含正方形磁贴、内部滚动、`5min AVG` 排序和 keyed DOM refresh 相关 CSS/JS。
   - 验证 `/hosts` 不包含 `http-equiv="refresh"`。
-  - 验证 `/hosts` 包含 `PulseView`、`fetch('/api/hosts'` 和 Keyed DOM refresh 文案。
-  - 验证 `/hosts` 包含 `clusterSections`、`tiles`、`updateClusters`、`updateTiles`、`placeChild`、`restoreViewportScroll` 和低饱和 palette。
+  - 验证 `/hosts` 顶部文案和任务面板文案为简洁中文。
+  - 验证 `/hosts` 包含 `PulseView`、`fetch('/api/hosts'` 和精简中文刷新文案。
+  - 验证 `/hosts` 包含 `clusterSections`、`tiles`、`updateClusters`、`updateTiles`、`placeChild`、`restoreViewportScroll`、固定窗口 `5min AVG` 状态和低饱和 palette。
+  - 验证 `/hosts` 不再展示 `Load` 字段，只展示 `5min AVG`。
   - 验证 `/hosts` 不包含 `jelly-scroll`、`liquid-flow`、`water-ripple`、`repeating-radial-gradient` 和白色 load bar 填充。
 - 执行：
 
