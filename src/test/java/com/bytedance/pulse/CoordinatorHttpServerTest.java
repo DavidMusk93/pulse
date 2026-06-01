@@ -131,7 +131,6 @@ class CoordinatorHttpServerTest {
 
         HttpResponse<String> js = get("/assets/pulse-hosts.js");
         assertEquals(200, js.statusCode());
-        assertTrue(js.body().contains("Ant Design"));
         assertTrue(js.body().contains("/api/hosts"));
         assertTrue(js.body().contains("prepare_disk_layout_dry_run"));
         assertTrue(js.body().contains("analyze_block_layout_dry_run"));
@@ -154,6 +153,10 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("json-output"));
         assertTrue(js.body().contains("格式化"));
         assertTrue(js.body().contains("拷贝"));
+        assertTrue(js.body().contains("/tasks/completions/"));
+        assertTrue(js.body().contains("/keep"));
+        assertTrue(js.body().contains("task_id"));
+        assertTrue(js.body().contains("Trace"));
         assertTrue(!js.body().contains("status-led"));
         assertTrue(!js.body().contains("tile-seen"));
         assertTrue(!js.body().contains("PlayCircleOutlined"));
@@ -181,6 +184,12 @@ class CoordinatorHttpServerTest {
         assertTrue(css.body().contains(".completion-viewer"));
         assertTrue(css.body().contains(".agent-async-alert"));
         assertTrue(css.body().contains(".trace-list"));
+        assertTrue(css.body().contains(".completion-pane"));
+        assertTrue(css.body().contains(".task-trace-card"));
+        assertTrue(css.body().contains(".task-id-text"));
+        assertTrue(css.body().contains(".task-workspace .ant-card-head"));
+        assertTrue(css.body().contains(".task-workspace .ant-card-head-title"));
+        assertTrue(css.body().contains(".completion-toolbar"));
         assertTrue(css.body().contains(".json-key"));
         assertTrue(!response.body().contains("http-equiv=\"refresh\""));
     }

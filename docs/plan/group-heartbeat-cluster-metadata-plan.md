@@ -44,6 +44,9 @@
   - 任务按钮只保留文字，不展示图标；按钮背景色承载状态语义，避免额外状态符号。
   - 磁贴最小宽度上调，避免 150px 宽度下 header 和 pid 信息被压缩。
   - `Coordinator` 卡片、磁贴时间等超长单行文本接入自适应字号缩放，优先避免溢出，再考虑省略。
+  - Run UI 去掉右侧 `Trace` tab，改为左侧独立 `Trace` 卡片；每条 trace 展示时间、事件和 `task_id`。
+  - 右侧结果区只承载 completion viewer，避免 trace/completion 共用 tab 内容层导致查看异常或状态无法恢复。
+  - 调整 `结果查看` 卡片 head/body 留白和 completion 工具栏顶部间距，让标题区与格式化/拷贝按钮之间更舒展。
   - tide worker 区改成轻量进程卡片，展示 `pid/cpu/user/sys/rss/mem/threads/port/version`，超出内容由 `.tile-scroll` 滚动承载。
   - agent 侧从 `/proc/$pid/stat` 计算 user/sys CPU percent，从 `/proc/$pid/status` 读取 `VmRSS` 和 `Threads`，环境变量字段保持不变。
   - 修复 Ant Design Card 内部 flex 高度，确保 `.tile-scroll` 是真实可滚动容器。

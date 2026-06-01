@@ -1870,3 +1870,84 @@ SHA256：
 | `target/pulse-0.1.0-SNAPSHOT.jar` | `b9265cfcc695a7d8a9b82944df638a5892070e7c729cc055e9b6aad2e03848ec` |
 | `src/main/resources/static/pulse-hosts.js` | `757cc960eb51fd5fb6d51d79041026aa5353d4faa103d074f52ccb49a80c94e6` |
 | `src/main/resources/static/pulse-hosts.css` | `dc57877d3ca12505f7f8f02aecd8d17ff97466df302e7c2075dc03a6155434c6` |
+
+## Trace 左置与结果保留修复
+
+验证时间：2026-06-01 16:10 CST。
+
+需求：
+
+- `trace` 查看异常，且切换后无法恢复。
+- `trace` 日志移到左侧。
+- `trace` 展示补充 `task_id`。
+
+实现结果：
+
+- Run UI 去掉右侧 `Trace` tab，左侧新增独立 `Trace` 卡片，避免与 completion 共用结果容器。
+- `当前任务`、`执行队列` 和 `Trace` 每条记录都补充 `task_id`，并使用可换行的等宽文本展示。
+- “弹出结果”从 `/pop` 改为 `/keep`，不再移除 completion；trace 中新增 `task.completion_kept`，不再出现 `task.completion_popped`。
+
+线上验证：
+
+- 在 `dc02-p1a-t34-n013.byted.org` 上执行 `analyze_block_layout_dry_run`。
+- completion 返回 `task_id=task-bb5f66ba-e753-42ff-9dae-71becfabe461`，`output_len=117245`。
+- 浏览器检查结果：
+
+| 检查项 | 结果 |
+| --- | --- |
+| `traceOnLeft` | `true` |
+| `traceHasTaskId` | `true` |
+| `currentTaskHasTaskId` | `true` |
+| `outputLength` | `117240` |
+| `poppedShown` | `false` |
+| `traceHasKept` | `true` |
+| `traceHasPopped` | `false` |
+
+trace 首屏：
+
+```text
+06/01 16:10:29 · task.result_received
+task_id: task-bb5f66ba-e753-42ff-9dae-71becfabe461
+
+06/01 16:10:29 · task.accepted_by_agent
+task_id: task-bb5f66ba-e753-42ff-9dae-71becfabe461
+
+06/01 16:10:14 · task.dequeued_for_delivery
+task_id: task-bb5f66ba-e753-42ff-9dae-71becfabe461
+
+06/01 16:10:06 · task.enqueued
+task_id: task-bb5f66ba-e753-42ff-9dae-71becfabe461
+```
+
+点击“弹出结果”后新增：
+
+```text
+06/01 16:10:51 · task.completion_kept
+task_id: task-bb5f66ba-e753-42ff-9dae-71becfabe461
+```
+
+## Run UI 标题与工具栏留白微调
+
+验证时间：2026-06-01 16:23 CST。
+
+需求：
+
+- `结果查看` 与下方格式化/拷贝按钮距离过近，缺少 Apple 风格的舒展留白。
+
+实现结果：
+
+- `task-workspace` 的 card head 提升到 `min-height: 60px`，左右 padding 调整为 `18px`。
+- `task-workspace` body 顶部 padding 调整为 `16px`，不再让工具栏贴着标题分隔线。
+- `completion-toolbar` 增加底部内边距，保持标题、工具栏与结果框的节奏分离。
+
+线上浏览器测量：
+
+| 检查项 | 结果 |
+| --- | --- |
+| `gapFromHeadToToolbar` | `15` |
+| `gapFromTitleToToolbar` | `18` |
+| `headMinHeight` | `60px` |
+| `headPaddingLeft` | `18px` |
+| `bodyPaddingTop` | `16px` |
+| `toolbarPaddingBottom` | `4px` |
+| `titleText` | `结果查看` |
