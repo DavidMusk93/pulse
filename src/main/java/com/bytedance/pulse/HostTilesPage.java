@@ -66,34 +66,23 @@ public final class HostTilesPage {
                     body {
                       margin: 0;
                       min-height: 100vh;
-                      background:
-                        radial-gradient(circle at 10% 8%, rgba(251, 113, 133, .22), transparent 30%),
-                        radial-gradient(circle at 88% 4%, rgba(56, 189, 248, .24), transparent 28%),
-                        radial-gradient(circle at 50% 96%, rgba(250, 204, 21, .20), transparent 34%),
-                        linear-gradient(180deg, #fff7ed 0%, #eef2ff 48%, #ecfeff 100%);
+                      background: #f3f6fb;
                     }
                     header {
                       padding: 28px clamp(18px, 4vw, 56px) 18px;
                     }
                     .hero-shell {
                       display: grid;
-                      grid-template-columns: minmax(0, 1.12fr) minmax(280px, .88fr);
+                      grid-template-columns: minmax(0, 1.618fr) minmax(280px, 1fr);
                       gap: 22px;
                       align-items: stretch;
                     }
                     .hero-card,
                     .demo-card,
                     .testimonial-card {
-                      border: 1px solid rgba(255,255,255,.7);
+                      border: 1px solid #e2e8f0;
                       border-radius: 34px;
-                      background:
-                        linear-gradient(145deg, rgba(255,255,255,.82), rgba(255,255,255,.48)),
-                        radial-gradient(circle at 20% 0%, rgba(99,102,241,.18), transparent 36%);
-                      box-shadow:
-                        18px 18px 42px rgba(99,102,241,.16),
-                        -12px -12px 32px rgba(255,255,255,.78),
-                        inset 0 1px 0 rgba(255,255,255,.78);
-                      backdrop-filter: blur(18px);
+                      background: #ffffff;
                     }
                     .hero-card {
                       padding: clamp(22px, 3vw, 34px);
@@ -103,7 +92,7 @@ public final class HostTilesPage {
                       align-items: center;
                       gap: 8px;
                       margin: 0 0 12px;
-                      color: #7c3aed;
+                      color: #2563eb;
                       font-size: 12px;
                       font-weight: 900;
                       letter-spacing: .14em;
@@ -112,8 +101,8 @@ public final class HostTilesPage {
                     h1 {
                       margin: 0;
                       max-width: 760px;
-                      font-size: clamp(38px, 6vw, 76px);
-                      line-height: .9;
+                      font-size: clamp(34px, 5vw, 64px);
+                      line-height: .96;
                       font-weight: 900;
                       letter-spacing: -0.075em;
                       color: #111827;
@@ -144,8 +133,7 @@ public final class HostTilesPage {
                     }
                     .hero-cta {
                       color: #ffffff;
-                      background: linear-gradient(135deg, #f97316, #ec4899 48%, #7c3aed);
-                      box-shadow: 0 16px 34px rgba(236,72,153,.28);
+                      background: #2563eb;
                     }
                     .hero-secondary {
                       color: #334155;
@@ -175,8 +163,7 @@ public final class HostTilesPage {
                       border-radius: 20px;
                       padding: 12px;
                       color: #172033;
-                      background: linear-gradient(145deg, rgba(255,255,255,.84), rgba(255,255,255,.42));
-                      box-shadow: inset 0 -10px 24px rgba(99,102,241,.08);
+                      background: #f8fafc;
                     }
                     .catalog-pill strong {
                       display: block;
@@ -200,7 +187,7 @@ public final class HostTilesPage {
                     .testimonial-card cite {
                       display: block;
                       margin-top: 10px;
-                      color: #7c3aed;
+                      color: #2563eb;
                       font-style: normal;
                       font-weight: 850;
                     }
@@ -214,14 +201,10 @@ public final class HostTilesPage {
                     }
                     .status-card {
                       min-width: 0;
-                      border: 1px solid rgba(255,255,255,.72);
+                      border: 1px solid #e2e8f0;
                       border-radius: 24px;
                       padding: 14px;
-                      background: linear-gradient(145deg, rgba(255,255,255,.78), rgba(255,255,255,.44));
-                      box-shadow:
-                        12px 12px 28px rgba(99,102,241,.12),
-                        -10px -10px 24px rgba(255,255,255,.76),
-                        inset 0 1px 0 rgba(255,255,255,.7);
+                      background: #ffffff;
                     }
                     .status-card span {
                       display: block;
@@ -252,7 +235,7 @@ public final class HostTilesPage {
                       width: var(--progress, 0%);
                       height: 100%;
                       border-radius: inherit;
-                      background: linear-gradient(90deg, #22c55e, #14b8a6, #38bdf8);
+                      background: #0f766e;
                     }
                     .tile-grid {
                       display: grid;
@@ -266,22 +249,15 @@ public final class HostTilesPage {
                       min-height: 0;
                       padding: 0;
                       color: white;
-                      border: 1px solid rgba(255,255,255,.52);
+                      border: 1px solid rgba(15,23,42,.16);
                       border-radius: 28px;
-                      background:
-                        radial-gradient(circle at 16% 12%, rgba(255,255,255,.44), transparent 34%),
-                        radial-gradient(circle at 86% 4%, rgba(255,255,255,.20), transparent 28%),
-                        linear-gradient(135deg,
-                          hsl(var(--cluster-hue) 74% calc(66% - var(--load-level) * 18%)),
-                          hsl(calc(var(--cluster-hue) + 28) 76% calc(54% - var(--load-level) * 14%)));
-                      box-shadow:
-                        16px 18px 34px hsla(var(--cluster-hue), 60%, 34%, .20),
-                        -10px -10px 28px rgba(255,255,255,.70),
-                        inset 0 1px 0 rgba(255,255,255,.42);
+                      background: hsl(var(--cluster-hue) 44% calc(58% - var(--load-level) * 20%));
                       isolation: isolate;
                     }
+                    """
+                + """
                     .tile.expired {
-                      background: linear-gradient(135deg, #94a3b8, #64748b);
+                      background: #64748b;
                       filter: grayscale(.2);
                     }
                     .tile-scroll {
@@ -316,7 +292,6 @@ public final class HostTilesPage {
                       letter-spacing: .04em;
                       text-transform: uppercase;
                       background: rgba(255,255,255,.20);
-                      box-shadow: inset 0 1px 0 rgba(255,255,255,.26);
                       border-radius: 999px;
                     }
                     .tile-actions {
@@ -337,6 +312,8 @@ public final class HostTilesPage {
                       line-height: 1.25;
                       font-weight: 750;
                       cursor: pointer;
+                      white-space: nowrap;
+                      writing-mode: horizontal-tb;
                     }
                     .run-button:disabled {
                       cursor: not-allowed;
@@ -368,7 +345,6 @@ public final class HostTilesPage {
                       border: 1px solid rgba(255,255,255,.32);
                       background: rgba(255,255,255,.16);
                       border-radius: 16px;
-                      box-shadow: inset 0 1px 0 rgba(255,255,255,.18);
                     }
                     .worker-title {
                       display: flex;
@@ -406,7 +382,6 @@ public final class HostTilesPage {
                       border: 1px solid rgba(255,255,255,.30);
                       border-radius: 17px;
                       background: rgba(255,255,255,.15);
-                      box-shadow: inset 0 1px 0 rgba(255,255,255,.14);
                     }
                     .tile-meta span {
                       display: block;
@@ -432,7 +407,6 @@ public final class HostTilesPage {
                       width: calc(18% + var(--load-level) * 82%);
                       height: 100%;
                       background: hsl(var(--cluster-hue) 48% 24%);
-                      box-shadow: 0 0 0 1px rgba(255,255,255,.26) inset;
                     }
                     .empty {
                       grid-column: 1 / -1;
@@ -450,16 +424,9 @@ public final class HostTilesPage {
                     .cluster-section {
                       margin: 0 clamp(18px, 4vw, 56px) 26px;
                       padding: 18px;
-                      border: 1px solid rgba(255,255,255,.58);
+                      border: 1px solid #e2e8f0;
                       border-radius: 34px;
-                      background:
-                        linear-gradient(145deg, rgba(255,255,255,.56), rgba(255,255,255,.30)),
-                        radial-gradient(circle at 0% 0%, hsla(var(--cluster-hue), 80%, 72%, .20), transparent 28%);
-                      box-shadow:
-                        18px 18px 44px rgba(99,102,241,.10),
-                        -12px -12px 30px rgba(255,255,255,.68),
-                        inset 0 1px 0 rgba(255,255,255,.66);
-                      backdrop-filter: blur(16px);
+                      background: #ffffff;
                     }
                     .cluster-title {
                       display: flex;
@@ -480,8 +447,8 @@ public final class HostTilesPage {
                       background: rgba(255,255,255,.36);
                     }
                     .cluster-title:focus-visible {
-                      outline: none;
-                      box-shadow: 0 0 0 3px rgba(37,99,235,.28);
+                      outline: 2px solid var(--color-ring);
+                      outline-offset: 2px;
                     }
                     .cluster-toggle {
                       display: inline-flex;
@@ -491,10 +458,9 @@ public final class HostTilesPage {
                       height: 26px;
                       flex: 0 0 auto;
                       border-radius: 999px;
-                      background: linear-gradient(145deg, #ffffff, hsl(var(--cluster-hue) 76% 90%));
+                      background: #ffffff;
                       color: hsl(var(--cluster-hue) 44% 30%);
                       font: 900 14px/1 var(--font-mono);
-                      box-shadow: 6px 6px 14px rgba(99,102,241,.16), inset 0 1px 0 #fff;
                       transition: transform var(--motion-base) var(--motion-ease-out);
                     }
                     .cluster-section.collapsed .cluster-toggle {
@@ -524,9 +490,8 @@ public final class HostTilesPage {
                       display: none;
                       align-items: center;
                       justify-content: center;
-                      padding: var(--space-3);
+                      padding: clamp(34px, 5.9vw, 84px) clamp(22px, 4vw, 64px);
                       background: rgba(15,23,42,.58);
-                      backdrop-filter: blur(12px);
                     }
                     .task-modal.open {
                       display: flex;
@@ -547,18 +512,14 @@ public final class HostTilesPage {
                       position: relative;
                       display: flex;
                       flex-direction: column;
-                      width: min(1680px, calc(100vw - 24px));
-                      height: calc(100vh - 24px);
-                      max-height: calc(100vh - 24px);
+                      width: min(1320px, calc(100vw - 44px));
+                      height: min(820px, 61.8vh);
+                      max-height: calc(100vh - 68px);
                       overflow: hidden;
                       border: 1px solid rgba(148,163,184,.32);
                       border-radius: var(--radius-xl);
-                      background:
-                        radial-gradient(circle at 0% 0%, rgba(37,99,235,.16), transparent 28%),
-                        radial-gradient(circle at 100% 0%, rgba(14,165,233,.12), transparent 26%),
-                        linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+                      background: #ffffff;
                       color: var(--color-foreground);
-                      box-shadow: 0 28px 90px rgba(15,23,42,.34);
                     }
                     .task-panel-head {
                       position: absolute;
@@ -598,12 +559,12 @@ public final class HostTilesPage {
                       color: var(--color-ring);
                     }
                     .task-panel-close:focus-visible {
-                      outline: none;
-                      box-shadow: 0 0 0 3px rgba(37,99,235,.35);
+                      outline: 2px solid var(--color-ring);
+                      outline-offset: 2px;
                     }
                     .task-shell {
                       display: grid;
-                      grid-template-columns: minmax(310px, 380px) minmax(0, 1fr);
+                      grid-template-columns: minmax(300px, 1fr) minmax(0, 1.618fr);
                       grid-template-rows: minmax(0, 1fr);
                       gap: 18px;
                       flex: 1 1 auto;
@@ -630,10 +591,7 @@ public final class HostTilesPage {
                       padding: 16px;
                       border: 1px solid #dbeafe;
                       border-radius: 26px;
-                      background:
-                        radial-gradient(circle at 20% 0%, rgba(37,99,235,.14), transparent 34%),
-                        linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-                      box-shadow: 0 18px 44px rgba(37,99,235,.09);
+                      background: #f8fbff;
                     }
                     .task-hero > div {
                       min-width: 0;
@@ -657,8 +615,8 @@ public final class HostTilesPage {
                       display: none;
                     }
                     .task-toolbar {
-                      display: grid;
-                      grid-template-columns: 1fr 1fr;
+                      display: flex;
+                      flex-wrap: nowrap;
                       gap: var(--space-2);
                       align-items: center;
                     }
@@ -672,22 +630,18 @@ public final class HostTilesPage {
                       font: 600 14px/1.2 inherit;
                       transition: background-color var(--motion-fast) var(--motion-ease-out),
                                   border-color var(--motion-fast) var(--motion-ease-out),
-                                  box-shadow var(--motion-fast) var(--motion-ease-out),
                                   transform var(--motion-fast) var(--motion-ease-out);
                     }
                     .task-toolbar select {
-                      appearance: none;
-                      -webkit-appearance: none;
-                      grid-column: 1 / -1;
+                      flex: 1 1 auto;
                       min-width: 0;
-                      padding-right: 42px;
-                      background:
-                        linear-gradient(45deg, transparent 50%, #334155 50%) calc(100% - 20px) 50% / 6px 6px no-repeat,
-                        linear-gradient(135deg, #334155 50%, transparent 50%) calc(100% - 16px) 50% / 6px 6px no-repeat,
-                        rgba(255,255,255,.9);
+                      padding-right: 12px;
+                      background: #ffffff;
                     }
                     .task-toolbar button {
+                      flex: 0 0 auto;
                       cursor: pointer;
+                      white-space: nowrap;
                     }
                     .task-toolbar button:hover:not(:disabled),
                     .task-toolbar select:hover {
@@ -699,8 +653,8 @@ public final class HostTilesPage {
                     }
                     .task-toolbar button:focus-visible,
                     .task-toolbar select:focus-visible {
-                      outline: none;
-                      box-shadow: 0 0 0 3px rgba(37,99,235,.35);
+                      outline: 2px solid var(--color-ring);
+                      outline-offset: 2px;
                       border-color: var(--color-ring);
                     }
                     .task-toolbar button:disabled {
@@ -709,13 +663,11 @@ public final class HostTilesPage {
                     }
                     .task-primary {
                       border-color: var(--color-primary) !important;
-                      background: linear-gradient(135deg, #2563eb, var(--color-primary)) !important;
+                      background: var(--color-primary) !important;
                       color: var(--color-on-primary) !important;
-                      box-shadow: 0 10px 24px rgba(37,99,235,.22);
                     }
                     .task-primary:hover:not(:disabled) {
-                      background: linear-gradient(135deg, #1d4ed8, var(--color-primary-hover)) !important;
-                      box-shadow: 0 12px 28px rgba(37,99,235,.32);
+                      background: var(--color-primary-hover) !important;
                     }
                     .task-close-button {
                       min-width: 0;
@@ -760,7 +712,6 @@ public final class HostTilesPage {
                       border-radius: var(--radius-lg);
                       background: rgba(255,255,255,.86);
                       padding: 14px;
-                      box-shadow: 0 12px 34px rgba(15,23,42,.06);
                     }
                     .task-card h3 {
                       margin: 0 0 var(--space-2);
@@ -860,6 +811,35 @@ public final class HostTilesPage {
                       overflow-wrap: anywhere;
                       word-break: break-word;
                     }
+                    .task-progress {
+                      display: grid;
+                      gap: 8px;
+                      margin-bottom: 8px;
+                    }
+                    .task-progress-row {
+                      border: 1px solid #bfdbfe;
+                      border-radius: 16px;
+                      background: #eff6ff;
+                      padding: 10px;
+                    }
+                    .task-progress-row.running {
+                      border-color: #99f6e4;
+                      background: #f0fdfa;
+                    }
+                    .task-progress-bar {
+                      height: 7px;
+                      margin-top: 8px;
+                      overflow: hidden;
+                      border-radius: 999px;
+                      background: #dbeafe;
+                    }
+                    .task-progress-bar i {
+                      display: block;
+                      width: var(--progress, 38%);
+                      height: 100%;
+                      border-radius: inherit;
+                      background: #0f766e;
+                    }
                     .completion-strip {
                       display: grid;
                       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -906,7 +886,6 @@ public final class HostTilesPage {
                     }
                     .task-output:focus-within {
                       border-color: var(--color-ring);
-                      box-shadow: 0 0 0 3px rgba(37,99,235,.18);
                     }
                     .task-output-pre {
                       box-sizing: border-box;
@@ -987,13 +966,13 @@ public final class HostTilesPage {
                     }
                   </style>
                 </head>
-                <body data-coordinator-id="__COORDINATOR_ID__">
+                  <body>
                   <header>
                     <div class="hero-shell">
                       <section class="hero-card">
                         <p class="hero-eyebrow">Pulse 心跳平台</p>
-                        <h1>统一查看主机心跳、任务与资源状态</h1>
-                        <div class="subtitle">Coordinator __COORDINATOR_ID__ 通过精简消息机制承载任务管理、集群运维、资源管理、资源监控与告警。</div>
+                        <h1>心跳驱动运维闭环</h1>
+                        <div class="subtitle">用一条精简消息链连接任务、资源、监控与告警。</div>
                         <div class="hero-actions">
                           <a class="hero-cta" href="#pulse-app">查看主机</a>
                           <a class="hero-secondary" href="#pulse-app">查看能力</a>
@@ -1003,15 +982,15 @@ public final class HostTilesPage {
                         <section class="demo-card">
                           <h2>平台能力</h2>
                           <div class="catalog-preview">
-                            <div class="catalog-pill"><strong>任务管理</strong><span>通过消息下发和回收执行结果。</span></div>
-                            <div class="catalog-pill"><strong>集群运维</strong><span>按 cluster 与 group 编排节点动作。</span></div>
-                            <div class="catalog-pill"><strong>资源管理</strong><span>按固定窗口聚合资源指标。</span></div>
-                            <div class="catalog-pill"><strong>监控告警</strong><span>基于心跳识别异常节点与趋势。</span></div>
+                            <div class="catalog-pill"><strong>任务</strong><span>下发、执行、回执。</span></div>
+                            <div class="catalog-pill"><strong>集群</strong><span>分组、编排、收敛。</span></div>
+                            <div class="catalog-pill"><strong>资源</strong><span>采集、聚合、判断。</span></div>
+                            <div class="catalog-pill"><strong>告警</strong><span>识别、定位、闭环。</span></div>
                           </div>
                         </section>
                         <section class="testimonial-card">
                           <h2>平台说明</h2>
-                          <blockquote>统一消息面，统一心跳面，统一运维视图。页面只展示关键状态，避免无效噪声。</blockquote>
+                          <blockquote>心跳不只是存活探针，也是轻量控制面。</blockquote>
                           <cite>Pulse Coordinator</cite>
                         </section>
                       </aside>
@@ -1074,7 +1053,7 @@ public final class HostTilesPage {
                       const palette = [205, 188, 168, 146, 126, 95, 48, 215, 200, 178];
                       const app = document.getElementById('pulse-app');
                       const status = document.getElementById('pulse-status');
-                      const coordinatorId = document.body.dataset.coordinatorId || 'unknown';
+                      const coordinatorId = normalizeAddress(window.location.host);
                       const taskModal = document.getElementById('task-modal');
                       const taskTitle = document.getElementById('task-title');
                       const taskTrace = document.getElementById('task-trace');
@@ -1193,8 +1172,8 @@ public final class HostTilesPage {
                             if (collapsed) {
                               // Skip DOM diffing of tiles when collapsed: avoids wide-area
                               // re-renders on the polling cadence.
-                              section.querySelectorAll('[data-agent-id]').forEach(tile => {
-                                this.tiles.delete(tile.dataset.agentId || '');
+                              section.querySelectorAll('[data-agent-key]').forEach(tile => {
+                                this.tiles.delete(tile.dataset.agentKey || '');
                               });
                               const grid = section.querySelector('.tile-grid');
                               if (grid && grid.firstChild) {
@@ -1207,8 +1186,8 @@ public final class HostTilesPage {
                           });
                           [...this.clusterSections.entries()].forEach(([cluster, section]) => {
                             if (!activeClusters.has(cluster)) {
-                              section.querySelectorAll('[data-agent-id]').forEach(tile => {
-                                this.tiles.delete(tile.dataset.agentId || '');
+                              section.querySelectorAll('[data-agent-key]').forEach(tile => {
+                                this.tiles.delete(tile.dataset.agentKey || '');
                               });
                               section.remove();
                               this.clusterSections.delete(cluster);
@@ -1250,25 +1229,26 @@ public final class HostTilesPage {
                           const activeAgents = new Set();
                           sortedHosts.forEach((host, rank) => {
                             const agentId = host.agent_id || '';
-                            activeAgents.add(agentId);
-                            const tile = this.getOrCreateTile(agentId);
+                            const agentKey = stableDomKey(host);
+                            activeAgents.add(agentKey);
+                            const tile = this.getOrCreateTile(agentKey);
                             updateTile(tile, host, rank, maxLoad);
                             placeChild(grid, tile, rank);
                           });
-                          grid.querySelectorAll('[data-agent-id]').forEach(tile => {
-                            if (!activeAgents.has(tile.dataset.agentId || '')) {
+                          grid.querySelectorAll('[data-agent-key]').forEach(tile => {
+                            if (!activeAgents.has(tile.dataset.agentKey || '')) {
                               tile.remove();
-                              this.tiles.delete(tile.dataset.agentId || '');
+                              this.tiles.delete(tile.dataset.agentKey || '');
                             }
                           });
                         },
-                        getOrCreateTile(agentId) {
-                          let tile = this.tiles.get(agentId);
+                        getOrCreateTile(agentKey) {
+                          let tile = this.tiles.get(agentKey);
                           if (tile) {
                             return tile;
                           }
-                          tile = createTile(agentId);
-                          this.tiles.set(agentId, tile);
+                          tile = createTile(agentKey);
+                          this.tiles.set(agentKey, tile);
                           return tile;
                         },
                         start() {
@@ -1292,7 +1272,7 @@ public final class HostTilesPage {
                         const aliveProgress = state.hosts.length ? Math.round((alive / state.hosts.length) * 100) : 0;
                         const expiredProgress = state.hosts.length ? Math.round((expired / state.hosts.length) * 100) : 0;
                         return `
-                          <div class="status-card"><span>协调器</span><strong>${escapeHtml(coordinatorId)}</strong></div>
+                          <div class="status-card"><span>协调器 IPv6</span><strong>${escapeHtml(coordinatorId || '-')}</strong></div>
                           <div class="status-card"><span>主机总数</span><strong>${state.hosts.length} 台</strong><div class="progress-track"><i class="progress-fill" style="--progress:100%"></i></div></div>
                           <div class="status-card"><span>存活节点</span><strong>${alive} · ${aliveProgress}%</strong><div class="progress-track"><i class="progress-fill" style="--progress:${aliveProgress}%"></i></div></div>
                           <div class="status-card"><span>待处理</span><strong>${expired} · ${expiredProgress}%</strong><div class="progress-track"><i class="progress-fill" style="--progress:${expiredProgress}%"></i></div></div>
@@ -1311,6 +1291,19 @@ public final class HostTilesPage {
                           groups.get(cluster).push(host);
                         });
                         return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right));
+                      }
+
+                      function stableDomKey(host) {
+                        return 'ip-' + hashKey(String(host.ip || host.agent_id || 'unknown'));
+                      }
+
+                      function hashKey(value) {
+                        let hash = 0;
+                        for (let i = 0; i < value.length; i++) {
+                          hash = ((hash << 5) - hash) + value.charCodeAt(i);
+                          hash |= 0;
+                        }
+                        return Math.abs(hash).toString(36);
                       }
 
                       const collapseStorageKey = 'pulse:collapsedClusters';
@@ -1395,10 +1388,10 @@ public final class HostTilesPage {
                         return averageLoad(host);
                       }
 
-                      function createTile(agentId) {
+                      function createTile(agentKey) {
                         const tile = document.createElement('section');
                         tile.className = 'tile';
-                        tile.dataset.agentId = agentId;
+                        tile.dataset.agentKey = agentKey;
                         tile.innerHTML = `
                           <div class="tile-scroll">
                             <div class="tile-head">
@@ -1426,15 +1419,15 @@ public final class HostTilesPage {
                         const level = maxLoad <= 0 ? 0 : Math.max(0, Math.min(1, load / maxLoad));
                         const statusClass = host.status === 'expired' ? 'expired' : 'alive';
                         const agentId = host.agent_id || '';
-                        tile.dataset.agentId = agentId;
+                        tile.dataset.agentKey = stableDomKey(host);
                         tile.className = 'tile ' + statusClass;
                         tile.style.setProperty('--load-level', level.toFixed(3));
                         setText(tile, 'seen', formatSeen(host.observed_at_ms));
                         setText(tile, 'status', host.status || '');
                         const runButton = tile.querySelector('[data-action="run-task"]');
                         runButton.disabled = host.status !== 'alive';
-                        runButton.onclick = () => openTaskModal(agentId, host.ip || agentId);
-                        setText(tile, 'ip_title', host.ip || '未知 IP');
+                        runButton.onclick = () => openTaskModal(agentId, host.ip || '未知 IPv6');
+                        setText(tile, 'ip_title', normalizeAddress(host.ip) || '未知 IPv6');
                         setText(tile, 'load_avg', averageLoad(host).toFixed(2));
                         setText(tile, 'area', host.area || '');
                         setText(tile, 'confirmations', String(host.heartbeat_confirmations || 0) + '/3，20s');
@@ -1475,7 +1468,7 @@ public final class HostTilesPage {
                         activeTaskAgentId = agentId;
                         activeCompletionTaskId = '';
                         activeRunTaskId = '';
-                        activeTaskLabel = agentId || '-';
+                        activeTaskLabel = normalizeAddress(label || '') || '未知 IPv6';
                         activeOutputText = '';
                         taskTitle.textContent = '执行任务';
                         taskTrace.textContent = 'trace: 等待中';
@@ -1528,6 +1521,7 @@ public final class HostTilesPage {
                         const execution = snapshot.execution_queue || [];
                         const completions = snapshot.completion_queue || [];
                         const asyncTasks = activeHostAsyncTasks();
+                        const agentTask = activeAgentTask(asyncTasks);
                         const currentExecution = activeRunTaskId
                           ? execution.find(task => task.task_id === activeRunTaskId)
                           : (execution[execution.length - 1] || null);
@@ -1537,16 +1531,18 @@ public final class HostTilesPage {
                         const latest = currentCompletion || completions[completions.length - 1] || null;
                         const traceId = (latest && latest.trace_id)
                           || (currentExecution && currentExecution.trace_id)
+                          || (agentTask && agentTask.trace_id)
                           || latestTraceId(snapshot.traces)
                           || '等待中';
                         activeCompletionTaskId = latest ? latest.task_id : '';
                         taskTrace.textContent = 'trace: ' + traceId;
                         taskCurrent.textContent = currentCompletion
                           ? (currentCompletion.status || 'completed')
-                          : (currentExecution ? (currentExecution.status || 'queued') : (latest ? '上一条结果' : '空闲'));
+                          : (agentTask ? statusLabel(agentTask.status || 'running')
+                            : (currentExecution ? statusLabel(currentExecution.status || 'queued') : (latest ? '上一条结果' : '空闲')));
                         taskCompletionCount.textContent = String(completions.length);
                         taskPop.disabled = !activeCompletionTaskId;
-                        taskExecution.innerHTML = renderIncomingTasks(asyncTasks)
+                        taskExecution.innerHTML = renderAgentTasks(asyncTasks)
                           + (execution.length ? '<div class="task-list">'
                           + execution.map(renderExecutionTask).join('')
                           + '</div>' : '<div class="task-empty">当前没有待执行任务。来自 agent 心跳的任务会显示在上方。</div>');
@@ -1556,9 +1552,11 @@ public final class HostTilesPage {
                           renderOutput(outputText);
                         } else {
                           taskCompletionMeta.innerHTML = '<div class="task-empty">暂无结果。面板打开期间每 2 秒自动刷新一次。</div>';
-                          renderOutput(currentExecution
-                            ? '正在等待 agent 心跳返回任务结果：' + (currentExecution.task_id || 'task') + '...'
-                            : '');
+                          renderOutput(agentTask
+                            ? runningTaskText(agentTask)
+                            : (currentExecution
+                              ? '正在等待 agent 心跳返回任务结果：' + (currentExecution.task_id || 'task') + '...'
+                              : ''));
                         }
                       }
 
@@ -1567,37 +1565,86 @@ public final class HostTilesPage {
                           <div class="task-row compact">
                             <div class="task-row-head">
                               <div class="task-name">${escapeHtml(task.task_type || '')}</div>
-                              <span class="task-badge ${escapeHtml(task.status || '')}">${escapeHtml(task.status || '')}</span>
+                              <span class="task-badge ${escapeHtml(task.status || '')}">${escapeHtml(statusLabel(task.status || ''))}</span>
                             </div>
                             <div class="task-detail">
                               task: ${escapeHtml(task.task_id || '')}<br>
                               trace: ${escapeHtml(task.trace_id || '')}<br>
-                              delivered: ${escapeHtml(formatTime(task.delivered_at_ms))}<br>
-                              accepted: ${escapeHtml(formatTime(task.accepted_at_ms))}
+                              下发: ${escapeHtml(formatTime(task.delivered_at_ms))}<br>
+                              接收: ${escapeHtml(formatTime(task.accepted_at_ms))}
                             </div>
                           </div>
                         `;
                       }
 
-                      function renderIncomingTasks(tasks) {
+                      function renderAgentTasks(tasks) {
                         if (!tasks.length) {
                           return '';
                         }
-                        return '<div class="task-list">'
+                        return '<div class="task-progress">'
                           + tasks.map(task => `
-                            <div class="task-row compact incoming-task">
+                            <div class="task-progress-row ${escapeHtml(task.status || '')}">
                               <div class="task-row-head">
-                                <div class="task-name">待回收结果</div>
-                                <span class="task-badge ${escapeHtml(task.status || '')}">${escapeHtml(task.status || '')}</span>
+                                <div class="task-name">agent 执行中</div>
+                                <span class="task-badge ${escapeHtml(task.status || '')}">${escapeHtml(statusLabel(task.status || ''))}</span>
                               </div>
                               <div class="task-detail">
                                 ${escapeHtml(task.task_type || '')}<br>
                                 trace: ${escapeHtml(task.trace_id || '')}<br>
-                                started: ${escapeHtml(formatTime(task.started_at_ms))}
+                                接收: ${escapeHtml(formatTime(task.accepted_at_ms))}<br>
+                                开始: ${escapeHtml(formatTime(task.started_at_ms))}
                               </div>
+                              <div class="task-progress-bar" aria-hidden="true"><i style="--progress:${taskProgress(task)}%"></i></div>
                             </div>
                           `).join('')
                           + '</div>';
+                      }
+
+                      function activeAgentTask(tasks) {
+                        if (!tasks.length) {
+                          return null;
+                        }
+                        if (activeRunTaskId) {
+                          return tasks.find(task => task.task_id === activeRunTaskId) || null;
+                        }
+                        return tasks[tasks.length - 1] || null;
+                      }
+
+                      function runningTaskText(task) {
+                        return [
+                          'agent 已反馈执行状态',
+                          '状态: ' + statusLabel(task.status || ''),
+                          '任务: ' + (task.task_type || ''),
+                          'task: ' + (task.task_id || ''),
+                          'trace: ' + (task.trace_id || ''),
+                          '接收: ' + formatTime(task.accepted_at_ms),
+                          '开始: ' + formatTime(task.started_at_ms)
+                        ].join('\\n');
+                      }
+
+                      function taskProgress(task) {
+                        const status = task.status || '';
+                        if (status === 'running') {
+                          return 68;
+                        }
+                        if (status === 'accepted') {
+                          return 38;
+                        }
+                        return 24;
+                      }
+
+                      function statusLabel(status) {
+                        return {
+                          queued: '队列中',
+                          delivered: '已下发',
+                          accepted: '已接收',
+                          running: '执行中',
+                          completed: '已完成',
+                          failed: '失败',
+                          rejected: '已拒绝',
+                          timed_out: '超时',
+                          timeout: '超时'
+                        }[status] || status || '-';
                       }
 
                       function renderCompletionMeta(result, showingPreviousResult) {
@@ -1606,7 +1653,7 @@ public final class HostTilesPage {
                           : '';
                         return previousNotice + `
                           <div class="completion-strip">
-                            <div><span>状态</span><strong>${escapeHtml(result.status || '')}</strong></div>
+                            <div><span>状态</span><strong>${escapeHtml(statusLabel(result.status || ''))}</strong></div>
                             <div><span>退出码</span><strong>${escapeHtml(result.exit_code ?? '-')}</strong></div>
                             <div><span>耗时</span><strong>${escapeHtml(result.duration_ms || 0)}ms</strong></div>
                             <div><span>结束时间</span><strong>${escapeHtml(formatTime(result.finished_at_ms))}</strong></div>
@@ -1925,6 +1972,20 @@ public final class HostTilesPage {
                         return Number.isFinite(number) ? number.toFixed(2) + '%' : '-';
                       }
 
+                      function normalizeAddress(value) {
+                        const text = String(value || '').trim();
+                        if (!text) {
+                          return '';
+                        }
+                        let raw = text;
+                        if (raw.startsWith('[')) {
+                          const end = raw.indexOf(']');
+                          raw = end > 0 ? raw.slice(1, end) : raw.slice(1);
+                        }
+                        raw = raw.replaceAll('[', '').replaceAll(']', '');
+                        return raw.includes(':') && !raw.includes('.') ? raw : '';
+                      }
+
                       function escapeHtml(value) {
                         return String(value)
                           .replaceAll('&', '&amp;')
@@ -1940,8 +2001,7 @@ public final class HostTilesPage {
                   </script>
                 </body>
                 </html>
-                """
-                .replace("__COORDINATOR_ID__", escape(coordinatorId));
+                """;
     }
 
     private static String escape(String value) {

@@ -43,6 +43,12 @@
   - 卡片不展示瞬时 `Load`，只展示前端本地聚合的固定窗口 `5min AVG`。
   - `5min AVG` 在窗口开始后冻结展示值，窗口切换时再提交上一窗口均值，避免频繁重排和视觉抖动。
   - 去掉额外交互动效，保持自然滚动，禁止 `jelly-scroll`、持续水波或扫光背景动态。
+  - 去掉 UI 高光表达，禁止 `box-shadow`、`backdrop-filter`、`linear-gradient`、`radial-gradient` 等发光、模糊或渐变效果。
+  - 任意可见位置只展示 IPv6；hostname、FQDN 和内部域名不得进入文案、DOM data key 或任务标题。
+  - 页面描述保持心跳平台定位，精简表达任务、集群、资源、监控和告警能力，避免重复叙述。
+  - Run UI 按黄金分割组织：面板尺寸约为主页面视口的黄金比例，左侧信息区与右侧 completion 区约为 `1 : 1.618`。
+  - Run UI 从 `state.async_tasks` 展示 agent `accepted/running` 状态，在 completion 结果返回前给出执行中反馈。
+  - 任务按钮和工具栏按钮水平排列，禁止竖排、折行和压缩成不可读状态。
 
 ## 阶段 2.1：减压型分组策略设计补充
 
@@ -113,6 +119,10 @@
   - 验证 `/hosts` 包含 `clusterSections`、`tiles`、`updateClusters`、`updateTiles`、`placeChild`、`restoreViewportScroll`、固定窗口 `5min AVG` 状态和低饱和 palette。
   - 验证 `/hosts` 不再展示 `Load` 字段，只展示 `5min AVG`。
   - 验证 `/hosts` 不包含 `jelly-scroll`、`liquid-flow`、`water-ripple`、`repeating-radial-gradient` 和白色 load bar 填充。
+  - 验证 `/hosts` 不包含 `box-shadow`、`backdrop-filter`、`gradient`、`hostname`、`.byted.org`、`data-agent-id`、`data-coordinator-id`。
+  - 验证 `/hosts` 包含 `normalizeAddress`、`data-agent-key`、`renderAgentTasks`、`activeAgentTask`、`task-progress-row`、`statusLabel`。
+  - 验证 Run UI 包含黄金分割 CSS：`height: min(820px, 61.8vh)` 与 `grid-template-columns: minmax(300px, 1fr) minmax(0, 1.618fr)`。
+  - 验证任务按钮包含 `white-space: nowrap` 与 `writing-mode: horizontal-tb`。
 - 执行：
 
 ```bash

@@ -938,3 +938,89 @@ Forbidden 动效确认不包含：
 - `repeating-radial-gradient`
 - `liquid-flow`
 - `http-equiv="refresh"`
+
+## Heartbeat Platform UI 与 Run UI 验证
+
+验证时间：2026-06-01 11:38 CST。
+
+需求：
+
+- 页面描述保持心跳平台定位，简洁表达任务、集群、资源、监控和告警能力。
+- UI 去掉高光、模糊、渐变、水波、扫光和果冻动效。
+- 任意可见位置只展示 IPv6，不展示 hostname 或内部域名。
+- Run UI 展示 agent heartbeat 中的 `async_tasks` 执行中状态。
+- 任务按钮文字水平排列。
+- Run UI 使用黄金分割布局，右侧 completion 区与左侧信息区约为 `1.618 : 1`。
+- 使用真实浏览器确认。
+
+本地验证：
+
+```bash
+mvn test
+mvn package
+```
+
+结果：
+
+- `mvn test`：`22 tests, 0 failures, 0 errors`。
+- `mvn package`：构建成功。
+
+浏览器验证：
+
+- 启动本地 coordinator：`PULSE_PORT=9967`。
+- 注入测试心跳：
+  - `host=demo-host.byted.org`
+  - `ip=fdbd:dc05:11:634::45`
+  - `state.async_tasks[0].status=running`
+- 使用 headless Chrome + CDP 打开 `http://127.0.0.1:9967/hosts`，点击首个 `任务` 按钮并测量 DOM。
+
+浏览器测量结果：
+
+| 项目 | 结果 |
+| --- | --- |
+| `modalOpen` | `true` |
+| `aliveTileCount` | `1` |
+| `taskAgent` | `fdbd:dc05:11:634::45` |
+| `taskCurrent` | `执行中` |
+| `agentTaskStatusVisible` | `true` |
+| `visibleTextHasHostname` | `false` |
+| `visibleTextHasIPv6` | `true` |
+| `htmlHasForbiddenStyle` | `false` |
+| `htmlHasForbiddenData` | `false` |
+| `workspaceToSidebar` | `1.618` |
+| `panelToViewportHeight` | `0.621` |
+| `outputBelowCompletion` | `false` |
+| `outputBelowPanel` | `false` |
+| `horizontal` | `false` |
+
+按钮测量：
+
+| 按钮 | `white-space` | `writing-mode` | 尺寸 |
+| --- | --- | --- | --- |
+| `任务` | `nowrap` | `horizontal-tb` | `38x21` |
+| `执行 dry-run` | `nowrap` | `horizontal-tb` | `103x43` |
+| `弹出结果` | `nowrap` | `horizontal-tb` | `84x43` |
+| `关闭` | `nowrap` | `horizontal-tb` | `57x43` |
+
+执行状态可见内容：
+
+```text
+agent 执行中
+执行中
+prepare_disk_layout_dry_run
+trace: trace-1
+```
+
+源码与测试门禁：
+
+- `/hosts` HTML 不包含 `box-shadow`、`backdrop-filter`、`gradient`、`hostname`、`.byted.org`、`data-agent-id`、`data-coordinator-id`。
+- `/hosts` HTML 包含 `normalizeAddress`、`data-agent-key`、`renderAgentTasks`、`activeAgentTask`、`task-progress-row`、`statusLabel`。
+- Run UI 包含 `height: min(820px, 61.8vh)` 与 `grid-template-columns: minmax(300px, 1fr) minmax(0, 1.618fr)`。
+
+后续部署范围：
+
+- 本次只修改 coordinator 内嵌 `/hosts` 页面、测试和文档，不涉及 agent 心跳采集逻辑。
+- 线上更新继续只升级 3 台 coordinator：
+  - `fdbd:dc05:11:634::45`
+  - `fdbd:dc05:13:10c::40`
+  - `fdbd:dc07:0:810::44`

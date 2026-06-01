@@ -63,7 +63,12 @@ python3 -m pip install --user websocket-client
 - 等待 `#task-modal.open`。
 - 需要时点击 `#task-run`，等待 JSON 输出。
 - 测量 modal、shell、workspace、execution card、completion card、output、Monaco、关闭按钮的 `getBoundingClientRect()`。
+- 测量 `.task-sidebar` 与 `.task-workspace` 宽度比例，确认右侧 completion 区约为左侧信息区的 `1.618` 倍。
 - 比较 output 底部是否溢出 completion/panel。
+- 检查按钮 computed style，确认任务按钮和工具栏按钮为水平排布且不折行。
+- 检查页面可见文本和关键 DOM 属性，确认只出现 IPv6，不出现 hostname 或内部域名。
+- 检查 computed style 和 HTML 文本，确认没有高光、模糊、渐变、扫光、水波、果冻等视觉效果。
+- 下发任务后观察 `state.async_tasks` 对应的 `agent 执行中`、`已接收`、`执行中` 是否在 completion 返回前出现。
 - 截图做最终视觉确认。
 
 建议采集的指标示例：
@@ -93,6 +98,7 @@ python3 -m pip install --user websocket-client
     panel: rect(panel),
     shell: rect(q('.task-shell')),
     workspace: rect(q('.task-workspace')),
+    sidebar: rect(q('.task-sidebar')),
     execution: rect(q('.execution-card')),
     completion: rect(comp),
     completionMeta: rect(q('#task-completion-meta')),
@@ -106,6 +112,25 @@ python3 -m pip install --user websocket-client
       clientWidth: out.clientWidth,
       scrollWidth: out.scrollWidth
     } : null,
+    goldenRatio: q('.task-sidebar') && q('.task-workspace') ? {
+      workspaceToSidebar: q('.task-workspace').getBoundingClientRect().width /
+        q('.task-sidebar').getBoundingClientRect().width,
+      panelToViewportHeight: panel ? panel.getBoundingClientRect().height / innerHeight : null
+    } : null,
+    taskButtons: [...document.querySelectorAll('.run-button, .task-toolbar button')].map(el => {
+      const style = getComputedStyle(el);
+      return {
+        text: el.textContent.trim(),
+        whiteSpace: style.whiteSpace,
+        writingMode: style.writingMode,
+        width: el.getBoundingClientRect().width,
+        height: el.getBoundingClientRect().height
+      };
+    }),
+    visibleTextHasHostname: /[a-z0-9-]+\\.byted\\.org/i.test(document.body.innerText),
+    htmlHasHighlightStyle: /box-shadow|backdrop-filter|gradient|liquid-flow|water-ripple|jelly-scroll/i.test(document.documentElement.outerHTML),
+    agentTaskStatusVisible: !![...document.querySelectorAll('.task-progress-row')]
+      .find(el => /agent 执行中|已接收|执行中/.test(el.innerText)),
     overflow: out && comp ? {
       outputBelowCompletion: out.getBoundingClientRect().bottom > comp.getBoundingClientRect().bottom + 1,
       outputBelowPanel: out.getBoundingClientRect().bottom > panel.getBoundingClientRect().bottom + 1,
@@ -169,8 +194,14 @@ outputEditor.setScrollPosition({scrollTop, scrollLeft});
 
 - 顶部和任务面板文案都是简洁中文。
 - 页面定位是“心跳平台”，不是课程、校园、实验室或教育产品。
+- 页面描述不重复堆叠，围绕任务、集群、资源、监控、告警保留想象空间。
+- 所有可见节点标识只使用 IPv6；不出现 hostname、FQDN、`.byted.org` 或 `data-agent-id`。
+- 页面和任务面板不使用高光、发光、模糊、渐变、扫光、水波或果冻动效。
 - 卡片不展示瞬时 `Load`，只展示固定窗口 `5min AVG`。
 - `5min AVG` 在窗口内不抖动，窗口切换时才更新。
+- Run UI 面板高度约为 viewport 的 `61.8%`，左侧信息区与右侧 completion 区宽度约为 `1 : 1.618`。
+- 任务按钮水平排列，文字不竖排、不折行。
+- agent 执行任务后，completion 返回前能够看到 heartbeat 中的 `accepted/running` 状态。
 - 轮询刷新不会让页面滚动位置、卡片内部滚动位置或任务输出滚动位置回到起点。
 
 ## 构建、部署、验证
@@ -220,6 +251,10 @@ done
 - close button 有可见 bounding box
 - editor/output 在目标 viewport 中具有足够高度
 - JSON 输出在轮询期间保持滚动位置
+- `goldenRatio.workspaceToSidebar` 接近 `1.618`
+- `visibleTextHasHostname=false`
+- `htmlHasHighlightStyle=false`
+- 任务下发后 `agentTaskStatusVisible=true`
 
 ## 提交纪律
 
