@@ -577,37 +577,19 @@ public final class HostTilesPage {
                       padding-right: 2px;
                     }
                     .task-hero {
-                      display: grid;
-                      grid-template-columns: minmax(116px, .72fr) minmax(0, 1.28fr);
-                      gap: 14px;
-                      align-items: center;
+                      display: block;
                       min-width: 0;
                       padding: 16px;
                       border: 1px solid #dbeafe;
                       border-radius: 26px;
                       background: #f8fbff;
                     }
-                    .task-hero > div {
-                      min-width: 0;
-                    }
-                    .task-eyebrow {
-                      display: none;
-                    }
-                    .task-hero h2 {
-                      margin: 0;
-                      font-size: clamp(20px, 2.1vw, 25px);
-                      line-height: 1.08;
-                      letter-spacing: -.03em;
-                      overflow-wrap: anywhere;
-                    }
-                    .task-trace {
-                      display: none;
-                    }
                     .task-toolbar {
                       display: flex;
                       flex-wrap: nowrap;
                       gap: var(--space-2);
                       align-items: center;
+                      width: 100%;
                       min-width: 0;
                     }
                     .task-toolbar button,
@@ -624,8 +606,8 @@ public final class HostTilesPage {
                                   transform var(--motion-fast) var(--motion-ease-out);
                     }
                     .task-toolbar select {
-                      flex: 1 1 auto;
-                      min-width: 0;
+                      flex: 1 1 0;
+                      min-width: 180px;
                       max-width: 100%;
                       padding-right: 12px;
                       background: #ffffff;
@@ -993,7 +975,7 @@ public final class HostTilesPage {
                     <section class="empty">正在加载主机状态...</section>
                   </main>
                   <div id="task-modal" class="task-modal" aria-hidden="true">
-                    <section class="task-panel" role="dialog" aria-modal="true" aria-labelledby="task-title">
+                    <section class="task-panel" role="dialog" aria-modal="true" aria-label="任务面板">
                       <div class="task-panel-head">
                         <div class="task-window-controls">
                           <button id="task-close-x" class="task-panel-close" type="button" aria-label="关闭任务面板"></button>
@@ -1002,10 +984,6 @@ public final class HostTilesPage {
                       <div class="task-shell">
                         <aside class="task-sidebar">
                           <div class="task-hero">
-                            <div>
-                              <h2 id="task-title">执行任务</h2>
-                              <div id="task-trace" class="task-trace">trace: pending</div>
-                            </div>
                             <div class="task-toolbar">
                               <select id="task-type" aria-label="任务类型">
                                 <option value="prepare_disk_layout_dry_run">磁盘布局 dry-run</option>
@@ -1046,8 +1024,6 @@ public final class HostTilesPage {
                       const status = document.getElementById('pulse-status');
                       const coordinatorId = normalizeAddress(window.location.host);
                       const taskModal = document.getElementById('task-modal');
-                      const taskTitle = document.getElementById('task-title');
-                      const taskTrace = document.getElementById('task-trace');
                       const taskAgent = document.getElementById('task-agent');
                       const taskCurrent = document.getElementById('task-current');
                       const taskCompletionCount = document.getElementById('task-completion-count');
@@ -1446,8 +1422,6 @@ public final class HostTilesPage {
                         activeRunTaskId = '';
                         activeTaskLabel = normalizeAddress(label || '') || '未知 IPv6';
                         activeOutputText = '';
-                        taskTitle.textContent = '执行任务';
-                        taskTrace.textContent = 'trace: 等待中';
                         taskAgent.textContent = activeTaskLabel;
                         taskCurrent.textContent = '加载中';
                         taskCompletionCount.textContent = '0';
@@ -1511,7 +1485,6 @@ public final class HostTilesPage {
                           || latestTraceId(snapshot.traces)
                           || '等待中';
                         activeCompletionTaskId = latest ? latest.task_id : '';
-                        taskTrace.textContent = 'trace: ' + traceId;
                         taskCurrent.textContent = currentCompletion
                           ? (currentCompletion.status || 'completed')
                           : (agentTask ? statusLabel(agentTask.status || 'running')

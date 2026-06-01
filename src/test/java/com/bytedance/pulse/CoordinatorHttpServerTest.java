@@ -144,6 +144,9 @@ class CoordinatorHttpServerTest {
         assertTrue(response.body().contains("data-action=\"run-task\""));
         assertTrue(response.body().contains("task-modal"));
         assertTrue(!response.body().contains("任务执行"));
+        assertTrue(!response.body().contains("<h2 id=\"task-title\">执行任务</h2>"));
+        assertTrue(!response.body().contains("id=\"task-title\""));
+        assertTrue(!response.body().contains("id=\"task-trace\""));
         assertTrue(response.body().contains("task-window-controls"));
         assertTrue(response.body().contains("task-panel-close"));
         assertTrue(response.body().contains("task-summary"));

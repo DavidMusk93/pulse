@@ -993,6 +993,62 @@ mvn package
 | `outputBelowPanel` | `false` |
 | `horizontal` | `false` |
 
+## Run UI 标题移除与选项展开验证
+
+验证时间：2026-06-01 12:16 CST。
+
+需求：
+
+- 去掉 Run UI 中的 `执行任务` 标题。
+- 由 `执行` 按钮表达动作语义。
+- 展开任务类型选项卡，避免操作区拥挤。
+
+实现结果：
+
+- 移除 `id="task-title"` 与 `id="task-trace"` DOM。
+- `task-panel` 改用 `aria-label="任务面板"`。
+- `.task-hero` 改为单行操作区。
+- `#task-type` 使用 `flex: 1 1 0` 与 `min-width: 180px`，作为操作栏主区域展开。
+
+本地验证：
+
+```bash
+mvn test
+mvn package
+```
+
+结果：
+
+- `mvn test`：`22 tests, 0 failures, 0 errors`。
+- `mvn package`：构建成功。
+- Jar SHA256：`e322950d3c552f73a14c5bd4733f1aadcf369e3b64c5b823743a12a334a0f67b`。
+
+浏览器验证：
+
+- 启动本地 coordinator：`PULSE_PORT=9972`。
+- 使用 headless Chrome + CDP 打开 `http://127.0.0.1:9972/hosts`，点击首个 `任务` 按钮并测量 DOM。
+
+测量结果：
+
+| 项目 | 结果 |
+| --- | --- |
+| `modalOpen` | `true` |
+| `hasTaskTitle` | `false` |
+| `hasTaskTrace` | `false` |
+| `htmlHasTitleId` | `false` |
+| `selectShare` | `0.598` |
+| `controlsSameRow` | `true` |
+| `htmlHasForbiddenStyle` | `false` |
+
+控件宽度：
+
+| 控件 | 宽度 |
+| --- | ---: |
+| 操作栏 | `392px` |
+| 任务类型选择 | `235px` |
+| `执行` | `57px` |
+| `弹出结果` | `84px` |
+
 按钮测量：
 
 | 按钮 | `white-space` | `writing-mode` | 尺寸 |
