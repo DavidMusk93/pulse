@@ -153,3 +153,74 @@ Completion queue actions:
 - `.tmp/verify_remote_task_e2e.py` and `.tmp/verify_remote_task_install.sh` are temporary verification helpers under ignored `.tmp/`.
 - The online E2E intentionally used `analyze_block_layout_dry_run` to verify the longer timeout and output tail behavior.
 - Completion replay across all three coordinators was verified for the same `task_id`.
+
+## Prepare Disk Layout Script Full Agent Sync
+
+Sync time: 2026-06-01.
+
+Source update:
+
+- Upstream script: `/Users/bytedance/Documents/gitlab/olap-toolbox/tidelet/prepare-disk-layout.sh`
+- Pulse repository script: `docs/task/prepare-disk-layout.sh`
+- Remote agent path: `/data24/otf/pulse/tasks/prepare-disk-layout.sh`
+- SHA256: `a989a93b559ff4b54e372eb262d64c95203f0414a9b0394894ad18a21b1ea754`
+
+Local checks:
+
+```bash
+bash -n docs/task/prepare-disk-layout.sh
+docs/task/prepare-disk-layout.sh --help
+shasum -a 256 /Users/bytedance/Documents/gitlab/olap-toolbox/tidelet/prepare-disk-layout.sh docs/task/prepare-disk-layout.sh
+```
+
+Results:
+
+- `bash -n`: passed.
+- `--help`: printed expected usage.
+- Upstream and Pulse repository SHA matched.
+
+Scope:
+
+- Initial tag dry-run covered only the historical 63 hosts:
+  - `cdn_new`: `50`
+  - `doubao`: `8`
+  - `tlbmirror`: `5`
+- To satisfy full agent sync, the final host file was generated from coordinator `/api/hosts`.
+- Full scope: `471` unique IPv6 agents.
+
+Final sync command shape:
+
+```bash
+bash scripts/call.sh \
+  -f .tmp/auto-ops/task-sync/sync-prepare-disk-layout.sh \
+  -i .tmp/auto-ops/task-sync/all-agents.hosts \
+  -t all_agents \
+  --parallel 8 \
+  --timeout 180 \
+  --max-hosts 500 \
+  --yes \
+  -- docs/task/prepare-disk-layout.sh /data24/otf/pulse a989a93b559ff4b54e372eb262d64c95203f0414a9b0394894ad18a21b1ea754
+```
+
+Remote behavior:
+
+- Create `/data24/otf/pulse/tasks` if missing.
+- Upload the script to a remote temp directory.
+- Run `bash -n` remotely before installation.
+- Copy to `/data24/otf/pulse/tasks/prepare-disk-layout.sh`.
+- Set mode `0755`.
+- Verify remote `sha256sum`.
+- Do not restart `pulse-agent.service`.
+
+Auto-ops result:
+
+| Scope | Total | OK | Failed | Elapsed |
+| --- | ---: | ---: | ---: | ---: |
+| `all_agents` | 471 | 471 | 0 | 102s |
+
+Artifacts:
+
+- `.tmp/auto-ops/task-sync/all-agents.hosts`
+- `.tmp/auto-ops/task-sync/results.tsv`
+- `.tmp/auto-ops/task-sync/summary.json`
+- `.tmp/auto-ops/task-sync/failed-hosts.txt`
