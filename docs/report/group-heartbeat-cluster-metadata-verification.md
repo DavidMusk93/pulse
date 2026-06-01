@@ -1699,3 +1699,134 @@ SHA256：
 - 在线绿点已固定到磁贴角落，header 不再承担状态展示。
 - tide worker 区展示更多属性，线上可见 `pid/cpu/mem/port/version`。
 - `.tile-scroll` 继续支持真实滚动，页面保持 IPv6-only 和本地静态资源。
+
+## 进程指标与任务 JSON 展示修复
+
+验证时间：2026-06-01 15:13 CST。
+
+需求：
+
+- 磁贴 header 不能丑陋换行，datetime 不能拆成两行，任务按钮和状态绿点不能挤在一起。
+- pid 信息不能拥挤，查看体验必须可读。
+- 任务执行 JSON completion 必须展示，并支持一键格式化、拷贝和高亮。
+- agent 侧为 tide worker pid 增加 user/sys CPU percent，从 `/proc/$pid/status` 获取 memory 与 threads 信息，环境变量字段保持不变。
+- UI 验证必须在 coordinator 线上页面完成，并实际执行任务确认展示。
+
+实现结果：
+
+- `HostTile` header 改为三段式：左侧独立状态点、中间 `HH:mm:ss` 单行短时间、右侧纯文字 `任务` 按钮。
+- 磁贴最小宽度从 `150px` 上调到 `210px`，避免 header 与 pid 信息被挤压。
+- tide worker 展示改为轻量进程卡片，包含 `pid/cpu/usr/sys/rss/mem/thr/port/version`。
+- agent 侧从 `/proc/$pid/stat` 拆分 `user_cpu_percent` 与 `sys_cpu_percent`，从 `/proc/$pid/status` 读取 `VmRSS` 和 `Threads`，保留 `PORT1`、`TIDELET_COMPONENT_VERSION`。
+- Run UI completion 改为 `CompletionViewer`，当输出为 JSON 时提供格式化、拷贝和 `.json-key/.json-string/.json-number` 基础高亮。
+
+本地构建：
+
+```bash
+cd src/main/frontend
+npm run build
+cd /Users/bytedance/Documents/01_Projects/pulse
+mvn test
+mvn package
+```
+
+结果：
+
+- `npm run build`：成功。
+- `mvn test`：`22 tests, 0 failures, 0 errors`。
+- `mvn package`：构建成功。
+
+SHA256：
+
+| 文件 | SHA256 |
+| --- | --- |
+| `target/pulse-0.1.0-SNAPSHOT.jar` | `6cace3194bff18d542a02d8eee640b42cec9bf802b5d3b2b7d94cdae363f2657` |
+
+部署：
+
+- `orthrus-cli demand` 初始并发授权：`total=471 ok=397 failed=74`，失败原因为 `kgetcred`。
+- 对失败列表降并发重试：`total=74 ok=73 failed=1`。
+- 单台最终重试 `fdbd:dc01:b:357::39`：成功。
+- 全量部署 471 台 agent/coordinator，`--parallel 8`。
+- 部署结果：`summary: total=471 ok=471 failed=0 elapsed=254s`。
+- 远端 `/data24/otf/pulse/bin/pulse.jar` SHA 均为 `6cace3194bff18d542a02d8eee640b42cec9bf802b5d3b2b7d94cdae363f2657`。
+
+线上 agent 字段验证：
+
+从 coordinator `/api/hosts` 读取真实上报，样例 agent：
+
+```json
+{
+  "agent_id": "dc02-p1a-t34-n013.byted.org",
+  "ip": "fdbd:dc02:1a:34::13",
+  "cluster": "cdn2",
+  "worker": {
+    "pid": 834623,
+    "cpu_percent": "1705.65",
+    "user_cpu_percent": "1218.58",
+    "sys_cpu_percent": "487.07",
+    "rss_kb": 59432560,
+    "mem_percent": "5.63",
+    "threads": 5921,
+    "port1": "7511",
+    "component_version": "1.1.0.6371"
+  }
+}
+```
+
+线上任务验证：
+
+- 对 `dc02-p1a-t34-n013.byted.org` 执行真实 `analyze_block_layout_dry_run`。
+- completion 返回 `exit_code=0`，`output` 为 JSON，包含 `report_type=block_layout_analysis`。
+- 使用 Chrome DevTools Protocol 在 coordinator 线上页面 `http://127.0.0.1:9996/hosts` 检查 Run UI。
+- `127.0.0.1:9996` 是到 `fdbd:dc05:11:634::45:9966` 的 SSH tunnel，因为本地 `127.0.0.1:6699` 代理当时未监听。
+
+线上 UI 测量：
+
+| 项目 | 结果 |
+| --- | --- |
+| `tileCount` | `471` |
+| `headerText` | `15:11:03\n任务` |
+| `seenText` | `15:11:03` |
+| `seenLines` | `1` |
+| `seenNoWrap` | `nowrap` |
+| `runText` | `任务` |
+| `runHasIcon` | `false` |
+| `statusSeparate` | `true` |
+| `workerReadable` | `true` |
+| `workerText` | `pid 834623\n1.1.0.6371\ncpu 1573.05\nusr 1130.99\nsys 442.06\nrss 67021.2MB\nmem 6.50\nthr 5921\nport 7511` |
+| `modalOpen` | `true` |
+| `viewerExists` | `true` |
+| `outputLength` | `118553` |
+| `hasJsonReport` | `true` |
+| `hasJsonHighlight` | `true` |
+| `hasFormatControl` | `true` |
+| `hasCopyButton` | `true` |
+| `hasHostnameLiteral` | `false` |
+| `scrollOverflow` | `true` |
+
+JSON 格式化确认：
+
+```json
+{
+  "firstLines": [
+    "{",
+    "  \"report_type\": \"block_layout_analysis\",",
+    "  \"report_time\": \"2026-06-01 15:09:39 CST\",",
+    "  \"mode\": \"dry-run\",",
+    "  \"tide_home\": \"/opt/tiger/tide\",",
+    "  \"block_layout\": {",
+    "    \"summary\": {",
+    "      \"metadata_dbs\": 2,"
+  ],
+  "hasIndentedReportType": true,
+  "hasIndentedNested": true
+}
+```
+
+结论：
+
+- 线上磁贴 header 不再出现 datetime 换行，状态点与任务按钮已分离。
+- pid 信息已从拥挤 inline 文本变成进程卡片，可读性提升，且展示 user/sys/rss/threads。
+- 真实任务 JSON completion 已展示，支持格式化、拷贝和高亮。
+- 验证在 coordinator 线上服务完成，并实际执行任务确认展示。
