@@ -226,8 +226,10 @@ public class CoordinatorService {
 
     private void recomputeGroups(long now) {
         Map<String, List<HostView>> buckets = new HashMap<>();
+        Map<String, AgentGroupPlan> previousPlans = Map.copyOf(groupPlans);
         for (HostView host : buildHosts(now, false)) {
-            if (!"alive".equals(host.status())) {
+            AgentGroupPlan previousPlan = previousPlans.get(host.agentId());
+            if (!eligibleForGroup(host, previousPlan)) {
                 continue;
             }
             String cluster = blankToUnknown(host.cluster());
@@ -249,7 +251,10 @@ public class CoordinatorService {
                 List<HostView> groupMembers = members.subList(start, end);
                 int shard = start / groupSizeLimit;
                 String groupId = "%s/%s/%03d".formatted(cluster, area, shard);
-                HostView leader = groupMembers.get(0);
+                HostView leader = groupMembers.stream()
+                        .filter(member -> "alive".equals(member.status()))
+                        .findFirst()
+                        .orElse(groupMembers.get(0));
                 String leaderUrl = leaderUrl(leader);
                 List<String> memberIds = groupMembers.stream().map(HostView::agentId).toList();
                 nextGroups.put(groupId, new GroupView(
@@ -281,6 +286,17 @@ public class CoordinatorService {
         groupPlans.putAll(nextPlans);
         groupViews.clear();
         groupViews.putAll(nextGroups);
+        hostSnapshotAtMs = Long.MIN_VALUE;
+    }
+
+    private static boolean eligibleForGroup(HostView host, AgentGroupPlan previousPlan) {
+        if ("expired".equals(host.status())) {
+            return false;
+        }
+        if ("alive".equals(host.status())) {
+            return true;
+        }
+        return previousPlan != null && !"direct".equals(previousPlan.groupMode()) && !"direct".equals(previousPlan.groupId());
     }
 
     private static String blankToUnknown(String value) {

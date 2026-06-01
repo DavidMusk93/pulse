@@ -104,6 +104,7 @@
   - 按 `cluster -> area -> ipv6/agent_id` 稳定排序。
   - 每 7 个 alive agent 形成一个 group。
   - 每个 group 第一个 alive agent 为 leader。
+  - 修复 group membership 抖动：新成员仍需 `alive` 入组，但已有 group member 在未 `expired` 前即使短暂 `warming` 也保留原 membership，避免 `not_group_member` 和 direct fallback 循环。
 - `CoordinatorHttpServer`：
   - 不新增非必要 API。
   - 继续只通过 `/heartbeat` 完成心跳和 group plan 交互。
@@ -134,6 +135,7 @@
 - 更新 `CoordinatorServiceTest`：
   - 验证 coordinator HostView 顶层字段包含 `cluster`、`area`。
   - 保持 group heartbeat per-agent `accepted_seq` 测试。
+  - 增加 group membership grace 测试：已有 group member 的确认数短暂低于 alive 阈值但未 expired 时，仍留在原 group；expired 后才退出 group。
 - 更新 `CoordinatorHttpServerTest`：
   - 验证 `/hosts` 包含 `cluster-section` 和 cluster 名称。
   - 验证 `/hosts` 包含正方形磁贴、内部滚动、`5min AVG` 排序和 keyed DOM refresh 相关 CSS/JS。

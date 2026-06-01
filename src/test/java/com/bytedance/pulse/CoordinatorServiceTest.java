@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -138,6 +139,43 @@ class CoordinatorServiceTest {
 
         assertEquals("cmd.group_plan", response.agents().get(0).messages().get(0).type());
         assertEquals("cmd.group_plan", response.agents().get(1).messages().get(0).type());
+    }
+
+    @Test
+    void existingGroupMemberStaysGroupedWhileWarmingUntilExpired() {
+        MutableClock mutableClock = new MutableClock(Instant.ofEpochMilli(1_710_000_000_000L));
+        CoordinatorService service = new CoordinatorService("coordinator-a", mutableClock);
+        for (int i = 1; i <= 8; i++) {
+            confirmAlive(service, "agent-" + i, "host-" + i, "10.0.0." + i);
+        }
+
+        assertEquals("cluster-a/area-a/000", planPayload(service, "agent-7").get("group_id"));
+        assertEquals("cluster-a/area-a/001", planPayload(service, "agent-8").get("group_id"));
+
+        mutableClock.advance(Duration.ofMillis(21_000));
+        service.handleHeartbeat(singleHeartbeat("agent-8", 1, 4, "host-8", "10.0.0.8"));
+
+        HostView warmedMember = service.hosts().stream()
+                .filter(host -> "agent-7".equals(host.agentId()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("warming", warmedMember.status());
+        assertEquals("cluster-a/area-a/000", warmedMember.groupId());
+        assertEquals("follower", warmedMember.groupMode());
+        assertEquals("cluster-a/area-a/001", planPayload(service, "agent-8").get("group_id"));
+
+        mutableClock.advance(Duration.ofMillis(10_000));
+        for (int i = 1; i <= 6; i++) {
+            confirmAliveFromSeq(service, "agent-" + i, "host-" + i, "10.0.0." + i, 10);
+        }
+        confirmAliveFromSeq(service, "agent-8", "host-8", "10.0.0.8", 101);
+
+        HostView expiredMember = service.hosts().stream()
+                .filter(host -> "agent-7".equals(host.agentId()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("expired", expiredMember.status());
+        assertEquals("cluster-a/area-a/000", planPayload(service, "agent-8").get("group_id"));
     }
 
     @Test
@@ -293,12 +331,28 @@ class CoordinatorServiceTest {
         service.handleHeartbeat(singleHeartbeat(agentId, 1, 3, host, ip));
     }
 
+    private static void confirmAliveFromSeq(CoordinatorService service, String agentId, String host, String ip, long firstSeq) {
+        service.handleHeartbeat(singleHeartbeat(agentId, 1, firstSeq, host, ip));
+        service.handleHeartbeat(singleHeartbeat(agentId, 1, firstSeq + 1, host, ip));
+        service.handleHeartbeat(singleHeartbeat(agentId, 1, firstSeq + 2, host, ip));
+    }
+
+    private static Map<String, Object> planPayload(CoordinatorService service, String agentId) {
+        return service.handleHeartbeat(singleHeartbeat(agentId, 1, 100, "host-" + agentId, "10.0.0." + agentId.replace("agent-", "")))
+                .messages()
+                .stream()
+                .filter(message -> "cmd.group_plan".equals(message.type()))
+                .findFirst()
+                .orElseThrow()
+                .payload();
+    }
+
     private static AgentHeartbeat agent(String agentId, long epoch, long seq, String host, String ip) {
         return new AgentHeartbeat(
                 agentId,
                 epoch,
                 seq,
-                15_000,
+                30_000,
                 List.of(new PulseMessage(
                         "msg-" + agentId + "-" + seq,
                         "state.heartbeat",
@@ -332,5 +386,32 @@ class CoordinatorServiceTest {
                         Map.entry("payload_sha256", TaskOutputCodec.sha256(payload)),
                         Map.entry("output_sha256", TaskOutputCodec.sha256(fullOutput)),
                         Map.entry("output_bytes", fullOutput.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)));
+    }
+
+    private static final class MutableClock extends Clock {
+        private Instant instant;
+
+        private MutableClock(Instant instant) {
+            this.instant = instant;
+        }
+
+        private void advance(Duration duration) {
+            instant = instant.plus(duration);
+        }
+
+        @Override
+        public ZoneOffset getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(java.time.ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return instant;
+        }
     }
 }

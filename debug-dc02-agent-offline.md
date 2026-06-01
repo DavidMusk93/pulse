@@ -40,6 +40,32 @@ Status: [OPEN]
 - H4 heartbeat 构造/采集卡顿：未发现直接证据。当前 seq 停顿与 `not_group_member` 和 group plan 抖动更吻合。
 - H5 coordinator 窗口和 group plan 抖动：成立。`recomputeGroups` 只纳入 `alive`，目标确认数降到 2 后进入 `warming`，被踢出 group；随后 agent/leader plan 存在一轮延迟，触发 `not_group_member`，fallback direct 后恢复，再次进入 group，形成循环。
 
+## Fix
+
+- 2026-06-01 20:48：在设计与计划中补充 group membership graceful hysteresis 门禁。
+- 2026-06-01 20:49：修改 `CoordinatorService#recomputeGroups`：
+  - 新成员仍必须 `alive` 才能进入 group。
+  - 已有 group member 只要未 `expired`，即使短暂 `warming` 也保留原 membership。
+  - leader 选择优先使用 alive member，避免 warming 节点成为 leader。
+  - expired member 退出 group，避免长期保留失联节点。
+- 2026-06-01 20:49：新增 `existingGroupMemberStaysGroupedWhileWarmingUntilExpired` 回归测试。
+
+## Post-Fix Evidence
+
+- `mvn test`：23 个测试通过。
+- `mvn package`：通过。
+- coordinator-only 部署：`summary: total=3 ok=3 failed=0`。
+- 对 `fdbd:dc02:11:c::43` 连续 18 轮、约 90 秒线上采样：
+  - 初始重启收敛阶段从 `warming/confirmations=1` 恢复。
+  - 第 3 轮起稳定 `alive`。
+  - 第 1 轮起 source 变为 `tlblog_stream_olap_separate/hl/000`，不再回到 `direct`。
+  - 第 4 轮起大多数时间 `confirmations=4`。
+  - `group_id` 持续为 `tlblog_stream_olap_separate/hl/000`，`group_mode=follower`，leader 为 `fdbd:dc02:11:c::14`。
+- 目标 agent 日志尾部显示修复后连续向 leader 成功上报：
+  - `heartbeat status=ok target=http://[fdbd:dc02:11:c::14]:9977 seq=4137`
+  - ...
+  - `heartbeat status=ok target=http://[fdbd:dc02:11:c::14]:9977 seq=4161`
+
 ## Output
 
 - `docs/analysis/dc02-agent-offline.md`

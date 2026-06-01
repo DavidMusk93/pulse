@@ -2099,3 +2099,61 @@ Coordinator-only 线上升级验证：
 
 - 三台 `/assets/pulse-hosts.js` 均包含 `20s确认`、`debug-panel`、`last_observed_age_ms`、`group_id`、`leader_url`、`调试`。
 - 三台 `/assets/pulse-hosts.css` 均包含 `.debug-panel` 与 `.debug-grid`。
+
+## Group Membership Grace 修复
+
+验证时间：2026-06-01 20:50-20:53 CST。
+
+背景：
+
+- `fdbd:dc02:11:c::43` 容易在 `alive/warming` 间切换。
+- 运行时分析显示它被动态 group plan 在 `tlblog_stream_olap_separate/hl/000` 与 `direct` 间反复移动。
+- 目标 agent 会继续按旧 follower plan 向 leader `fdbd:dc02:11:c::14:9977` 上报，而 leader 已不再接受它，返回 `409 not_group_member`。
+
+修复：
+
+- coordinator 动态分组引入 membership grace/hysteresis。
+- 新成员仍必须达到 `alive` 才能进入 group。
+- 已有 group member 只要未 `expired`，即使短暂 `warming` 也保留原 membership。
+- leader 选择优先使用 `alive` member。
+- `expired` member 退出 group，不长期保留失联节点。
+
+本地验证：
+
+- `mvn -Dtest=CoordinatorServiceTest test`：通过，11 个测试通过。
+- `mvn test`：通过，23 个测试通过。
+- `mvn package`：通过。
+
+Coordinator-only 线上升级验证：
+
+- 目标：
+  - `fdbd:dc05:11:634::45`
+  - `fdbd:dc05:13:10c::40`
+  - `fdbd:dc07:0:810::44`
+- 部署结果：`summary: total=3 ok=3 failed=0`
+
+`fdbd:dc02:11:c::43` 线上复测：
+
+- 采样方式：三台 coordinator `/api/hosts` 连续 18 轮，每 5 秒一轮。
+- 初始 coordinator 重启收敛阶段：
+  - sample 0：`warming`、source=`direct`、`20s确认=1`
+  - sample 1-2：source 已恢复为 `tlblog_stream_olap_separate/hl/000`
+- 稳定阶段：
+  - sample 3 起三台 coordinator 均为 `alive`
+  - sample 4 起多数采样 `20s确认=4`
+  - sample 1-17 持续保持 `group_id=tlblog_stream_olap_separate/hl/000`
+  - sample 1-17 持续保持 `group_mode=follower`
+  - sample 1-17 未再回到 `direct`
+
+目标 agent 日志尾部：
+
+```text
+heartbeat status=ok target=http://[fdbd:dc02:11:c::14]:9977 seq=4137
+...
+heartbeat status=ok target=http://[fdbd:dc02:11:c::14]:9977 seq=4161
+```
+
+结论：
+
+- 修复后目标节点不再进入 `not_group_member -> direct fallback -> 重新入组` 的循环。
+- group heartbeat 降压路径保留，目标节点稳定由 leader 聚合上报。

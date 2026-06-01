@@ -194,6 +194,38 @@ agent fallback direct 后短暂恢复，再次进入 group，形成循环。
 - leader 收到 `not_group_member` 场景可以更温和：如果 request 的 `group_id/leader` 与当前 plan 接近，可返回 direct plan 或 stale-plan hint，减少 follower 盲目重试旧 leader。
 - UI 应把这类状态标为 `group plan flapping` 或显示 `not_group_member` 计数，便于快速定位。
 
+## 已实施修复
+
+修复时间：2026-06-01 20:48-20:50 CST。
+
+修复策略：
+
+- 保持 group 降压设计，不让 agent/group leader fanout 到所有 coordinator。
+- 在 coordinator 动态分组中引入 membership grace/hysteresis：
+  - 新成员仍必须 `alive` 才能进入 group。
+  - 已有 group member 只要未 `expired`，即使短暂 `warming` 也保留原 membership。
+  - leader 选择优先使用 `alive` member，避免短暂 warming 节点成为 leader。
+  - `expired` member 退出 group，不长期保留失联节点。
+
+验证结果：
+
+- `mvn test`：23 个测试通过。
+- `mvn package`：通过。
+- coordinator-only 部署：3 台全部成功。
+- 对目标节点连续 18 轮、约 90 秒线上采样：
+  - 初始重启收敛后从第 3 轮起稳定 `alive`。
+  - source 持续为 `tlblog_stream_olap_separate/hl/000`。
+  - `group_id` 持续为 `tlblog_stream_olap_separate/hl/000`。
+  - `group_mode` 持续为 `follower`。
+  - 第 4 轮后大多数采样 `20s确认=4`。
+- 目标 agent 日志显示修复后连续向 leader 成功上报：
+
+```text
+heartbeat status=ok target=http://[fdbd:dc02:11:c::14]:9977 seq=4137
+...
+heartbeat status=ok target=http://[fdbd:dc02:11:c::14]:9977 seq=4161
+```
+
 ## 采集产物
 
 临时产物位于：
