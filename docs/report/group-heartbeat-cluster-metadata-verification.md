@@ -1339,3 +1339,82 @@ UI 指标：
 | `outputBelowCompletion` | `false` |
 | `outputBelowPanel` | `false` |
 | `horizontal` | `false` |
+
+## React + Ant Design UI 迁移验证
+
+验证时间：2026-06-01 12:47 CST。
+
+需求：
+
+- 当前 UI 视觉重心“上细下粗”，需要学习 Apple 网站设计，形成更优雅的留白和布局。
+- 当前 reactive 前端组件使用粗糙，需要引入 Ant Design 成熟组件库，为后续复杂功能提供组件基础。
+- Ant Design 必须写入 `docs/design`，并替代当前 UI 中的手写组件。
+
+实现结果：
+
+- `/hosts` 改为最小 React app shell。
+- 新增本地前端工程：`src/main/frontend`。
+- 使用 React + Ant Design 组件重建页面：`Card`、`Statistic`、`Button`、`Select`、`Modal`、`Tabs`、`Badge`、`Progress`、`List`、`Typography`。
+- 前端构建产物写入 `src/main/resources/static`：
+  - `/assets/pulse-hosts.js`
+  - `/assets/pulse-hosts.css`
+- `CoordinatorHttpServer` 新增 classpath 静态资源服务，运行时不依赖公网 CDN。
+- `HostTilesPage` 只输出 app shell，不再内嵌大型 HTML/CSS/JS 组件。
+
+本地构建：
+
+```bash
+cd src/main/frontend
+npm install
+npm run build
+cd /Users/bytedance/Documents/01_Projects/pulse
+mvn test
+mvn package
+```
+
+结果：
+
+- `npm install`：`found 0 vulnerabilities`。
+- `npm run build`：成功生成本地静态资源。
+- `mvn test`：`22 tests, 0 failures, 0 errors`。
+- `mvn package`：构建成功。
+
+SHA256：
+
+| 文件 | SHA256 |
+| --- | --- |
+| `target/pulse-0.1.0-SNAPSHOT.jar` | `f3edb6a0eb03b776192e0b6376b01751c3b5f2b2ff0318214b596fdbb83053f0` |
+| `src/main/resources/static/pulse-hosts.js` | `f900dedcf9745dc53772746d5f73dbfa8d83ee4e52e7f82d6f3c879da100aaa4` |
+| `src/main/resources/static/pulse-hosts.css` | `1fad0576214eea8bc687f9005b032b43e35a98cf1eeca2b7c78b55bed86c2439` |
+
+浏览器验证：
+
+- 启动本地 coordinator：`PULSE_PORT=9973`。
+- 使用 headless Chrome + CDP 打开 `http://127.0.0.1:9973/hosts`。
+- 注入两个 cluster 的测试心跳，并打开 Run UI。
+
+测量结果：
+
+| 项目 | 结果 |
+| --- | --- |
+| `h1` | `心跳平台，连接运维现场` |
+| `antCards` | `25` |
+| `antButtons` | `8` |
+| `tiles` | `4` |
+| `heroBalance` | `1.0` |
+| `workspaceToSidebar` | `1.618` |
+| `modalOpen` | `true` |
+| `hasTaskTitle` | `false` |
+| `selectShare` | `0.526` |
+| `buttonFlow` | `nowrap/horizontal-tb` |
+| `agentStatusVisible` | `true` |
+| `visibleTextHasHostname` | `false` |
+| `htmlHasExternalCdn` | `false` |
+| `htmlHasForbiddenData` | `false` |
+
+结论：
+
+- 页面已从手写大段 DOM/CSS 迁移为 React + Ant Design 本地组件应用。
+- Hero 与右侧能力区高度平衡，视觉重心不再“上细下粗”。
+- Run UI 保持黄金比例分栏、无标题、按钮水平和 agent 执行中状态反馈。
+- 可见 UI 未出现 hostname，静态资源不依赖外部 CDN。

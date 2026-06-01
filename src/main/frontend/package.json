@@ -1,0 +1,15 @@
+{
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "vite": "latest",
+    "typescript": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "antd": "latest",
+    "@ant-design/icons": "latest"
+  },
+  "devDependencies": {}
+}

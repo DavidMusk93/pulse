@@ -79,6 +79,10 @@ public class CoordinatorHttpServer {
                 writeJson(exchange, 200, service.hosts());
                 return;
             }
+            if ("GET".equals(method) && path.startsWith("/assets/")) {
+                writeStaticAsset(exchange, path);
+                return;
+            }
             if (path.startsWith("/api/agents/") && path.endsWith("/tasks")) {
                 String agentId = path.substring("/api/agents/".length(), path.length() - "/tasks".length());
                 if ("GET".equals(method)) {
@@ -143,6 +147,38 @@ public class CoordinatorHttpServer {
         try (OutputStream output = exchange.getResponseBody()) {
             output.write(bytes);
         }
+    }
+
+    private void writeStaticAsset(HttpExchange exchange, String path) throws IOException {
+        String fileName = path.substring("/assets/".length());
+        if (fileName.isBlank() || fileName.contains("/") || fileName.contains("..")) {
+            writeJson(exchange, 404, Map.of("ok", false, "error", "not_found"));
+            return;
+        }
+        String resourcePath = "static/" + fileName;
+        try (InputStream resource = CoordinatorHttpServer.class.getClassLoader().getResourceAsStream(resourcePath)) {
+            if (resource == null) {
+                writeJson(exchange, 404, Map.of("ok", false, "error", "not_found"));
+                return;
+            }
+            byte[] bytes = resource.readAllBytes();
+            exchange.getResponseHeaders().set("content-type", contentType(fileName));
+            exchange.getResponseHeaders().set("cache-control", "no-cache");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream output = exchange.getResponseBody()) {
+                output.write(bytes);
+            }
+        }
+    }
+
+    private static String contentType(String fileName) {
+        if (fileName.endsWith(".js")) {
+            return "text/javascript; charset=utf-8";
+        }
+        if (fileName.endsWith(".css")) {
+            return "text/css; charset=utf-8";
+        }
+        return "application/octet-stream";
     }
 
     private static ThreadPoolExecutor httpExecutor() {

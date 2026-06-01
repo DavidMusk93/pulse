@@ -32,10 +32,11 @@
   - UI 定位为心跳平台控制台，所有面向用户的描述统一为简洁中文。
   - UI 重构为扁平化实时监控风格。
   - `/hosts` 改为前端 app shell，禁止 `<meta refresh>` 整页刷新。
-  - 内嵌轻量 keyed runtime `PulseView`，不依赖公网 CDN；当前不引入 React。
-  - `PulseView` 每 5s fetch `/api/hosts`，按 `cluster` 和 `agent_id` 复用 DOM 节点，仅更新文字、状态、排序和样式。
-  - `PulseView` 每次刷新前后恢复 `window.scrollX/scrollY`，禁止刷新后页面滚到顶部。
-  - `PulseView` 通过 DOM 节点复用自然保留磁贴内部滚动 cursor，禁止整块重建 `#pulse-app`。
+  - 将内嵌轻量 runtime 升级为 React + Ant Design 本地打包应用，禁止运行时依赖公网 CDN。
+  - `/hosts` 只输出 app shell，加载本地 `/assets/pulse-hosts.js` 与 `/assets/pulse-hosts.css`。
+  - React app 每 5s fetch `/api/hosts`，按 IPv6 稳定 key 渲染 cluster 和 host。
+  - 使用 Ant Design `Card`、`Statistic`、`Button`、`Select`、`Modal`、`Tabs`、`Badge`、`Progress`、`List` 等成熟组件替代粗糙手写组件。
+  - 保留 `window.scrollX/scrollY` 与磁贴内部 scroll cursor，禁止整页刷新和整块重建。
   - 磁贴改为正方形，内部支持滚动，禁止文字覆盖。
   - 不同 cluster 使用不同低饱和冷静色，避免紫色、红色等高刺激亮色。
   - cluster 内按固定窗口 `5min AVG` 降序排序。
@@ -47,6 +48,7 @@
   - 任意可见位置只展示 IPv6；hostname、FQDN 和内部域名不得进入文案、DOM data key 或任务标题。
   - 页面描述保持心跳平台定位，精简表达任务、集群、资源、监控和告警能力，避免重复叙述。
   - 中文排版学习 Apple 官网的留白、克制字重和舒展字距，避免大标题拥挤。
+  - 页面整体视觉重心必须均衡，避免顶部过轻、下方过重的“上细下粗”布局。
   - Run UI 按黄金分割组织：面板尺寸约为主页面视口的黄金比例，左侧信息区与右侧 completion 区约为 `1 : 1.618`。
   - Run UI 从 `state.async_tasks` 展示 agent `accepted/running` 状态，在 completion 结果返回前给出执行中反馈。
   - 任务按钮和工具栏按钮水平排列，禁止竖排、折行和压缩成不可读状态。

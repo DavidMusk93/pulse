@@ -476,10 +476,11 @@ Web 页面按 `cluster` 进行一级分组：
 
 - 每个 cluster 渲染一个 `cluster-section`。
 - 组标题展示 cluster 名称与 host 数。
-- 组内使用 `ui-ux-pro-max-skill` 推荐的 Flat Design + Real-Time Monitoring 风格，避免高阴影和厚重拟物。
+- 组内使用 Apple 网站式的克制留白、明确层级与轻量面板，避免“上细下粗”的视觉重心失衡。
 - `/hosts` 必须是现代前端应用 shell，禁止使用 `<meta http-equiv="refresh">` 或整页刷新。
-- 前端使用内嵌轻量 keyed runtime `PulseView`，避免远端环境依赖外部 CDN；当前不引入 React，除非后续需要复杂组件状态、路由或构建链路。
-- `PulseView` 每 5s fetch `/api/hosts`，按 `cluster` 和 `agent_id` 复用 DOM 节点，只更新文字、状态、排序和样式；刷新前后必须恢复 viewport scroll，保留页面、CSS、JS runtime 和磁贴内部滚动 cursor。
+- 前端采用 React + Ant Design 作为成熟组件库，替代手写粗糙组件；Ant Design、React 和业务代码必须本地打包为 coordinator 静态资源，禁止运行时依赖公网 CDN。
+- `/hosts` 只输出最小 app shell，通过本地 `/assets/pulse-hosts.js` 和 `/assets/pulse-hosts.css` 挂载应用；复杂功能后续通过 Ant Design 的 `Card`、`Statistic`、`Button`、`Select`、`Modal`、`Tabs`、`Badge`、`Progress`、`List`、`Typography` 等组件组合演进。
+- React app 每 5s fetch `/api/hosts`，按稳定 IPv6 key 渲染 cluster 和 host；刷新前后必须恢复 viewport scroll，保留页面、CSS、JS runtime 和磁贴内部滚动 cursor。
 - 磁贴必须为正方形，使用 `aspect-ratio: 1 / 1` 保持密度一致。
 - 每个 cluster 使用不同主色相，便于跨集群快速扫视。
 - cluster 调色板必须使用低饱和冷静色，禁止紫色、红色等高刺激亮色。
@@ -497,7 +498,7 @@ Web 页面按 `cluster` 进行一级分组：
 - `Area` 和 `Zone` 语义重复时只展示 `Area`，不展示 `Zone`。
 - 磁贴不展示 `Role` 和 `Source`。
 - 磁贴展示每个 `tide_worker` 的 `pid`、`cpu_percent`、`mem_percent`、`PORT1`、`TIDELET_COMPONENT_VERSION`；`pid` 变化用于判断进程重启。
-- Run UI 页面宽高与主页面留白使用黄金分割思路控制，避免占满视口或形成狭窄弹窗。
+- Run UI 使用 Ant Design `Modal`、`Card`、`Select`、`Button`、`Tabs`、`List` 等组件，页面宽高与主页面留白使用黄金分割思路控制，避免占满视口或形成狭窄弹窗。
 - Run UI 左侧信息区与右侧 completion 展示区按 `1 : 1.618` 分栏，completion 承担主要阅读空间。
 - 任务按钮必须水平排列，禁止按钮文字竖排或因空间挤压折行。
 - Run UI 不再展示“执行任务”标题，由执行按钮承担语义；任务类型选择控件必须展开为操作栏主区域，避免左侧任务框被压缩。
@@ -509,6 +510,8 @@ UI 开发门禁：
 
 - 禁止整页刷新作为数据更新手段。
 - 禁止为 UI 引入必须访问公网 CDN 的依赖。
+- 禁止回退到手写大型 HTML/CSS 组件；新增复杂交互优先用 Ant Design 组件表达，再通过少量 CSS token 做 Apple 式留白和视觉重心调整。
+- Ant Design 构建产物必须随 jar 一起发布，coordinator 通过 classpath 静态资源服务 `/assets/*`。
 - `/api/hosts` 是 UI 数据源，`/hosts` 只负责前端 app shell。
 - 自动刷新必须是 JSON 增量数据流的客户端更新，不能重新下载整页 HTML，也不能整块重建 `#pulse-app`。
 - 自动刷新必须通过 keyed DOM 复用保留每个磁贴内部 `.tile-scroll` 的 scrollTop/scrollLeft。
