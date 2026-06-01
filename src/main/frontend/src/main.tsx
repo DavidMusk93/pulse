@@ -295,12 +295,15 @@ function HostTile({ host, onRun }: { host: HostView; onRun: () => void }) {
   const confirmations = host.heartbeat_confirmations ?? host.heartbeatConfirmations ?? 0;
   const workers = Array.isArray(host.state?.workers) ? host.state?.workers : Array.isArray(host.state?.tide_workers) ? host.state?.tide_workers : [];
   return <Card className="host-tile" style={{ ['--load-level' as any]: level }} data-agent-key={hostKey(host)} variant="borderless">
-    <Flex justify="space-between" align="start" gap={8}>
+    <Flex className="tile-header" justify="space-between" align="start" gap={8}>
       <Typography.Text className="seen">{formatTime(host.observed_at_ms || host.observedAtMs)}</Typography.Text>
-      <Space size={4}><Badge status={statusColor(host.status) as any} text={statusLabel(host.status)} /><Tag>{confirmations} 确认</Tag></Space>
+      <Space size={8} className="tile-actions">
+        <Badge className="status-dot" status={statusColor(host.status) as any} />
+        <Button className="run-button" type="primary" size="small" icon={<PlayCircleOutlined />} onClick={onRun} disabled={confirmations < 3 || host.status !== 'alive'}>任务</Button>
+      </Space>
     </Flex>
-    <Typography.Title level={4} className="ip-title" data-field="ip_title">{normalizeAddress(host.ip)}</Typography.Title>
     <div className="tile-scroll">
+      <Typography.Title level={4} className="ip-title" data-field="ip_title">{normalizeAddress(host.ip)}</Typography.Title>
       <Row gutter={[8, 8]}>
         <Col span={12}><Statistic title="Area" value={host.area || '-'} /></Col>
         <Col span={12}><Statistic title="5min AVG" value={formatLoad(avg)} valueStyle={{ fontSize: 18 }} /></Col>
@@ -312,7 +315,6 @@ function HostTile({ host, onRun }: { host: HostView; onRun: () => void }) {
         <Typography.Text type="secondary">cpu {String(worker.cpu_percent || '')}</Typography.Text>
       </List.Item>} />}
     </div>
-    <Button className="run-button" type="primary" size="small" icon={<PlayCircleOutlined />} onClick={onRun} disabled={confirmations < 3 || host.status !== 'alive'}>任务</Button>
   </Card>;
 }
 

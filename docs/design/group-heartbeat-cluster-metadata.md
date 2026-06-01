@@ -491,8 +491,9 @@ Web 页面按 `cluster` 进行一级分组：
 - 磁贴不做额外交互动效，保持自然滚动；禁止持续播放的水波、扫光、果冻抖动或背景动态。
 - cluster 只用于 section/group 表达，不在单个 agent 磁贴中重复展示。
 - 磁贴不展示 hostname，不展示 `Seq` 和 `Rank`；所有可见节点地址只展示 IPv6。
-- 磁贴 header 展示 `Seen` datetime 与 status。
+- 磁贴 header 展示 `Seen` datetime、在线状态点和任务按钮；在线状态只显示绿色点，不显示“在线”等文字。
 - 磁贴正文展示 `IP`、`Area`、`5min AVG`、`Confirm`。
+- `Confirm` 不放在 header，必须放入磁贴正文指标区。
 - 卡片内不展示瞬时 `Load`，避免 5s 轮询导致数值抖动和频繁重排。
 - `5min AVG` 由前端在本地固定窗口计算；每个 5 分钟窗口开始时只采样计算一次，窗口内禁止继续累计或更新展示值，避免 5s 轮询造成视觉抖动。
 - `Area` 和 `Zone` 语义重复时只展示 `Area`，不展示 `Zone`。
@@ -516,6 +517,7 @@ UI 开发门禁：
 - 自动刷新必须是 JSON 增量数据流的客户端更新，不能重新下载整页 HTML，也不能整块重建 `#pulse-app`。
 - 自动刷新必须通过 keyed DOM 复用保留每个磁贴内部 `.tile-scroll` 的 scrollTop/scrollLeft。
 - 自动刷新必须保留页面级 `window.scrollX/scrollY`，禁止刷新后回到页面顶部。
+- 磁贴必须保证 `.tile-scroll` 为真实可滚动容器，内容高度超过可视区时可滚动，header 操作区不得挤占滚动内容。
 - UI 调色板不得使用刺眼亮色，尤其避免紫色和红色作为 cluster 主色。
 - load 比例条必须在浅色和深色磁贴上都具备可读对比度。
 - 磁贴动效不得抢占视觉焦点，当前禁止 `jelly-scroll`、`water-ripple`、`liquid-flow` 一类额外动效。

@@ -101,14 +101,30 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
+}
+.tile-header {
+  flex: 0 0 auto;
+  min-height: 28px;
+}
+.tile-actions {
+  flex: 0 0 auto;
+}
+.status-dot .ant-badge-status-text {
+  display: none;
+}
+.status-dot .ant-badge-status-dot {
+  width: 7px;
+  height: 7px;
 }
 .seen {
   color: rgba(15, 23, 42, .72);
   font-size: 11px;
+  line-height: 1.25;
   font-variant-numeric: tabular-nums;
 }
 .ip-title.ant-typography {
-  margin: 0;
+  margin: 0 0 8px;
   color: #fff;
   font-size: 16px;
   line-height: 1.12;
@@ -116,12 +132,14 @@ body {
   text-shadow: none;
 }
 .tile-scroll {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   border-radius: 14px;
   padding: 8px;
   background: rgba(255, 255, 255, .18);
+  overscroll-behavior: contain;
 }
 .host-tile .ant-statistic-title,
 .host-tile .ant-statistic-content {
@@ -139,7 +157,7 @@ body {
   border-block-end-color: rgba(255,255,255,.18) !important;
 }
 .run-button {
-  align-self: flex-start;
+  flex: 0 0 auto;
   white-space: nowrap;
   writing-mode: horizontal-tb;
 }

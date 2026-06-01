@@ -1465,3 +1465,74 @@ SHA256：
 - 主视觉左右高度平衡，不再出现顶部轻、下方重的布局问题。
 - Run UI 保持黄金比例、无标题、操作控件展开。
 - 静态资源不依赖外部 CDN，可见 UI 仍保持 IPv6-only。
+
+## Ant Design Host Tile Header And Scroll Fix
+
+验证时间：2026-06-01 14:11 CST。
+
+需求：
+
+- 在线状态展示绿点即可，不显示文字。
+- `Confirm` 不放在 header。
+- `任务` 按钮放在 header。
+- 修复卡片无法滚动。
+
+实现结果：
+
+- `HostTile` header 改为：`Seen` 时间、在线状态点、`任务` 按钮。
+- 移除 header 内的 `在线` 文案和 `N 确认` 标签。
+- `Confirm` 保留在正文 `Statistic` 指标区。
+- `.tile-scroll` 改为 `flex: 1 1 0`、`min-height: 0`、`overflow-y: auto`，并保留 `overscroll-behavior: contain`。
+
+本地验证：
+
+```bash
+cd src/main/frontend
+npm run build
+cd /Users/bytedance/Documents/01_Projects/pulse
+mvn test
+mvn package
+```
+
+结果：
+
+- `npm run build`：成功。
+- `mvn test`：`22 tests, 0 failures, 0 errors`。
+- `mvn package`：构建成功。
+
+SHA256：
+
+| 文件 | SHA256 |
+| --- | --- |
+| `target/pulse-0.1.0-SNAPSHOT.jar` | `13dcc0f5f5b15ff5ea2fc3decc8c0534014366e689c486f44c5c85f45f7f463f` |
+| `src/main/resources/static/pulse-hosts.js` | `caa795d9438794e4c753a02d5930cc59fdde43e9c0bef484ac12406ffa65eed4` |
+| `src/main/resources/static/pulse-hosts.css` | `393f5b3d448c9c5f694060b8c9dd9e5d7e1af3a15f7a2d8d2c558dca1ed089fe` |
+
+浏览器验证：
+
+- 启动本地 coordinator：`PULSE_PORT=9974`。
+- 注入包含 16 个 worker 的测试节点，确保内容超过卡片高度。
+- 使用 headless Chrome + CDP 打开 `http://127.0.0.1:9974/hosts`。
+
+测量结果：
+
+| 项目 | 结果 |
+| --- | --- |
+| `headerText` | `2026/6/1 14:11:33\n任务` |
+| `headerHasOnlineText` | `false` |
+| `headerHasConfirm` | `false` |
+| `tileHasConfirm` | `true` |
+| `runInHeader` | `true` |
+| `dotOnly` | `true` |
+| `scrollClientHeight` | `64` |
+| `scrollHeight` | `336` |
+| `scrollMoved` | `true` |
+| `scrollOverflow` | `true` |
+| `overflowY` | `auto` |
+
+结论：
+
+- 在线状态只显示绿点，不显示文字。
+- `Confirm` 已移出 header。
+- `任务` 按钮已放入 header。
+- 磁贴内部滚动恢复正常。

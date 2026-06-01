@@ -139,6 +139,10 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("块分布 dry-run"));
         assertTrue(js.body().contains("sampledAtMs"));
         assertTrue(js.body().contains("agent 执行中"));
+        assertTrue(js.body().contains("status-dot"));
+        assertTrue(js.body().contains("tile-actions"));
+        assertTrue(js.body().contains("run-button"));
+        assertTrue(js.body().contains("confirmations"));
         assertTrue(!js.body().contains("sum: sample"));
         assertTrue(!js.body().contains("count: 1,"));
         assertTrue(!js.body().contains("shell command"));
@@ -150,6 +154,9 @@ class CoordinatorHttpServerTest {
         assertTrue(css.body().contains("height:min(820px,61.8vh)"));
         assertTrue(css.body().contains("white-space:nowrap"));
         assertTrue(css.body().contains("writing-mode:horizontal-tb"));
+        assertTrue(css.body().contains("overflow:hidden auto") || css.body().contains("overflow-y:auto"));
+        assertTrue(css.body().contains("flex:1 1 0"));
+        assertTrue(css.body().contains(".status-dot .ant-badge-status-text{display:none}"));
         assertTrue(!response.body().contains("http-equiv=\"refresh\""));
     }
 
