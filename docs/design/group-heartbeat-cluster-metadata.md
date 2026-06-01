@@ -503,6 +503,7 @@ Web 页面按 `cluster` 进行一级分组：
 - Run UI 不再展示“执行任务”标题，由执行按钮承担语义；任务类型选择控件必须展开为操作栏主区域，避免左侧任务框被压缩。
 - Run UI 关闭控件参考 macOS 窗口控制点，放在独立标题栏内，禁止绝对定位覆盖业务 UI。
 - 任务执行中状态必须从当前 host 的 `state.async_tasks` 读取，并在 agent 已接收或正在执行时优先显示。
+- `prepare_disk_layout_dry_run` 的 agent 端脚本来源为 olap-toolbox 的 `tidelet/prepare-disk-layout.sh`；更新时必须先同步到 Pulse 仓库 `docs/task/prepare-disk-layout.sh`，再分发到所有 agent 的 `/data24/otf/pulse/tasks/prepare-disk-layout.sh`。
 
 UI 开发门禁：
 
@@ -521,6 +522,7 @@ UI 开发门禁：
 - 所有可见节点标识必须经过 IPv6-only 归一化，hostname、FQDN 和内部域名不得出现在页面文本或 DOM 标识里。
 - `5min AVG` 的排序与展示必须使用同一份固定窗口开窗采样结果，禁止窗口内每次轮询更新样本、均值或排序权重。
 - Run UI 必须用真实浏览器验证黄金比例、按钮水平排列、agent 执行中状态、IPv6-only 和无高光样式。
+- 远程任务脚本更新必须验证本地 `bash -n`、`--help`、SHA 一致性，并通过 auto-ops dry-run 确认全量 agent 范围后再分发；分发脚本不得重启 agent。
 
 ## 部署设计
 

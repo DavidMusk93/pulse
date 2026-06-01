@@ -1493,29 +1493,51 @@ function validate::check_dmesg_health() {
     local mount_path=$1
     local source=$2
     local block_device=$3
-    local dmesg_output=''
-    local dmesg_lines=''
+    local recent_kernel_output=''
+    local recent_kernel_lines=''
+    local log_source='recent kernel log'
+    local rc=0
     local sanitized=''
 
-    if ! command -v dmesg >/dev/null 2>&1; then
-        printf '%s\n' "SKIPPED: dmesg unavailable"
+    if command -v journalctl >/dev/null 2>&1; then
+        recent_kernel_output=$(journalctl -k --since "24 hours ago" --no-pager 2>&1)
+        rc=$?
+        if (( rc == 0 )); then
+            log_source='journalctl -k --since 24h'
+        else
+            recent_kernel_output=''
+        fi
+    fi
+
+    if [[ -z "$recent_kernel_output" ]] && command -v dmesg >/dev/null 2>&1; then
+        recent_kernel_output=$(dmesg --since "24 hours ago" 2>&1)
+        rc=$?
+        if (( rc == 0 )); then
+            log_source='dmesg --since 24h'
+        elif [[ "$recent_kernel_output" =~ [Rr]ead\ kernel\ buffer\ failed|[Oo]peration\ not\ permitted|[Pp]ermission\ denied ]]; then
+            printf '%s\n' "UNKNOWN: recent kernel log inaccessible"
+            return 0
+        elif [[ "$recent_kernel_output" =~ unrecognized\ option|invalid\ option|unknown\ time|invalid\ time ]]; then
+            printf '%s\n' "UNKNOWN: dmesg lacks --since support"
+            return 0
+        else
+            recent_kernel_output=''
+        fi
+    fi
+
+    if [[ -z "$recent_kernel_output" ]]; then
+        printf '%s\n' "UNKNOWN: no recent kernel log backend available"
         return 0
     fi
 
-    dmesg_output=$(dmesg 2>&1 || true)
-    if [[ "$dmesg_output" =~ [Rr]ead\ kernel\ buffer\ failed|[Oo]peration\ not\ permitted|[Pp]ermission\ denied ]]; then
-        printf '%s\n' "UNKNOWN: dmesg inaccessible"
-        return 0
-    fi
-
-    dmesg_lines=$(printf '%s\n' "$dmesg_output" | grep -Ei "(${block_device}|${source##*/}).*(I/O error|Buffer I/O error|blk_update_request|critical medium error|medium error|end_request)" | tail -n 3 || true)
-    if [[ -n "$dmesg_lines" ]]; then
-        sanitized=$(printf '%s\n' "$dmesg_lines" | tr '\n' ';' | sed 's/;*$//')
+    recent_kernel_lines=$(printf '%s\n' "$recent_kernel_output" | grep -Ei "(${block_device}|${source##*/}).*(I/O error|Buffer I/O error|blk_update_request|critical medium error|medium error|end_request)" | tail -n 3 || true)
+    if [[ -n "$recent_kernel_lines" ]]; then
+        sanitized=$(printf '%s\n' "$recent_kernel_lines" | tr '\n' ';' | sed 's/;*$//')
         sanitized=$(system::sanitize_line "$sanitized")
-        validate::fail_disk_health "$mount_path" "$source" "$block_device" "recent kernel I/O errors detected: ${sanitized}" || return 1
+        validate::fail_disk_health "$mount_path" "$source" "$block_device" "recent kernel I/O errors detected from ${log_source}: ${sanitized}" || return 1
     fi
 
-    printf '%s\n' "PASSED: no recent kernel I/O errors"
+    printf '%s\n' "PASSED: no recent kernel I/O errors in ${log_source}"
 }
 
 function validate::check_disk_health() {

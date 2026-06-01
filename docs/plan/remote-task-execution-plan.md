@@ -70,6 +70,8 @@
   - 远端 script path 固定为：
     - `/data24/otf/pulse/tasks/prepare-disk-layout.sh`
     - `/data24/otf/pulse/tasks/analyze-block-layout.py`
+  - `prepare-disk-layout.sh` 的上游源文件为 `/Users/bytedance/Documents/gitlab/olap-toolbox/tidelet/prepare-disk-layout.sh`；同步 agent 前必须先更新 `docs/task/prepare-disk-layout.sh` 并校验 SHA 一致。
+  - 任务脚本同步到所有 agent 时只更新 `/data24/otf/pulse/tasks/*`，不重启 agent；agent 每次执行任务时按路径读取最新脚本。
 - `TaskQueueService`
   - `agent_id -> ExecutionQueue`
   - `agent_id -> CompletionQueue`
