@@ -1978,3 +1978,37 @@ task_id: task-bb5f66ba-e753-42ff-9dae-71becfabe461
 
 - `allCardHeightsEqual=true`
 - `allBodyHeightsEqual=true`
+
+## 顶部指标卡字体基线对齐修复
+
+验证时间：2026-06-01 17:18 CST。
+
+需求：
+
+- 顶部指标区虽然已经等高，但 `Coordinator` 的数值字体仍比 `5min AVG`、`刷新` 更大，且顶部位置上移约 `2px`，用户反馈“这么大的空间，为什么字体没有对齐”。
+
+问题定位：
+
+- 线上浏览器测量发现 `5min AVG` 与 `刷新` 为 `24px / 26.88px / top=570.34`。
+- `Coordinator` 因 `AutoFitText` 默认从 `28px` 起算，实际渲染为 `26px / 29.12px / top=568.11`。
+- 这说明问题已经从“卡片高度不齐”收敛为“默认字号策略不一致”。
+
+实现结果：
+
+- `Coordinator` 指标卡的 `AutoFitText` 默认字号改为与其他 `Statistic` 一致的 `24px`。
+- metric value 容器统一 `line-height`、`min-height` 和 `align-items: flex-end`，让三张卡共用同一垂直对齐链。
+- 自适应缩放逻辑保留，但只在真实 overflow 时递减字号。
+
+线上浏览器复测：
+
+| 卡片 | `fontSize` | `lineHeight` | `top` | `height` |
+| --- | --- | --- | --- | --- |
+| `5min AVG` | `24px` | `26.88px` | `568.11` | `27` |
+| `Coordinator` | `24px` | `26.88px` | `568.11` | `27` |
+| `刷新` | `24px` | `26.88px` | `568.11` | `27` |
+
+结论：
+
+- `allMetricFontSizesEqual=true`
+- `allMetricLineHeightsEqual=true`
+- `allMetricTopsEqual=true`

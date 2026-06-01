@@ -95,9 +95,18 @@ body {
 .metric-row .ant-statistic-title {
   margin-bottom: 0 !important;
 }
+.metric-row .ant-statistic-content {
+  display: flex;
+  align-items: flex-end;
+  min-height: 27px;
+}
 .metric-row .ant-statistic-content,
-.metric-row .metric-fit-value {
+.metric-row .metric-fit-value,
+.metric-row .metric-fit-value .auto-fit-content {
   line-height: 1.12;
+}
+.metric-row .ant-statistic-content-value {
+  display: block;
 }
 .auto-fit {
   display: block;
@@ -113,10 +122,13 @@ body {
   line-height: inherit;
 }
 .metric-fit-value {
+  display: flex;
+  align-items: flex-end;
+  min-height: 27px;
   font-weight: 600;
-  line-height: 1.15;
 }
 .metric-fit-value .auto-fit-content {
+  width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
 }

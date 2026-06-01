@@ -17,7 +17,6 @@ import {
   Segmented,
   Space,
   Statistic,
-  Tabs,
   Tag,
   Typography,
   theme
@@ -218,7 +217,7 @@ function App() {
     const data = await fetchJson<TaskSnapshot>(`/api/agents/${id}/tasks`);
     setSnapshot(data);
     const latest = data.completion_queue?.[0];
-    if (latest) setOutput(renderCompletion(latest));
+    setOutput(latest ? renderCompletion(latest) : '');
   }
 
   useEffect(() => {
@@ -264,12 +263,11 @@ function App() {
       </section>
 
       <Row gutter={[14, 14]} className="metric-row">
-        <Col xs={12} md={4}><Card><Statistic title="主机" value={hosts.length} suffix="台" loading={loading}/></Card></Col>
-        <Col xs={12} md={4}><Card><Statistic title="在线率" value={hosts.length ? Math.round(alive * 100 / hosts.length) : 0} suffix="%"/></Card></Col>
-        <Col xs={12} md={4}><Card><Statistic title="5min AVG" value={formatLoad(avgLoad)}/></Card></Col>
-        <Col xs={12} md={4}><Card><Statistic title="Coordinator" valueRender={() => <AutoFitText className="metric-fit-value" text={normalizeAddress(window.location.host)} minFontSize={14} maxFontSize={28} />} /></Card></Col>
-        <Col xs={12} md={4}><Card><Statistic title="刷新" value="5s"/></Card></Col>
-        <Col xs={12} md={4}><Card><Statistic title="框架" value="Ant Design"/></Card></Col>
+        <Col xs={12} md={6} xl={4}><Card><Statistic title="主机" value={hosts.length} suffix="台" loading={loading}/></Card></Col>
+        <Col xs={12} md={6} xl={4}><Card><Statistic title="在线率" value={hosts.length ? Math.round(alive * 100 / hosts.length) : 0} suffix="%"/></Card></Col>
+        <Col xs={12} md={6} xl={4}><Card><Statistic title="5min AVG" value={formatLoad(avgLoad)}/></Card></Col>
+        <Col xs={24} md={12} xl={8}><Card><Statistic title="Coordinator" valueRender={() => <AutoFitText className="metric-fit-value" text={normalizeAddress(window.location.host)} minFontSize={14} maxFontSize={24} />} /></Card></Col>
+        <Col xs={12} md={6} xl={4}><Card><Statistic title="刷新" value="5s"/></Card></Col>
       </Row>
 
       {error && <Card className="error-card"><Typography.Text type="danger">{error}</Typography.Text></Card>}
@@ -294,10 +292,13 @@ function App() {
           setOutput('任务已下发，等待 agent 心跳反馈执行状态。');
         }}
         onPop={async () => {
-          if (!activeHost || !snapshot?.completion_queue?.[0]) return;
+          if (!activeHost || !snapshot?.completion_queue?.[0]) {
+            await refreshSnapshot(activeHost as HostView);
+            return;
+          }
           const id = encodeURIComponent(agentId(activeHost));
           const taskId = encodeURIComponent(snapshot.completion_queue[0].task_id);
-          await fetchJson(`/api/agents/${id}/tasks/completions/${taskId}/pop`, { method: 'POST' });
+          await fetchJson(`/api/agents/${id}/tasks/completions/${taskId}/keep`, { method: 'POST' });
           await refreshSnapshot(activeHost);
         }}
       />
@@ -372,9 +373,10 @@ function TaskModal(props: {
   const latestCompletion = completions[0];
   const completionText = props.output || (latestCompletion ? completionOutput(latestCompletion) : (agentTask ? runningTaskText(agentTask) : ''));
   const asyncTask = agentTask || executions[0];
+  const currentTaskId = latestCompletion?.task_id || asyncTask?.task_id || props.snapshot?.traces?.[0]?.task_id || '';
   return <Modal open={props.open} onCancel={props.onClose} footer={null} width="min(1320px, calc(100vw - 44px))" className="task-modal" title={null} closeIcon={<span className="mac-close" />}>
     <div className="task-shell">
-      <Space direction="vertical" size={12} className="task-sidebar">
+      <div className="task-sidebar">
         <Card className="task-hero" variant="outlined">
           <Flex gap={8} align="center">
             <Select value={props.taskType} onChange={props.setTaskType} className="task-select" options={Object.entries(taskLabels).map(([value, label]) => ({ value, label }))}/>
@@ -383,12 +385,31 @@ function TaskModal(props: {
           </Flex>
         </Card>
         <Card title="目标节点"><Typography.Text strong>{normalizeAddress(props.host?.ip)}</Typography.Text></Card>
-        <Card title="当前任务"><Badge status={statusColor(agentTask?.status || executions[0]?.status)} text={statusLabel(agentTask?.status || executions[0]?.status || '空闲')} /></Card>
+        <Card title="当前任务">
+          <Space direction="vertical" size={6} className="task-state-card">
+            <Badge status={statusColor(agentTask?.status || executions[0]?.status)} text={statusLabel(agentTask?.status || executions[0]?.status || '空闲')} />
+            <Typography.Text type="secondary">{taskLabels[(latestCompletion?.task_type || asyncTask?.task_type || '')] || latestCompletion?.task_type || asyncTask?.task_type || '当前没有任务。'}</Typography.Text>
+            {currentTaskId && <Typography.Text className="task-id-text" copyable={{ text: currentTaskId }}>task_id: {currentTaskId}</Typography.Text>}
+          </Space>
+        </Card>
         <Card title="结果队列"><Statistic value={completions.length} /></Card>
         <Card title="执行队列">
-          {tasks.length > 0 ? <List dataSource={tasks} renderItem={(task: any) => <List.Item><Space direction="vertical" size={2}><Space><Typography.Text strong>agent 执行中</Typography.Text><Tag color="blue">{statusLabel(task.status)}</Tag></Space><Typography.Text type="secondary">{taskLabels[task.task_type] || task.task_type}</Typography.Text><Progress percent={task.status === 'running' ? 68 : 38} showInfo={false}/></Space></List.Item>} /> : executions.length > 0 ? <List dataSource={executions} renderItem={(task: any) => <List.Item>{statusLabel(task.status)} · {taskLabels[task.task_type] || task.task_type}</List.Item>} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有待执行任务。来自 agent 心跳的任务会显示在上方。" />}
+          {tasks.length > 0 ? <List dataSource={tasks} renderItem={(task: any) => <List.Item><Space direction="vertical" size={2}><Space><Typography.Text strong>agent 执行中</Typography.Text><Tag color="blue">{statusLabel(task.status)}</Tag></Space><Typography.Text type="secondary">{taskLabels[task.task_type] || task.task_type}</Typography.Text><Typography.Text className="task-id-text">task_id: {task.task_id || '-'}</Typography.Text><Progress percent={task.status === 'running' ? 68 : 38} showInfo={false}/></Space></List.Item>} /> : executions.length > 0 ? <List dataSource={executions} renderItem={(task: any) => <List.Item><Space direction="vertical" size={2}><Typography.Text>{statusLabel(task.status)} · {taskLabels[task.task_type] || task.task_type}</Typography.Text><Typography.Text className="task-id-text">task_id: {task.task_id || '-'}</Typography.Text></Space></List.Item>} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有待执行任务。来自 agent 心跳的任务会显示在上方。" />}
         </Card>
-      </Space>
+        <Card title="Trace" className="task-trace-card">
+          <List
+            className="trace-list"
+            dataSource={props.snapshot?.traces || []}
+            locale={{ emptyText: '当前没有 trace。' }}
+            renderItem={(trace: any) => <List.Item>
+              <Space direction="vertical" size={2} className="trace-item">
+                <Typography.Text>{formatTime(trace.observed_at_ms || trace.observedAtMs)} · {trace.event || trace.status || '-'}</Typography.Text>
+                <Typography.Text className="task-id-text">task_id: {trace.task_id || '-'}</Typography.Text>
+              </Space>
+            </List.Item>}
+          />
+        </Card>
+      </div>
       <Card className="task-workspace" title="结果查看" variant="outlined">
         {asyncTask && !latestCompletion && <Alert
           className="agent-async-alert"
@@ -397,7 +418,9 @@ function TaskModal(props: {
           message={`agent ${statusLabel(asyncTask.status)}，等待 completion`}
           description={`${taskLabels[asyncTask.task_type] || asyncTask.task_type || '-'} · ${asyncTask.task_id || ''}`}
         />}
-        <Tabs items={[{ key: 'output', label: 'Completion', children: <CompletionViewer value={completionText} /> }, { key: 'trace', label: 'Trace', children: <List className="trace-list" dataSource={props.snapshot?.traces || []} renderItem={(trace: any) => <List.Item><Typography.Text>{formatTime(trace.observed_at_ms || trace.observedAtMs)} · {trace.event || trace.status || '-'}</Typography.Text></List.Item>} /> }]} />
+        <div className="completion-pane">
+          <CompletionViewer value={completionText} />
+        </div>
       </Card>
     </div>
   </Modal>;
