@@ -1418,3 +1418,50 @@ SHA256：
 - Hero 与右侧能力区高度平衡，视觉重心不再“上细下粗”。
 - Run UI 保持黄金比例分栏、无标题、按钮水平和 agent 执行中状态反馈。
 - 可见 UI 未出现 hostname，静态资源不依赖外部 CDN。
+
+### 线上 Ant Design 页面验证
+
+升级时间：2026-06-01 12:50 CST。
+
+部署结果：
+
+- 仅升级 3 台 coordinator。
+- Jar SHA256：`f3edb6a0eb03b776192e0b6376b01751c3b5f2b2ff0318214b596fdbb83053f0`。
+- `summary: total=3 ok=3 failed=0 elapsed=5s`。
+- 三台 `pulse-coordinator.service` 均为 `active`。
+
+远端浏览器验证：
+
+- 访问：`http://[fdbd:dc05:11:634::45]:9966/hosts`，Chrome 通过 `socks5://127.0.0.1:6699` 代理。
+- 本地静态资源由 coordinator 服务：`/assets/pulse-hosts.js`、`/assets/pulse-hosts.css`。
+
+测量结果：
+
+| 项目 | 结果 |
+| --- | --- |
+| `h1` | `心跳平台，连接运维现场` |
+| `antCards` | `497` |
+| `antButtons` | `475` |
+| `tiles` | `471` |
+| `heroBalance` | `1.0` |
+| `modalOpen` | `true` |
+| `workspaceToSidebar` | `1.618` |
+| `hasTaskTitle` | `false` |
+| `selectShare` | `0.526` |
+| `buttonFlow` | `nowrap/horizontal-tb` |
+| `visibleTextHasHostname` | `false` |
+| `htmlHasExternalCdn` | `false` |
+| `htmlHasForbiddenData` | `false` |
+
+`5min AVG` 窗口内稳定性：
+
+| IPv6 | First | Second | Stable |
+| --- | ---: | ---: | --- |
+| `fdbd:dc02:1a:34::18` | `255.20` | `255.20` | yes |
+
+结论：
+
+- 线上 `/hosts` 已切换到 React + Ant Design 本地组件应用。
+- 主视觉左右高度平衡，不再出现顶部轻、下方重的布局问题。
+- Run UI 保持黄金比例、无标题、操作控件展开。
+- 静态资源不依赖外部 CDN，可见 UI 仍保持 IPv6-only。
