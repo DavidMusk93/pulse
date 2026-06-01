@@ -403,7 +403,7 @@ function App() {
           }
           const id = encodeURIComponent(agentId(activeHost));
           const taskId = encodeURIComponent(snapshot.completion_queue[0].task_id);
-          await fetchJson(`/api/agents/${id}/tasks/completions/${taskId}/keep`, { method: 'POST' });
+          await fetchJson(`/api/agents/${id}/tasks/completions/${taskId}/pop`, { method: 'POST' });
           await refreshSnapshot(activeHost);
         }}
       />
@@ -514,6 +514,7 @@ function TaskModal(props: {
   const completions = props.snapshot?.completion_queue || [];
   const executions = props.snapshot?.execution_queue || [];
   const latestCompletion = completions[0];
+  const visibleTraces = (props.snapshot?.traces || []).slice(0, 4);
   const completionText = props.output || (latestCompletion ? completionOutput(latestCompletion) : (agentTask ? runningTaskText(agentTask) : ''));
   const asyncTask = agentTask || executions[0];
   const currentTaskId = latestCompletion?.task_id || asyncTask?.task_id || props.snapshot?.traces?.[0]?.task_id || '';
@@ -542,7 +543,7 @@ function TaskModal(props: {
         <Card title="Trace" className="task-trace-card">
           <List
             className="trace-list"
-            dataSource={props.snapshot?.traces || []}
+            dataSource={visibleTraces}
             locale={{ emptyText: '当前没有 trace。' }}
             renderItem={(trace: any) => <List.Item>
               <Space direction="vertical" size={2} className="trace-item">

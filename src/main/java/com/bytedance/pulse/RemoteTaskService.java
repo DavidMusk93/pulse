@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class RemoteTaskService {
     private static final int MAX_COMPLETIONS_PER_AGENT = 50;
+    private static final int MAX_TRACES_PER_AGENT = 4;
     private static final long DEFAULT_TASK_TIMEOUT_MS = 600_000;
     private final Clock clock;
     private final Map<String, Queue<RemoteTask>> executionQueues = new ConcurrentHashMap<>();
@@ -48,7 +49,7 @@ public class RemoteTaskService {
                         .flatMap(List::stream)
                         .filter(entry -> agentId.equals(entry.agentId()))
                         .sorted((left, right) -> Long.compare(right.observedAtMs(), left.observedAtMs()))
-                        .limit(50)
+                        .limit(MAX_TRACES_PER_AGENT)
                         .toList(),
                 List.copyOf(taskDefinitions.keySet()));
     }
@@ -167,12 +168,11 @@ public class RemoteTaskService {
 
     public synchronized TaskSnapshot popCompletion(String agentId, String taskId) {
         ArrayDeque<TaskResult> completions = completions(agentId);
-        completions.removeIf(result -> result.taskId().equals(taskId));
-        trace(new TaskResult(taskId, "trace-unknown", agentId, "", "popped", null, 0, 0, 0, "", "text", TaskOutputCodec.IDENTITY, TaskOutputCodec.sha256(""), 0, null),
-                "task.completion_popped",
-                "ui",
-                "pulse-ui",
-                Map.of());
+        TaskResult head = completions.peekFirst();
+        if (head != null && head.taskId().equals(taskId)) {
+            completions.removeFirst();
+            trace(head, "task.completion_popped", "ui", "pulse-ui", Map.of("queue_head", true));
+        }
         return snapshot(agentId);
     }
 

@@ -2157,3 +2157,80 @@ heartbeat status=ok target=http://[fdbd:dc02:11:c::14]:9977 seq=4161
 
 - 修复后目标节点不再进入 `not_group_member -> direct fallback -> 重新入组` 的循环。
 - group heartbeat 降压路径保留，目标节点稳定由 leader 聚合上报。
+
+## Completion Pop 与 Trace 固定长度修复
+
+验证时间：2026-06-01 21:10-21:15 CST。
+
+背景：
+
+- Run UI 的 `弹出结果` 实际调用 `/keep`，没有弹出 completion queue 头部。
+- trace 区会展示过多重复事件，例如多次 `task.completion_kept`，左侧信息区视觉负担过重。
+
+修复：
+
+- 前端 `弹出结果` 改为调用 `/api/agents/{agent}/tasks/completions/{task_id}/pop`。
+- 服务端 `popCompletion` 改为严格 queue head pop：
+  - 只移除当前队头结果。
+  - 不再按 `task_id` 删除队列中任意位置的结果。
+  - pop 后返回新的 snapshot，让 UI 展示新的队头结果。
+- 服务端 task snapshot 的 trace 限制为最近 4 条。
+- 前端 trace list 也裁剪为最近 4 条，作为 UI 防线。
+
+本地验证：
+
+- `npm run build`：通过。
+- `mvn -Dtest=CoordinatorServiceTest,CoordinatorHttpServerTest test`：通过，20 个测试通过。
+- `mvn test`：通过，24 个测试通过。
+- `mvn package`：通过。
+
+Coordinator-only 线上升级验证：
+
+- 目标：
+  - `fdbd:dc05:11:634::45`
+  - `fdbd:dc05:13:10c::40`
+  - `fdbd:dc07:0:810::44`
+- 部署结果：`summary: total=3 ok=3 failed=0`
+
+远端静态资源校验：
+
+| coordinator | `/pop` | `/keep` | `.slice(0,4)` | `completion_kept` |
+| --- | --- | --- | --- | --- |
+| `fdbd:dc05:11:634::45` | true | false | true | false |
+| `fdbd:dc05:13:10c::40` | true | false | true | false |
+| `fdbd:dc07:0:810::44` | true | false | true | false |
+
+线上真实任务验证：
+
+- 目标 agent：
+  - agent：`dc03-pf-t630-n048.byted.org`
+  - IPv6：`fdbd:dc03:f:630::48`
+- 先后下发：
+  - `prepare_disk_layout_dry_run`
+  - `analyze_block_layout_dry_run`
+- 等待 completion queue 到 2 后调用 `/pop`。
+
+验证结果：
+
+```json
+{
+  "before_count": 2,
+  "before_head": "task-d67388fb-a0e2-49ba-8eb7-b761b6fa220b",
+  "before_second": "task-544da30d-97b7-43fb-9e4f-74350a305b3f",
+  "after_count": 1,
+  "after_head": "task-544da30d-97b7-43fb-9e4f-74350a305b3f",
+  "trace_count": 4,
+  "trace_events": [
+    "task.completion_popped",
+    "task.result_received",
+    "task.result_received",
+    "task.accepted_by_agent"
+  ]
+}
+```
+
+结论：
+
+- `弹出结果` 已恢复为真正 queue pop 语义。
+- pop 后展示下一个 completion item。
+- trace 固定为最近 4 条，且不再出现 `task.completion_kept`。

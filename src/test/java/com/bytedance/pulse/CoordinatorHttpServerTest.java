@@ -172,7 +172,8 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("格式化"));
         assertTrue(js.body().contains("拷贝"));
         assertTrue(js.body().contains("/tasks/completions/"));
-        assertTrue(js.body().contains("/keep"));
+        assertTrue(js.body().contains("/pop"));
+        assertTrue(js.body().contains(".slice(0,4)"));
         assertTrue(js.body().contains("task_id"));
         assertTrue(js.body().contains("Trace"));
         assertTrue(!js.body().contains("status-led"));

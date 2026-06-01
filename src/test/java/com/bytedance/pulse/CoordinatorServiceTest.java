@@ -232,6 +232,32 @@ class CoordinatorServiceTest {
     }
 
     @Test
+    void popCompletionRemovesOnlyQueueHeadAndKeepsNextResultVisible() {
+        MutableClock mutableClock = new MutableClock(Instant.ofEpochMilli(1_710_000_000_000L));
+        CoordinatorService service = new CoordinatorService("coordinator-a", mutableClock);
+        service.enqueueTask("agent-1", "prepare_disk_layout_dry_run");
+        PulseMessage first = taskCommand(service, "agent-1", 10);
+        completeTask(service, first, "first-result", 11);
+        mutableClock.advance(Duration.ofMillis(1));
+        service.enqueueTask("agent-1", "analyze_block_layout_dry_run");
+        PulseMessage second = taskCommand(service, "agent-1", 12);
+        completeTask(service, second, "second-result", 13);
+        mutableClock.advance(Duration.ofMillis(1));
+
+        TaskSnapshot beforePop = service.taskSnapshot("agent-1");
+        assertEquals(2, beforePop.completionQueue().size());
+        assertEquals("first-result", beforePop.completionQueue().get(0).output());
+        assertEquals("second-result", beforePop.completionQueue().get(1).output());
+
+        TaskSnapshot afterPop = service.popCompletion("agent-1", beforePop.completionQueue().get(0).taskId());
+
+        assertEquals(1, afterPop.completionQueue().size());
+        assertEquals("second-result", afterPop.completionQueue().get(0).output());
+        assertTrue(afterPop.traces().size() <= 4);
+        assertTrue(afterPop.traces().stream().anyMatch(trace -> "task.completion_popped".equals(trace.event())));
+    }
+
+    @Test
     void remoteTaskResultChunksAreReassembledLosslessly() {
         CoordinatorService service = new CoordinatorService("coordinator-a", clock);
         service.enqueueTask("agent-1", "analyze_block_layout_dry_run");
@@ -335,6 +361,50 @@ class CoordinatorServiceTest {
         service.handleHeartbeat(singleHeartbeat(agentId, 1, firstSeq, host, ip));
         service.handleHeartbeat(singleHeartbeat(agentId, 1, firstSeq + 1, host, ip));
         service.handleHeartbeat(singleHeartbeat(agentId, 1, firstSeq + 2, host, ip));
+    }
+
+    private static PulseMessage taskCommand(CoordinatorService service, String agentId, long seq) {
+        return service.handleHeartbeat(singleHeartbeat(agentId, 1, seq, "host-1", "10.0.0.1"))
+                .messages()
+                .stream()
+                .filter(message -> "cmd.task_execute".equals(message.type()))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private static void completeTask(CoordinatorService service, PulseMessage command, String output, long seq) {
+        service.handleHeartbeat(new HeartbeatRequest(
+                null,
+                command.payload().get("agent_id").toString(),
+                1L,
+                seq,
+                30_000L,
+                List.of(
+                        new PulseMessage("state-agent-1-" + seq, "state.heartbeat", 1, null, null, Map.of("host", "host-1")),
+                        new PulseMessage(
+                                "result-agent-1-" + seq,
+                                "reply.task_result",
+                                1,
+                                command.messageId(),
+                                null,
+                                Map.ofEntries(
+                                        Map.entry("task_id", command.payload().get("task_id")),
+                                        Map.entry("trace_id", command.payload().get("trace_id")),
+                                        Map.entry("task_type", command.payload().get("task_type")),
+                                        Map.entry("status", "completed"),
+                                        Map.entry("exit_code", 0),
+                                        Map.entry("started_at_ms", 1),
+                                        Map.entry("finished_at_ms", 2),
+                                        Map.entry("duration_ms", 1),
+                                        Map.entry("output", output),
+                                        Map.entry("output_type", "text"),
+                                        Map.entry("output_encoding", "identity"),
+                                        Map.entry("output_sha256", TaskOutputCodec.sha256(output)),
+                                        Map.entry("output_bytes", output.getBytes(java.nio.charset.StandardCharsets.UTF_8).length),
+                                        Map.entry("output_chunked", false),
+                                        Map.entry("output_chunk_count", 0),
+                                        Map.entry("runner_error", "")))),
+                List.of()));
     }
 
     private static Map<String, Object> planPayload(CoordinatorService service, String agentId) {
