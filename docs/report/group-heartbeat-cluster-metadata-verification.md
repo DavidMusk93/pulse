@@ -1049,6 +1049,40 @@ mvn package
 | `执行` | `57px` |
 | `弹出结果` | `84px` |
 
+线上部署与验证：
+
+- 升级时间：2026-06-01 12:16 CST。
+- 仅升级 3 台 coordinator。
+- Jar SHA256：`e322950d3c552f73a14c5bd4733f1aadcf369e3b64c5b823743a12a334a0f67b`。
+- `summary: total=3 ok=3 failed=0 elapsed=2s`。
+- 三台 `pulse-coordinator.service` 均为 `active`。
+
+远端浏览器验证：
+
+- 访问：`http://[fdbd:dc05:11:634::45]:9966/hosts`，Chrome 通过 `socks5://127.0.0.1:6699` 代理。
+
+| 项目 | 结果 |
+| --- | --- |
+| `tileCount` | `471` |
+| `aliveTileCount` | `471` |
+| `modalOpen` | `true` |
+| `hasTaskTitle` | `false` |
+| `hasTaskTrace` | `false` |
+| `htmlHasTitleId` | `false` |
+| `selectShare` | `0.598` |
+| `controlsSameRow` | `true` |
+| `visibleTextHasHostname` | `false` |
+| `htmlHasForbiddenStyle` | `false` |
+
+远端控件宽度：
+
+| 控件 | 宽度 |
+| --- | ---: |
+| 操作栏 | `392px` |
+| 任务类型选择 | `235px` |
+| `执行` | `57px` |
+| `弹出结果` | `84px` |
+
 按钮测量：
 
 | 按钮 | `white-space` | `writing-mode` | 尺寸 |
