@@ -1536,3 +1536,46 @@ SHA256：
 - `Confirm` 已移出 header。
 - `任务` 按钮已放入 header。
 - 磁贴内部滚动恢复正常。
+
+线上部署与验证：
+
+- 升级时间：2026-06-01 14:16 CST。
+- 仅升级 3 台 coordinator，未重启 agent。
+- Jar SHA256：`13dcc0f5f5b15ff5ea2fc3decc8c0534014366e689c486f44c5c85f45f7f463f`。
+- `summary: total=3 ok=3 failed=0 elapsed=3s`。
+- 三台 `pulse-coordinator.service` 均为 `active`。
+
+远端浏览器验证：
+
+- 访问：`http://[fdbd:dc05:11:634::45]:9966/hosts`，Chrome 通过 `socks5://127.0.0.1:6699` 代理。
+- 本地静态资源由 coordinator 服务：`/assets/pulse-hosts.js`、`/assets/pulse-hosts.css`。
+
+测量结果：
+
+| 项目 | 结果 |
+| --- | --- |
+| `tileCount` | `471` |
+| `headerText` | `2026/6/1 14:16:23\n任务` |
+| `headerHasOnlineText` | `false` |
+| `headerHasConfirm` | `false` |
+| `runInHeader` | `true` |
+| `dotText` | `` |
+| `dotOnly` | `true` |
+| `tileHasConfirm` | `true` |
+| `scrollClientHeight` | `65` |
+| `scrollHeight` | `424` |
+| `scrollBefore` | `0` |
+| `scrollAfter` | `359` |
+| `scrollMoved` | `true` |
+| `scrollOverflow` | `true` |
+| `overflowY` | `auto` |
+| `hasHostnameLiteral` | `false` |
+| `hasExternalAsset` | `false` |
+
+结论：
+
+- 线上 header 已只保留时间、在线绿点和 `任务` 按钮。
+- 线上 header 不再展示 `在线` 文案和 `Confirm`。
+- `Confirm` 保留在磁贴正文指标区。
+- `.tile-scroll` 在真实线上数据下存在 overflow 且可滚动。
+- 页面继续保持 IPv6-only 和本地静态资源，无外部 CDN。
