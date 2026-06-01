@@ -185,31 +185,46 @@ public class AgentHeartbeatFactory {
         }
 
         Map<String, String> env = readEnviron(procDir.resolve("environ"));
-        long cpuTicks = processCpuTicks(procDir.resolve("stat")).orElse(0L);
-        long rssKb = rssKb(procDir.resolve("status")).orElse(0L);
-        double cpuPercent = cpuPercent(pid, cpuTicks, now);
+        ProcessTicks cpuTicks = processCpuTicks(procDir.resolve("stat")).orElse(new ProcessTicks(0, 0));
+        String status = readString(procDir.resolve("status"));
+        long rssKb = statusNumber(status, "VmRSS:").orElse(0L);
+        long threads = statusNumber(status, "Threads:").orElse(0L);
+        CpuPercent cpuPercent = cpuPercent(pid, cpuTicks, now);
         double memPercent = memTotalKb <= 0 ? 0 : rssKb * 100.0 / memTotalKb;
 
         Map<String, Object> worker = new LinkedHashMap<>();
         worker.put("pid", pid);
-        worker.put("cpu_percent", formatPercent(cpuPercent));
+        worker.put("cpu_percent", formatPercent(cpuPercent.total()));
+        worker.put("user_cpu_percent", formatPercent(cpuPercent.user()));
+        worker.put("sys_cpu_percent", formatPercent(cpuPercent.system()));
+        worker.put("rss_kb", rssKb);
         worker.put("mem_percent", formatPercent(memPercent));
+        worker.put("threads", threads);
         worker.put("port1", env.getOrDefault("PORT1", ""));
         worker.put("component_version", env.getOrDefault("TIDELET_COMPONENT_VERSION", ""));
         return Optional.of(worker);
     }
 
-    private double cpuPercent(long pid, long cpuTicks, long now) {
+    private CpuPercent cpuPercent(long pid, ProcessTicks cpuTicks, long now) {
         ProcessSample previous = tideSamples.put(pid, new ProcessSample(cpuTicks, now));
-        if (previous == null || now <= previous.observedAtMs || cpuTicks < previous.cpuTicks) {
-            return 0;
+        if (previous == null
+                || now <= previous.observedAtMs
+                || cpuTicks.userTicks() < previous.cpuTicks().userTicks()
+                || cpuTicks.systemTicks() < previous.cpuTicks().systemTicks()) {
+            return new CpuPercent(0, 0);
         }
         double elapsedSeconds = (now - previous.observedAtMs) / 1000.0;
-        double cpuSeconds = (cpuTicks - previous.cpuTicks) / (double) clockTickPerSecond;
-        return elapsedSeconds <= 0 ? 0 : Math.max(0, cpuSeconds * 100.0 / elapsedSeconds);
+        double userSeconds = (cpuTicks.userTicks() - previous.cpuTicks().userTicks()) / (double) clockTickPerSecond;
+        double systemSeconds = (cpuTicks.systemTicks() - previous.cpuTicks().systemTicks()) / (double) clockTickPerSecond;
+        if (elapsedSeconds <= 0) {
+            return new CpuPercent(0, 0);
+        }
+        return new CpuPercent(
+                Math.max(0, userSeconds * 100.0 / elapsedSeconds),
+                Math.max(0, systemSeconds * 100.0 / elapsedSeconds));
     }
 
-    private static Optional<Long> processCpuTicks(Path statPath) {
+    private static Optional<ProcessTicks> processCpuTicks(Path statPath) {
         String stat = readString(statPath);
         int close = stat.lastIndexOf(')');
         if (close < 0 || close + 2 >= stat.length()) {
@@ -222,15 +237,15 @@ public class AgentHeartbeatFactory {
         try {
             long utime = Long.parseLong(fields[11]);
             long stime = Long.parseLong(fields[12]);
-            return Optional.of(utime + stime);
+            return Optional.of(new ProcessTicks(utime, stime));
         } catch (NumberFormatException ignored) {
             return Optional.empty();
         }
     }
 
-    private static Optional<Long> rssKb(Path statusPath) {
-        return readString(statusPath).lines()
-                .filter(line -> line.startsWith("VmRSS:"))
+    private static Optional<Long> statusNumber(String status, String key) {
+        return status.lines()
+                .filter(line -> line.startsWith(key))
                 .findFirst()
                 .flatMap(AgentHeartbeatFactory::firstNumber);
     }
@@ -300,5 +315,13 @@ public class AgentHeartbeatFactory {
         return 100;
     }
 
-    private record ProcessSample(long cpuTicks, long observedAtMs) {}
+    private record ProcessTicks(long userTicks, long systemTicks) {}
+
+    private record CpuPercent(double user, double system) {
+        double total() {
+            return user + system;
+        }
+    }
+
+    private record ProcessSample(ProcessTicks cpuTicks, long observedAtMs) {}
 }

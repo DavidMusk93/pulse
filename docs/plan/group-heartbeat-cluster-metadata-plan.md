@@ -38,11 +38,13 @@
   - 使用 Ant Design `Card`、`Statistic`、`Button`、`Select`、`Modal`、`Tabs`、`Badge`、`Progress`、`List` 等成熟组件替代粗糙手写组件。
   - 保留 `window.scrollX/scrollY` 与磁贴内部 scroll cursor，禁止整页刷新和整块重建。
   - 磁贴改为正方形，内部支持滚动，禁止文字覆盖。
-  - 磁贴 header 只保留紧凑单行时间和任务按钮；在线绿点固定在磁贴角落，不显示“在线”文字，不在 header 展示确认数。
+  - 磁贴 header 改为左侧独立状态点、中间单行短时间、右侧纯文字任务按钮；不显示“在线”文字，不在 header 展示确认数，状态点不得与任务按钮挤在一起。
   - `Confirm` 放入磁贴正文指标区，任务按钮放入 header 右侧。
-  - `Seen` 时间使用 `MM/DD HH:mm:ss` 或更短单行格式，禁止默认 datetime 在窄磁贴中断成多行。
+  - `Seen` 时间在磁贴内只使用 `HH:mm:ss` 或同等短格式，完整时间放到 `title/tooltip`，禁止默认 datetime 在窄磁贴中断成多行。
   - 任务按钮只保留文字，不展示图标。
-  - tide worker 区改成紧凑属性行，展示更多 `pid/cpu/mem/port/version` 信息，超出内容由 `.tile-scroll` 滚动承载。
+  - 磁贴最小宽度上调，避免 150px 宽度下 header 和 pid 信息被压缩。
+  - tide worker 区改成轻量进程卡片，展示 `pid/cpu/user/sys/rss/mem/threads/port/version`，超出内容由 `.tile-scroll` 滚动承载。
+  - agent 侧从 `/proc/$pid/stat` 计算 user/sys CPU percent，从 `/proc/$pid/status` 读取 `VmRSS` 和 `Threads`，环境变量字段保持不变。
   - 修复 Ant Design Card 内部 flex 高度，确保 `.tile-scroll` 是真实可滚动容器。
   - 不同 cluster 使用不同低饱和冷静色，避免紫色、红色等高刺激亮色。
   - cluster 内按固定窗口 `5min AVG` 降序排序。
@@ -57,6 +59,7 @@
   - 页面整体视觉重心必须均衡，避免顶部过轻、下方过重的“上细下粗”布局。
   - Run UI 按黄金分割组织：面板尺寸约为主页面视口的黄金比例，左侧信息区与右侧 completion 区约为 `1 : 1.618`。
   - Run UI 从 `state.async_tasks` 展示 agent `accepted/running` 状态，在 completion 结果返回前给出执行中反馈。
+  - Run UI completion 输出必须展示；JSON 输出提供一键格式化、拷贝和基础高亮，避免纯文本框吞掉结果。
   - 任务按钮和工具栏按钮水平排列，禁止竖排、折行和压缩成不可读状态。
   - Run UI 去掉“执行任务”标题，由执行按钮表达语义；任务类型选择控件展开为操作栏主区域。
   - 关闭控件改为 macOS 风格窗口控制点，放在独立标题栏，不覆盖业务内容。
@@ -136,6 +139,7 @@
   - 验证任务按钮包含 `white-space: nowrap` 与 `writing-mode: horizontal-tb`。
   - 验证 `recordLoadSamples` 仅在窗口开始时写入 `displayAvg`，窗口内不累计 `sum/count`。
   - 使用浏览器验证中文主标题不拥挤、任务标题与操作并排、macOS 风格关闭按钮不与内容重叠。
+  - 使用 coordinator 线上浏览器验证磁贴 header 单行、状态点与任务按钮分离、pid 卡片可读、Run UI JSON completion 可展示/格式化/拷贝/高亮。
 - 执行：
 
 ```bash

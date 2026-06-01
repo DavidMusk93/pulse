@@ -13,6 +13,7 @@ import {
   Progress,
   Row,
   Select,
+  Segmented,
   Space,
   Statistic,
   Tabs,
@@ -121,6 +122,17 @@ function formatTime(ms?: number) {
   }
 }
 
+function formatSeenTime(ms?: number) {
+  if (!ms) return '-';
+  try {
+    const date = new Date(ms);
+    const pad = (value: number) => String(value).padStart(2, '0');
+    return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  } catch {
+    return '-';
+  }
+}
+
 function statusLabel(status?: string) {
   return ({
     queued: '队列中', delivered: '已下发', accepted: '已接收', running: '执行中',
@@ -157,6 +169,16 @@ function clusterHue(index: number) {
 
 function sortHosts(hosts: HostView[]) {
   return [...hosts].sort((left, right) => averageLoad(right) - averageLoad(left) || normalizeAddress(left.ip).localeCompare(normalizeAddress(right.ip)));
+}
+
+function workerValue(worker: any, key: string, fallback = '-') {
+  const value = worker?.[key];
+  return value === undefined || value === null || value === '' ? fallback : String(value);
+}
+
+function formatRssMb(worker: any) {
+  const value = Number.parseFloat(workerValue(worker, 'rss_kb', '0'));
+  return Number.isFinite(value) && value > 0 ? `${(value / 1024).toFixed(1)}MB` : '-';
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -296,13 +318,14 @@ function HostTile({ host, onRun }: { host: HostView; onRun: () => void }) {
   const level = Math.min(1, avg / 400);
   const confirmations = host.heartbeat_confirmations ?? host.heartbeatConfirmations ?? 0;
   const workers = Array.isArray(host.state?.workers) ? host.state?.workers : Array.isArray(host.state?.tide_workers) ? host.state?.tide_workers : [];
+  const observedAt = host.observed_at_ms || host.observedAtMs;
   return <Card className="host-tile" style={{ ['--load-level' as any]: level }} data-agent-key={hostKey(host)} variant="borderless">
-    <Badge className="status-dot corner-status-dot" status={statusColor(host.status) as any} />
-    <Flex className="tile-header" justify="space-between" align="start" gap={8}>
-      <Typography.Text className="seen">{formatTime(host.observed_at_ms || host.observedAtMs)}</Typography.Text>
-      <Space size={8} className="tile-actions">
-        <Button className="run-button" type="primary" size="small" onClick={onRun} disabled={confirmations < 3 || host.status !== 'alive'}>任务</Button>
+    <Flex className="tile-header" justify="space-between" align="center" gap={10}>
+      <Space size={8} className="tile-seen" title={formatTime(observedAt)}>
+        <span className={`status-led status-led-${statusColor(host.status)}`} />
+        <Typography.Text className="seen">{formatSeenTime(observedAt)}</Typography.Text>
       </Space>
+      <Button className="run-button" type="primary" size="small" onClick={onRun} disabled={confirmations < 3 || host.status !== 'alive'}>任务</Button>
     </Flex>
     <div className="tile-scroll">
       <Typography.Title level={4} className="ip-title" data-field="ip_title">{normalizeAddress(host.ip)}</Typography.Title>
@@ -313,12 +336,20 @@ function HostTile({ host, onRun }: { host: HostView; onRun: () => void }) {
       </Row>
       <Progress percent={Math.round(level * 100)} showInfo={false} strokeColor="hsl(var(--cluster-hue) 48% 24%)" trailColor="rgba(15,23,42,.24)" />
       {workers.length > 0 && <div className="worker-list">
-        {workers.slice(0, 12).map((worker: any, index: number) => <div className="worker-row" key={`${worker.pid || 'worker'}-${index}`}>
-          <Typography.Text className="worker-pid">pid {String(worker.pid || '-')}</Typography.Text>
-          <Typography.Text className="worker-metric">cpu {String(worker.cpu_percent || '-')}</Typography.Text>
-          <Typography.Text className="worker-metric">mem {String(worker.mem_percent || '-')}</Typography.Text>
-          {worker.port1 && <Typography.Text className="worker-metric">port {String(worker.port1)}</Typography.Text>}
-          {worker.component_version && <Typography.Text className="worker-version">{String(worker.component_version)}</Typography.Text>}
+        {workers.slice(0, 8).map((worker: any, index: number) => <div className="worker-card" key={`${worker.pid || 'worker'}-${index}`}>
+          <Flex className="worker-card-head" justify="space-between" align="center" gap={6}>
+            <Typography.Text className="worker-pid">pid {workerValue(worker, 'pid')}</Typography.Text>
+            <Typography.Text className="worker-version">{workerValue(worker, 'component_version')}</Typography.Text>
+          </Flex>
+          <div className="worker-metrics">
+            <span>cpu {workerValue(worker, 'cpu_percent')}</span>
+            <span>usr {workerValue(worker, 'user_cpu_percent')}</span>
+            <span>sys {workerValue(worker, 'sys_cpu_percent')}</span>
+            <span>rss {formatRssMb(worker)}</span>
+            <span>mem {workerValue(worker, 'mem_percent')}</span>
+            <span>thr {workerValue(worker, 'threads')}</span>
+            {worker.port1 && <span>port {workerValue(worker, 'port1')}</span>}
+          </div>
         </div>)}
       </div>}
     </div>
@@ -340,6 +371,8 @@ function TaskModal(props: {
   const agentTask = tasks[0];
   const completions = props.snapshot?.completion_queue || [];
   const executions = props.snapshot?.execution_queue || [];
+  const latestCompletion = completions[0];
+  const completionText = props.output || (latestCompletion ? completionOutput(latestCompletion) : (agentTask ? runningTaskText(agentTask) : ''));
   return <Modal open={props.open} onCancel={props.onClose} footer={null} width="min(1320px, calc(100vw - 44px))" className="task-modal" title={null} closeIcon={<span className="mac-close" />}>
     <div className="task-shell">
       <Space direction="vertical" size={12} className="task-sidebar">
@@ -358,10 +391,28 @@ function TaskModal(props: {
         </Card>
       </Space>
       <Card className="task-workspace" title="结果查看" variant="outlined">
-        <Tabs items={[{ key: 'output', label: 'Completion', children: <pre className="task-output">{props.output || (agentTask ? runningTaskText(agentTask) : '')}</pre> }, { key: 'trace', label: 'Trace', children: <List dataSource={props.snapshot?.traces || []} renderItem={(trace: any) => <List.Item><Typography.Text>{formatTime(trace.observed_at_ms || trace.observedAtMs)} · {trace.event || trace.status || '-'}</Typography.Text></List.Item>} /> }]} />
+        <Tabs items={[{ key: 'output', label: 'Completion', children: <CompletionViewer value={completionText} /> }, { key: 'trace', label: 'Trace', children: <List dataSource={props.snapshot?.traces || []} renderItem={(trace: any) => <List.Item><Typography.Text>{formatTime(trace.observed_at_ms || trace.observedAtMs)} · {trace.event || trace.status || '-'}</Typography.Text></List.Item>} /> }]} />
       </Card>
     </div>
   </Modal>;
+}
+
+function CompletionViewer({ value }: { value: string }) {
+  const [mode, setMode] = useState<'auto' | 'raw'>('auto');
+  const parsed = useMemo(() => parseJsonOutput(value), [value]);
+  const display = mode === 'auto' && parsed.ok ? parsed.formatted : value;
+  return <div className="completion-viewer">
+    <Flex className="completion-toolbar" justify="space-between" align="center" gap={8}>
+      <Space size={8}>
+        <Segmented size="small" value={mode} onChange={next => setMode(next as 'auto' | 'raw')} options={[{ label: '格式化', value: 'auto' }, { label: '原始', value: 'raw' }]} />
+        {parsed.ok && <Tag color="blue">JSON</Tag>}
+      </Space>
+      <Button size="small" onClick={() => navigator.clipboard?.writeText(display)}>拷贝</Button>
+    </Flex>
+    {mode === 'auto' && parsed.ok
+      ? <pre className="task-output json-output" dangerouslySetInnerHTML={{ __html: highlightJson(display) }} />
+      : <pre className="task-output">{display}</pre>}
+  </div>;
 }
 
 function runningTaskText(task: any) {
@@ -377,15 +428,61 @@ function runningTaskText(task: any) {
 }
 
 function renderCompletion(result: any) {
+  const output = result.output || result.stdout_tail || result.stdout || '';
+  const stderr = result.stderr_tail || result.stderr || '';
   return [
     `status: ${result.status || '-'}`,
     `exit_code: ${result.exit_code ?? '-'}`,
     `task_id: ${result.task_id || '-'}`,
     `trace_id: ${result.trace_id || '-'}`,
     '',
-    result.stdout_tail || result.stdout || '',
-    result.stderr_tail || result.stderr || ''
+    output,
+    stderr
   ].join('\n');
+}
+
+function completionOutput(result: any) {
+  return result.output || renderCompletion(result);
+}
+
+function parseJsonOutput(value: string) {
+  const trimmed = value.trim();
+  const candidates = [trimmed];
+  const firstObject = trimmed.search(/[\[{]/);
+  if (firstObject > 0) {
+    candidates.push(trimmed.slice(firstObject));
+  }
+  for (const candidate of candidates) {
+    try {
+      return { ok: true, formatted: JSON.stringify(JSON.parse(candidate), null, 2) };
+    } catch {
+      // try the next candidate
+    }
+  }
+  return { ok: false, formatted: value };
+}
+
+function highlightJson(value: string) {
+  return escapeHtml(value).replace(
+    /(&quot;(?:\\.|[^&])*?&quot;)(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
+    (match, stringValue, colon, literal) => {
+      if (stringValue) {
+        return colon ? `<span class="json-key">${stringValue}</span>${colon}` : `<span class="json-string">${stringValue}</span>`;
+      }
+      if (literal) {
+        return `<span class="json-literal">${literal}</span>`;
+      }
+      return `<span class="json-number">${match}</span>`;
+    });
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 createRoot(document.getElementById('root')!).render(<App />);
