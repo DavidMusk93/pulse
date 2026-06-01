@@ -1951,3 +1951,30 @@ task_id: task-bb5f66ba-e753-42ff-9dae-71becfabe461
 | `bodyPaddingTop` | `16px` |
 | `toolbarPaddingBottom` | `4px` |
 | `titleText` | `结果查看` |
+
+## 顶部指标卡高度对齐修复
+
+验证时间：2026-06-01 16:35 CST。
+
+需求：
+
+- 顶部 `5min AVG`、`Coordinator`、`刷新` 等指标卡高度不一致，视觉基线错位。
+
+实现结果：
+
+- 指标区列容器改为 stretch，卡片 `height: 100%`。
+- 指标卡 body 统一为固定最小高度，并让 `Statistic` 以纵向 flex 统一标题和数值基线。
+- `Coordinator` 长值继续走自适应字号，避免通过增加卡片高度来容纳内容。
+
+线上浏览器测量：
+
+| 卡片 | `cardHeight` | `bodyHeight` | `statisticHeight` |
+| --- | --- | --- | --- |
+| `5min AVG` | `91` | `89` | `61` |
+| `Coordinator` | `91` | `89` | `61` |
+| `刷新` | `91` | `89` | `61` |
+
+结论：
+
+- `allCardHeightsEqual=true`
+- `allBodyHeightsEqual=true`

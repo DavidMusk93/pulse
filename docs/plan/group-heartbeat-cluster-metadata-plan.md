@@ -47,6 +47,7 @@
   - Run UI 去掉右侧 `Trace` tab，改为左侧独立 `Trace` 卡片；每条 trace 展示时间、事件和 `task_id`。
   - 右侧结果区只承载 completion viewer，避免 trace/completion 共用 tab 内容层导致查看异常或状态无法恢复。
   - 调整 `结果查看` 卡片 head/body 留白和 completion 工具栏顶部间距，让标题区与格式化/拷贝按钮之间更舒展。
+  - 顶部指标区改为等高卡片布局：列容器拉伸、卡片 `height: 100%`、`Statistic` 基线统一，避免 `Coordinator` 长值导致行内高度不齐。
   - tide worker 区改成轻量进程卡片，展示 `pid/cpu/user/sys/rss/mem/threads/port/version`，超出内容由 `.tile-scroll` 滚动承载。
   - agent 侧从 `/proc/$pid/stat` 计算 user/sys CPU percent，从 `/proc/$pid/status` 读取 `VmRSS` 和 `Threads`，环境变量字段保持不变。
   - 修复 Ant Design Card 内部 flex 高度，确保 `.tile-scroll` 是真实可滚动容器。

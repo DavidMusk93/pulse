@@ -501,6 +501,7 @@ Web 页面按 `cluster` 进行一级分组：
 - Run UI 中 `trace` 与 `completion` 禁止放在同一可切换结果容器里互相覆盖；`trace` 固定放左侧信息区独立卡片，右侧仅展示 completion 输出。
 - `trace` 展示必须包含 `task_id`，并允许在滚动容器内稳定查看与恢复，不因 tab 切换或结果渲染互相污染。
 - Run UI 的“结果查看”标题区与下方格式化/拷贝工具栏之间必须保持 Apple 风格的松弛留白，避免标题、分隔线和按钮挤在一起形成压迫感。
+- 顶部指标卡（如 `5min AVG`、`Coordinator`、`刷新`）必须在同一行保持统一高度与内容基线；超长值只允许缩小字号，不能把单张卡片高度撑高破坏整排对齐。
 - tide worker 列表必须以轻量进程卡片展示，避免表格硬塞；至少包含 `pid`、总 `cpu_percent`、`user_cpu_percent`、`sys_cpu_percent`、`rss_kb`、`mem_percent`、`threads`、`port1`、`component_version` 中可用字段，并通过磁贴内部滚动承载更多行。
 - 卡片内不展示瞬时 `Load`，避免 5s 轮询导致数值抖动和频繁重排。
 - `5min AVG` 由前端在本地固定窗口计算；每个 5 分钟窗口开始时只采样计算一次，窗口内禁止继续累计或更新展示值，避免 5s 轮询造成视觉抖动。

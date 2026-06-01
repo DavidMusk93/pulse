@@ -174,6 +174,9 @@ class CoordinatorHttpServerTest {
         assertTrue(css.body().contains("text-overflow:ellipsis"));
         assertTrue(css.body().contains(".auto-fit"));
         assertTrue(css.body().contains(".metric-fit-value"));
+        assertTrue(css.body().contains(".metric-row>.ant-col"));
+        assertTrue(css.body().contains(".metric-row>.ant-col>.ant-card"));
+        assertTrue(css.body().contains(".metric-row .ant-statistic"));
         assertTrue(css.body().contains("writing-mode:horizontal-tb"));
         assertTrue(css.body().contains("overflow:hidden auto") || css.body().contains("overflow-y:auto"));
         assertTrue(css.body().contains("flex:1 1 0"));

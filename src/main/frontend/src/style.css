@@ -70,8 +70,34 @@ body {
 .metric-row {
   margin-bottom: 18px;
 }
+.metric-row > .ant-col {
+  display: flex;
+}
+.metric-row > .ant-col > .ant-card {
+  width: 100%;
+  height: 100%;
+}
 .metric-row .ant-card-body {
   padding: 14px 16px !important;
+  min-height: 78px;
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+}
+.metric-row .ant-statistic {
+  width: 100%;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 6px;
+}
+.metric-row .ant-statistic-title {
+  margin-bottom: 0 !important;
+}
+.metric-row .ant-statistic-content,
+.metric-row .metric-fit-value {
+  line-height: 1.12;
 }
 .auto-fit {
   display: block;
