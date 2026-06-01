@@ -1024,3 +1024,74 @@ trace: trace-1
   - `fdbd:dc05:11:634::45`
   - `fdbd:dc05:13:10c::40`
   - `fdbd:dc07:0:810::44`
+
+### Coordinator-only 线上升级验证
+
+升级时间：2026-06-01 11:45 CST。
+
+范围：
+
+- 仅升级 3 台 coordinator。
+- 使用 auto-ops central-runtime：`/Users/bytedance/Documents/gitlab/olap-toolbox/scripts/call.sh`。
+- 使用临时 callee 只替换 `/data24/otf/pulse/bin/pulse.jar` 并重启 `pulse-coordinator.service`。
+- 未重写 agent env，未重启全量 agent。
+
+Dry-run：
+
+- `total=3`。
+- 选中 host：
+  - `fdbd:dc05:11:634::45`
+  - `fdbd:dc05:13:10c::40`
+  - `fdbd:dc07:0:810::44`
+
+部署结果：
+
+- Jar SHA256：`b19db3d6529d4a6e126fbacefb2fcaac89ebb63553c8f7efe3e6d94d2504dbe0`。
+- `summary: total=3 ok=3 failed=0 elapsed=3s`。
+- 三台 `pulse-coordinator.service` 均为 `active`。
+
+远端 API 与 HTML 验证：
+
+| Coordinator | Total | Alive | Required UI | Forbidden UI |
+| --- | ---: | ---: | --- | --- |
+| `fdbd:dc05:11:634::45` | 471 | 468 | yes | no |
+| `fdbd:dc05:13:10c::40` | 471 | 468 | yes | no |
+| `fdbd:dc07:0:810::44` | 471 | 468 | yes | no |
+
+Required UI 包含：
+
+- `心跳驱动运维闭环`
+- `data-agent-key`
+- `renderAgentTasks`
+- `activeAgentTask`
+- `grid-template-columns: minmax(300px, 1fr) minmax(0, 1.618fr)`
+- `height: min(820px, 61.8vh)`
+- `writing-mode: horizontal-tb`
+
+Forbidden UI 确认不包含：
+
+- `box-shadow`
+- `backdrop-filter`
+- `gradient`
+- `hostname`
+- `.byted.org`
+- `data-agent-id`
+- `data-coordinator-id`
+- `liquid-flow`
+- `water-ripple`
+- `jelly-scroll`
+
+远端浏览器验证：
+
+- 访问：`http://[fdbd:dc05:11:634::45]:9966/hosts`，Chrome 通过 `socks5://127.0.0.1:6699` 代理。
+- `modalOpen=true`。
+- `taskAgent=fdbd:dc02:1a:34::18`，任务面板目标只显示 IPv6。
+- `visibleTextHasHostname=false`。
+- `htmlHasForbiddenStyle=false`。
+- `htmlHasForbiddenData=false`。
+- `workspaceToSidebar=1.618`。
+- `panelToViewportHeight=0.621`。
+- `outputBelowCompletion=false`。
+- `outputBelowPanel=false`。
+- `horizontal=false`。
+- 任务按钮与工具栏按钮均为 `nowrap/horizontal-tb`。
