@@ -79,6 +79,14 @@
   - 将 olap-toolbox `tidelet/analyze-block-layout-py35.py` 同步到 `docs/task/analyze-block-layout-py35.py`。
   - 保持 `analyze_block_layout_dry_run` 任务类型不变，仍指向 `/data24/otf/pulse/tasks/analyze-block-layout.py`。
   - 部署时同步标准版与 py35 版，远端按 `python3` 版本选择安装入口：Python `3.5` 使用 py35 版，其他 Python 3 使用标准版。
+- 长任务流式输出：
+  - 新增 `reply.task_output_append` PulseMessage，承载运行中 stdout/stderr 增量输出。
+  - 不新增 API，不引入 WebSocket/SSE；仍通过 heartbeat / group heartbeat 链路传输，Run UI 继续读取现有 task snapshot。
+  - agent 执行任务时并发读取 stdout/stderr，按 chunk size 或 flush interval drain 到 pending replies。
+  - group leader 只聚合转发 stream messages，不解析输出内容；当 batch 过大时保留最新 tail 并标记 `tail_truncated`。
+  - coordinator 按 `(agent_id, task_id, stream_id, stream_seq)` 去重，维护有限 stream tail buffer，不把运行中 chunk 放入 completion queue。
+  - completion queue 仍只由最终 `reply.task_result` / `reply.task_result_chunk` 产生，`弹出结果` 语义不变。
+  - Run UI 在 completion 到达前展示 stream tail，支持 stdout/stderr、自动滚动暂停、拷贝、truncated 提示；completion 到达后切换到最终结果。
 
 ## 阶段 2.1：减压型分组策略设计补充
 
@@ -142,6 +150,13 @@
   - 验证 coordinator HostView 顶层字段包含 `cluster`、`area`。
   - 保持 group heartbeat per-agent `accepted_seq` 测试。
   - 增加 group membership grace 测试：已有 group member 的确认数短暂低于 alive 阈值但未 expired 时，仍留在原 group；expired 后才退出 group。
+  - 增加 stream output 测试：乱序/重复 `reply.task_output_append` 不重复进入 stream tail，最终 `reply.task_result` 才进入 completion queue。
+- 更新 `AgentTaskRunnerTest`：
+  - 构造持续输出的长任务，验证运行中 stdout/stderr 会形成 `reply.task_output_append`，并且任务结束仍发送最终 `reply.task_result`。
+  - 验证 stream buffer 超限时保留最近 tail，设置 `tail_truncated` 和 `dropped_bytes`。
+- 更新 `GroupHeartbeatCollectorTest`：
+  - 验证 follower 的 `reply.task_output_append` 可以经 leader group heartbeat 聚合上报。
+  - 验证单 follower 输出过大时不会阻塞其他 follower heartbeat。
 - 更新 `CoordinatorHttpServerTest`：
   - 验证 `/hosts` 包含 `cluster-section` 和 cluster 名称。
   - 验证 `/hosts` 包含正方形磁贴、内部滚动、`5min AVG` 排序和 keyed DOM refresh 相关 CSS/JS。
@@ -153,6 +168,7 @@
   - 验证 `/api/hosts` 和 `/hosts` bundle 包含 group debug 字段与 `20s确认` 文案。
   - 验证 completion queue pop 只移除队头并保留下一个结果作为新队头。
   - 验证 Run UI 的 `弹出结果` 调用 `/pop` 而不是 `/keep`，trace 列表展示被限制为最近 4 条。
+  - 验证 task snapshot 暴露 stream tail 字段，Run UI bundle 包含 stream viewer、stdout/stderr、tail truncated 文案和拷贝能力。
   - 验证 `/hosts` 不再展示 `Load` 字段，只展示 `5min AVG`。
   - 验证 `/hosts` 不包含 `jelly-scroll`、`liquid-flow`、`water-ripple`、`repeating-radial-gradient` 和白色 load bar 填充。
   - 验证 `/hosts` 不包含 `box-shadow`、`backdrop-filter`、`gradient`、`hostname`、`.byted.org`、`data-agent-id`、`data-coordinator-id`。
