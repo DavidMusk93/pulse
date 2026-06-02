@@ -53,6 +53,10 @@
   - follower 模式必须等 leader 接收并持久化或纳入 leader pending 后移除本地 pending。
   - leader 模式必须等 coordinator group heartbeat 成功后移除 pending。
   - pending 或 queue 超过内存阈值时写入 local spool，禁止丢弃。
+- Agent 作为插件式组件必须高性能、低扰动，对宿主业务负载无可感知影响。
+- 单生产者/单消费者消息路径必须优先使用 bounded lock-free SPSC queue，包括 output reader -> output queue、output queue -> heartbeat builder、heartbeat builder -> pending replies。
+- SPSC queue 必须有容量上限；队列满时进入 spool/backpressure/失败路径，禁止无界扩容、全局锁、忙等自旋和高频大对象分配。
+- heartbeat builder 每轮 drain 必须受条数、字节数和时间预算约束，不能为了清空队列拖慢基础 heartbeat。
 
 ## 阶段 3：多用户队列
 
@@ -131,6 +135,8 @@
   - 验证 output reader 只写 per-task output queue，不直接发送 heartbeat。
   - 验证 heartbeat builder 从 output queue drain 到 pending heartbeat replies。
   - 验证发送失败时 pending heartbeat replies 不丢失，下一轮 heartbeat 重试。
+  - 验证单生产者/单消费者路径使用 bounded queue，容量满时进入 spool/backpressure/失败路径。
+  - 验证 heartbeat builder 单轮 drain 受条数、字节数和时间预算限制。
   - 验证任务结束仍发送最终 `reply.task_result`。
   - 验证 per-agent 并发度为 `1`，第二个任务不会并发运行。
   - 验证 stream 内存 buffer 超限时写入 spool 或触发 backpressure，禁止 dropped/truncated 成功路径。

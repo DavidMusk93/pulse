@@ -130,6 +130,13 @@ process output pipe
 - output reader 按 chunk size 或 flush interval 生成 `OutputChunk`，写入 per-task output queue。
 - `OutputChunk` 必须包含 `task_id`、`stream_id=output`、`stream_seq`、`stream_offset`、payload、字节数、行数和 `payload_sha256`。
 - per-task output queue 保持 FIFO，`stream_seq` 必须连续递增；发现缺口时 coordinator 必须标记 stream incomplete 并等待补齐或任务失败。
+- 心跳消息传递天然是阶段化单向流，能建模为单生产者/单消费者的通道必须优先使用 bounded lock-free SPSC queue：
+  - output reader -> per-task output queue。
+  - per-task output queue -> heartbeat builder。
+  - heartbeat builder -> pending heartbeat replies。
+  - follower receiver -> leader pending queue。
+- SPSC queue 必须有固定容量或明确容量上限，不能退化为无界内存队列。
+- SPSC queue 满时必须进入 spool/backpressure/失败路径，禁止自旋等待、持有全局锁或阻塞宿主关键线程。
 - heartbeat builder 每轮从 per-task output queue drain 可发送 chunk，转换为 `reply.task_output_append` 放入 pending heartbeat replies。
 - pending heartbeat replies 是“已准备发送但未确认”的队列；发送失败、超时或 follower 到 leader 失败时必须保留并重试。
 - chunk 只有在下一跳确认接收后才能从当前 agent 的 pending 队列移除：
@@ -301,6 +308,11 @@ BACKOFF
 
 ## 背压与安全边界
 
+- agent 是部署在生产机器上的插件式组件，必须高性能、低扰动，对宿主业务负载无可感知影响。
+- agent 热路径禁止依赖粗粒度锁、全局 synchronized 队列、忙等自旋或频繁大对象分配。
+- runner、output reader、heartbeat builder、group sender 之间的单向消息传递优先使用 bounded lock-free SPSC queue；只有多生产者场景才允许引入更重的并发结构。
+- SPSC queue 容量、spool 上限、单轮 drain 条数和单轮 drain 字节数必须可配置，默认值应保守，避免 agent 抢占 CPU、内存或 IO。
+- heartbeat builder 每轮 drain 必须有时间预算，超出预算时保留到下一轮，不能为了清空输出队列拖慢基础心跳。
 - 单 task 内存 buffer 必须有上限，禁止无界占用内存。
 - 单 heartbeat 或 group heartbeat 的 stream chunk 数和总字节数必须有上限，超过上限时必须分批发送。
 - 当输出生产速度超过心跳传输能力时，系统必须选择排队、落盘 spool、backpressure 或任务失败，而不是截断输出。
@@ -322,3 +334,4 @@ BACKOFF
 - 禁止第一版 UI 强制拆分 stdout/stderr；除非先证明错误 tag 不足以支撑排障。
 - 禁止截断、丢弃或只保留最近 tail；生产级任务输出必须完整传输、完整保存，并能被 UI 识别为完整或明确失败。
 - 禁止使用 `tail_truncated`、`dropped_bytes`、`dropped_chunks` 作为正常成功路径字段；容量不足只能触发 backpressure、spool 或失败。
+- 禁止在 agent 热路径使用无界队列、全局锁、忙等自旋或高频分配；SPSC 场景必须优先使用 bounded lock-free SPSC queue。
