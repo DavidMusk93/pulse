@@ -44,6 +44,15 @@
 - Agent 本地内存 buffer 必须有上限，但超过内存上限后必须写入本地 spool 或待发送队列。
 - 输出超过内存 buffer 时禁止保留最近 tail 后丢弃旧数据；容量不足必须 backpressure、阻塞读取或让任务失败并上报明确错误。
 - 任务结束时仍必须发送最终 `reply.task_result` 或 `reply.task_result_chunk`，stream log 不能替代最终结果。
+- 任务运行中无输出时，agent 不生成空 stream chunk；每轮 heartbeat 仍必须通过 `state.async_tasks` 上报 `status=running`、`runtime_ms` 和 stream 计数。
+- Agent runner 到 heartbeat 上报之间必须使用 per-task output queue 和 pending heartbeat replies：
+  - output reader 生成 `OutputChunk` 后写入 per-task FIFO queue。
+  - heartbeat builder 每轮 drain queue，生成 `reply.task_output_append`。
+  - 已生成但未确认发送成功的消息保留在 pending heartbeat replies。
+  - direct 模式必须等 coordinator heartbeat 成功后移除 pending。
+  - follower 模式必须等 leader 接收并持久化或纳入 leader pending 后移除本地 pending。
+  - leader 模式必须等 coordinator group heartbeat 成功后移除 pending。
+  - pending 或 queue 超过内存阈值时写入 local spool，禁止丢弃。
 
 ## 阶段 3：多用户队列
 
@@ -118,6 +127,10 @@
   - 验证非 UTF-8 内容必须 base64。
 - `AgentTaskRunnerTest`：
   - 构造持续输出且包含错误 tag 的长任务，验证运行中合并 output 形成 stream chunk。
+  - 构造长时间无输出任务，验证 agent 不生成空 stream chunk，但 heartbeat 的 `state.async_tasks` 持续上报 `running` 和 `runtime_ms`。
+  - 验证 output reader 只写 per-task output queue，不直接发送 heartbeat。
+  - 验证 heartbeat builder 从 output queue drain 到 pending heartbeat replies。
+  - 验证发送失败时 pending heartbeat replies 不丢失，下一轮 heartbeat 重试。
   - 验证任务结束仍发送最终 `reply.task_result`。
   - 验证 per-agent 并发度为 `1`，第二个任务不会并发运行。
   - 验证 stream 内存 buffer 超限时写入 spool 或触发 backpressure，禁止 dropped/truncated 成功路径。
@@ -128,6 +141,7 @@
   - 验证普通 stream chunk 不会每条都触发 coordinator 请求。
   - 验证单 follower 大输出不会阻塞其他 follower。
 - `CoordinatorServiceTest`：
+  - 验证无 stream chunk 但 `state.async_tasks.status=running` 时，coordinator 刷新 task observed 状态，不误判失败。
   - 验证重复和乱序 stream chunk 不重复进入 stream log。
   - 验证 stream chunk 不进入 completion queue。
   - 验证最终 `reply.task_result` 才进入 completion queue。

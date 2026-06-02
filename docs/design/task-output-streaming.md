@@ -101,6 +101,45 @@
   - 大输出继续使用 `reply.task_result_chunk`。
   - 如果最终结果太大或不是 JSON，completion viewer 必须展示完整结果的大小、行数、编码、校验值和可拷贝/可读取内容；禁止只展示截断 tail 后伪装完成。
 
+### 无输出任务行为
+
+任务执行过程中可能长时间没有任何输出。无输出不是异常，agent 必须用 heartbeat 明确汇报任务仍在执行：
+
+- agent 不生成空的 `reply.task_output_append`，也不发送占位 payload。
+- 每轮 heartbeat 的 `state.async_tasks` 必须包含该 task 的运行中状态，至少包含 `task_id`、`task_type`、`status=running`、`started_at_ms`、`updated_at_ms`、`runtime_ms`。
+- 无输出时 stream 摘要必须稳定表达为 `stream_bytes=0`、`stream_chunks=0`、`stream_lines=0`、`last_output_at_ms=null` 或缺省。
+- 如果任务此前有输出，后续一段时间无新增输出时，`stream_bytes/stream_chunks/stream_lines` 保持累计值，`last_output_at_ms` 保持最后一次输出时间。
+- coordinator 收到只有 `state.async_tasks`、没有 `reply.task_output_append` 的 heartbeat 时，必须刷新 task 的 observed/running 状态，不能误判为输出链路丢失。
+- Run UI 在 completion 未到达且没有 stream 输出时，必须展示 `任务执行中，暂未收到输出`，不能显示空白结果，也不能提示失败。
+
+### Agent 内部传递队列
+
+task runner 与 heartbeat 线程之间必须通过明确队列传递输出，不能让 runner 线程直接发送 heartbeat：
+
+```text
+process output pipe
+  -> output reader
+  -> per-task output queue
+  -> optional local spool
+  -> pending heartbeat replies
+  -> heartbeat / group heartbeat request
+```
+
+队列规则：
+
+- output reader 按 chunk size 或 flush interval 生成 `OutputChunk`，写入 per-task output queue。
+- `OutputChunk` 必须包含 `task_id`、`stream_id=output`、`stream_seq`、`stream_offset`、payload、字节数、行数和 `payload_sha256`。
+- per-task output queue 保持 FIFO，`stream_seq` 必须连续递增；发现缺口时 coordinator 必须标记 stream incomplete 并等待补齐或任务失败。
+- heartbeat builder 每轮从 per-task output queue drain 可发送 chunk，转换为 `reply.task_output_append` 放入 pending heartbeat replies。
+- pending heartbeat replies 是“已准备发送但未确认”的队列；发送失败、超时或 follower 到 leader 失败时必须保留并重试。
+- chunk 只有在下一跳确认接收后才能从当前 agent 的 pending 队列移除：
+  - direct 模式：coordinator heartbeat response 成功后移除。
+  - follower 模式：leader 接收并持久化/纳入自身 pending 后移除，后续由 leader 负责向 coordinator 完整转发。
+  - leader 模式：coordinator group heartbeat response 成功后移除。
+- 内存队列达到阈值时必须写入 local spool；local spool 仍属于待发送数据，禁止被当成可丢弃 tail。
+- local spool 达到硬上限时，agent 必须对任务施加 backpressure、阻塞读取或将任务置为 `output_blocked/failed`，并通过 heartbeat 上报明确原因。
+- 最终 `reply.task_result` 必须在所有已产生 stream chunk 之后排队；如果仍有未确认 stream chunk，result 可以进入 pending queue，但发送顺序必须保证 coordinator 不会先看到完成再缺失运行中输出。
+
 ### stdout/stderr 取舍
 
 实践中任务错误日志通常已经带有明确 tag、level 或前缀，额外在 Pulse UI 中强制区分 stdout/stderr 会增加协议、buffer、排序和展示复杂度，但收益有限。第一版最佳选择是合并输出：
