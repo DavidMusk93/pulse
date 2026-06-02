@@ -312,6 +312,60 @@ class CoordinatorServiceTest {
     }
 
     @Test
+    void taskOutputAppendMaintainsStreamLogWithoutCompletionQueue() {
+        CoordinatorService service = new CoordinatorService("coordinator-a", clock);
+        service.enqueueTask("agent-1", "analyze_block_layout_dry_run");
+        PulseMessage command = taskCommand(service, "agent-1", 10);
+
+        service.handleHeartbeat(new HeartbeatRequest(
+                null,
+                "agent-1",
+                1L,
+                11L,
+                15_000L,
+                List.of(
+                        new PulseMessage("state-agent-1-11", "state.heartbeat", 1, null, null, Map.of(
+                                "host", "host-1",
+                                "async_tasks", List.of(Map.of(
+                                        "task_id", command.payload().get("task_id"),
+                                        "task_type", command.payload().get("task_type"),
+                                        "status", "running",
+                                        "runtime_ms", 1_000,
+                                        "stream_bytes", 12,
+                                        "stream_chunks", 1,
+                                        "stream_lines", 1)))),
+                        new PulseMessage(
+                                "stream-agent-1-0",
+                                "reply.task_output_append",
+                                1,
+                                command.messageId(),
+                                null,
+                                Map.ofEntries(
+                                        Map.entry("task_id", command.payload().get("task_id")),
+                                        Map.entry("agent_id", "agent-1"),
+                                        Map.entry("task_type", command.payload().get("task_type")),
+                                        Map.entry("stream_id", "output"),
+                                        Map.entry("stream_seq", 0),
+                                        Map.entry("stream_offset", 0),
+                                        Map.entry("output_encoding", "identity"),
+                                        Map.entry("output_type", "text"),
+                                        Map.entry("payload", "scan line\n"),
+                                        Map.entry("payload_sha256", TaskOutputCodec.sha256("scan line\n")),
+                                        Map.entry("observed_at_ms", clock.millis())))),
+                List.of()));
+
+        TaskSnapshot snapshot = service.taskSnapshot("agent-1");
+        assertEquals(0, snapshot.completionQueue().size());
+        assertEquals(1, snapshot.outputStreams().size());
+        TaskStreamSnapshot stream = snapshot.outputStreams().get(0);
+        assertEquals(command.payload().get("task_id"), stream.taskId());
+        assertEquals("scan line\n", stream.output());
+        assertEquals(10, stream.streamBytes());
+        assertEquals(1, stream.streamLines());
+        assertEquals(1, stream.streamChunks());
+    }
+
+    @Test
     void forwardOnlyMergesStateMessages() {
         CoordinatorService service = new CoordinatorService("coordinator-b", clock);
         ForwardState state = new ForwardState(

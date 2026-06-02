@@ -22,6 +22,7 @@ public class RemoteTaskService {
     private final Map<String, ArrayDeque<TaskResult>> completionQueues = new ConcurrentHashMap<>();
     private final Map<String, List<TaskTraceLogEntry>> traceLogs = new ConcurrentHashMap<>();
     private final Map<String, ResultAssembly> pendingResults = new ConcurrentHashMap<>();
+    private final Map<String, TaskStreamLog> streamLogs = new ConcurrentHashMap<>();
     private final Map<String, TaskDefinition> taskDefinitions;
 
     public RemoteTaskService(Clock clock) {
@@ -51,7 +52,11 @@ public class RemoteTaskService {
                         .sorted((left, right) -> Long.compare(right.observedAtMs(), left.observedAtMs()))
                         .limit(MAX_TRACES_PER_AGENT)
                         .toList(),
-                List.copyOf(taskDefinitions.keySet()));
+                List.copyOf(taskDefinitions.keySet()),
+                streamLogs.values().stream()
+                        .filter(log -> agentId.equals(log.agentId()))
+                        .map(TaskStreamLog::snapshot)
+                        .toList());
     }
 
     public synchronized TaskSnapshot enqueue(String agentId, String taskType) {
@@ -112,9 +117,13 @@ public class RemoteTaskService {
 
     public synchronized void handleReplies(String agentId, List<PulseMessage> messages) {
         for (PulseMessage message : messages) {
+            if ("state.heartbeat".equals(message.type()) && message.payload() != null) {
+                syncAsyncTasks(agentId, message.payload());
+            }
             if (!"reply.task_accepted".equals(message.type())
                     && !"reply.task_result".equals(message.type())
-                    && !"reply.task_result_chunk".equals(message.type())) {
+                    && !"reply.task_result_chunk".equals(message.type())
+                    && !"reply.task_output_append".equals(message.type())) {
                 continue;
             }
             Map<String, Object> payload = message.payload();
@@ -142,7 +151,9 @@ public class RemoteTaskService {
                         "agent",
                         1);
             }
-            if ("reply.task_accepted".equals(message.type())) {
+            if ("reply.task_output_append".equals(message.type())) {
+                acceptStream(agentId, payload);
+            } else if ("reply.task_accepted".equals(message.type())) {
                 RemoteTask accepted = task.withStatus("accepted", task.deliveredAtMs(), clock.millis(), task.startedAtMs(), task.finishedAtMs());
                 inFlight(agentId).put(taskId, accepted);
                 trace(accepted, "task.accepted_by_agent", "agent", agentId, Map.of());
@@ -156,6 +167,37 @@ public class RemoteTaskService {
                 if (result.isPresent()) {
                     complete(agentId, task, result.get());
                 }
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void syncAsyncTasks(String agentId, Map<String, Object> heartbeatPayload) {
+        Object value = heartbeatPayload.get("async_tasks");
+        if (!(value instanceof List<?> tasks)) {
+            return;
+        }
+        for (Object entry : tasks) {
+            if (!(entry instanceof Map<?, ?> raw)) {
+                continue;
+            }
+            Map<String, Object> taskState = (Map<String, Object>) raw;
+            String taskId = stringValue(taskState, "task_id");
+            if (taskId.isBlank()) {
+                continue;
+            }
+            RemoteTask existing = inFlight(agentId).get(taskId);
+            String status = stringValue(taskState, "status");
+            long startedAt = longValue(taskState, "started_at_ms");
+            if (existing != null) {
+                Long nextStartedAt = startedAt <= 0 ? existing.startedAtMs() : Long.valueOf(startedAt);
+                RemoteTask updated = existing.withStatus(
+                        status.isBlank() ? existing.status() : status,
+                        existing.deliveredAtMs(),
+                        existing.acceptedAtMs(),
+                        nextStartedAt,
+                        existing.finishedAtMs());
+                inFlight(agentId).put(taskId, updated);
             }
         }
     }
@@ -223,13 +265,50 @@ public class RemoteTaskService {
     private void complete(String agentId, RemoteTask task, TaskResult result) {
         inFlight(agentId).remove(result.taskId());
         pendingResults.remove(assemblyKey(agentId, result.taskId()));
+        TaskStreamLog streamLog = streamLogs.get(assemblyKey(agentId, result.taskId()));
         ArrayDeque<TaskResult> completions = completions(agentId);
         completions.removeIf(existing -> existing.taskId().equals(result.taskId()));
         completions.addLast(result);
         while (completions.size() > MAX_COMPLETIONS_PER_AGENT) {
             completions.removeFirst();
         }
-        trace(task, "task.result_received", "agent", agentId, Map.of("status", result.status(), "output_sha256", result.outputSha256()));
+        trace(task, "task.result_received", "agent", agentId, Map.of(
+                "status", result.status(),
+                "output_sha256", result.outputSha256(),
+                "stream_bytes", streamLog == null ? 0 : streamLog.streamBytes(),
+                "stream_chunks", streamLog == null ? 0 : streamLog.streamChunks()));
+    }
+
+    private void acceptStream(String agentId, Map<String, Object> payload) {
+        String taskId = stringValue(payload, "task_id");
+        if (taskId.isBlank()) {
+            return;
+        }
+        String streamId = stringValue(payload, "stream_id");
+        if (!streamId.isBlank() && !"output".equals(streamId)) {
+            return;
+        }
+        long streamSeq = longValue(payload, "stream_seq");
+        String chunk = stringValue(payload, "payload");
+        String expectedSha = stringValue(payload, "payload_sha256");
+        if (!TaskOutputCodec.sha256(chunk).equals(expectedSha)) {
+            return;
+        }
+        TaskStreamLog log = streamLogs.computeIfAbsent(
+                assemblyKey(agentId, taskId),
+                ignored -> new TaskStreamLog(agentId, taskId, stringValue(payload, "task_type")));
+        if (log.accept(streamSeq, longValue(payload, "stream_offset"), chunk, longValue(payload, "observed_at_ms"))) {
+            traceLogs.computeIfAbsent("stream-" + agentId + "-" + taskId, ignored -> new ArrayList<>())
+                    .add(new TaskTraceLogEntry(
+                            "stream-" + taskId,
+                            taskId,
+                            agentId,
+                            "task.output_appended",
+                            "agent",
+                            agentId,
+                            clock.millis(),
+                            Map.of("stream_seq", streamSeq, "bytes", chunk.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)));
+        }
     }
 
     private Optional<TaskResult> acceptResult(String agentId, Map<String, Object> payload) {
@@ -290,6 +369,7 @@ public class RemoteTaskService {
                 encoding,
                 outputSha,
                 outputBytes,
+                longValue(payload, "output_lines"),
                 stringValue(payload, "runner_error"));
     }
 
@@ -381,6 +461,7 @@ record TaskResult(
         String outputEncoding,
         String outputSha256,
         long outputBytes,
+        long outputLines,
         String runnerError) {}
 
 final class ResultAssembly {
@@ -419,4 +500,94 @@ record TaskSnapshot(
         List<RemoteTask> executionQueue,
         List<TaskResult> completionQueue,
         List<TaskTraceLogEntry> traces,
-        List<String> taskTypes) {}
+        List<String> taskTypes,
+        List<TaskStreamSnapshot> outputStreams) {}
+
+final class TaskStreamLog {
+    private final String agentId;
+    private final String taskId;
+    private final String taskType;
+    private final StringBuilder output = new StringBuilder();
+    private final java.util.Set<Long> acceptedSeq = new java.util.HashSet<>();
+    private long firstStreamSeq = -1;
+    private long lastStreamSeq = -1;
+    private long streamBytes;
+    private long streamLines;
+    private long lastOutputAtMs;
+
+    TaskStreamLog(String agentId, String taskId, String taskType) {
+        this.agentId = agentId;
+        this.taskId = taskId;
+        this.taskType = taskType;
+    }
+
+    boolean accept(long streamSeq, long streamOffset, String chunk, long observedAtMs) {
+        if (acceptedSeq.contains(streamSeq)) {
+            return false;
+        }
+        if (streamOffset != streamBytes) {
+            return false;
+        }
+        acceptedSeq.add(streamSeq);
+        output.append(chunk);
+        if (firstStreamSeq < 0) {
+            firstStreamSeq = streamSeq;
+        }
+        lastStreamSeq = Math.max(lastStreamSeq, streamSeq);
+        streamBytes += chunk.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        streamLines += lineCount(chunk);
+        lastOutputAtMs = observedAtMs;
+        return true;
+    }
+
+    String agentId() {
+        return agentId;
+    }
+
+    long streamBytes() {
+        return streamBytes;
+    }
+
+    long streamChunks() {
+        return acceptedSeq.size();
+    }
+
+    TaskStreamSnapshot snapshot() {
+        return new TaskStreamSnapshot(
+                taskId,
+                taskType,
+                "output",
+                firstStreamSeq,
+                lastStreamSeq,
+                streamBytes,
+                streamLines,
+                acceptedSeq.size(),
+                lastOutputAtMs,
+                output.toString(),
+                0,
+                0,
+                false);
+    }
+
+    private static long lineCount(String value) {
+        if (value == null || value.isEmpty()) {
+            return 0;
+        }
+        return value.chars().filter(ch -> ch == '\n').count() + (value.endsWith("\n") ? 0 : 1);
+    }
+}
+
+record TaskStreamSnapshot(
+        String taskId,
+        String taskType,
+        String streamId,
+        long firstStreamSeq,
+        long lastStreamSeq,
+        long streamBytes,
+        long streamLines,
+        long streamChunks,
+        long lastOutputAtMs,
+        String output,
+        long spooledBytes,
+        long pendingBytes,
+        boolean backpressureActive) {}

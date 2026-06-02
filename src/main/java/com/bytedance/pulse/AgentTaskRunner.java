@@ -2,7 +2,6 @@ package com.bytedance.pulse;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -19,6 +18,8 @@ import java.util.concurrent.TimeUnit;
 public class AgentTaskRunner {
     private static final int RESULT_INLINE_CHARS = 48 * 1024;
     private static final int RESULT_CHUNK_CHARS = 48 * 1024;
+    private static final int STREAM_CHUNK_CHARS = 32 * 1024;
+    private static final int MAX_STREAM_CHUNKS_PER_DRAIN = 32;
     private static final int REPLY_REPLAY_SENDS = 3;
     private static final long DEFAULT_TASK_TIMEOUT_MS = 600_000;
     private final String agentId;
@@ -47,6 +48,7 @@ public class AgentTaskRunner {
     }
 
     public List<PulseMessage> drainReplies() {
+        drainOutputChunksToPendingReplies();
         List<PulseMessage> replies = new ArrayList<>();
         int size = pendingReplies.size();
         for (int index = 0; index < size; index++) {
@@ -65,7 +67,7 @@ public class AgentTaskRunner {
     public List<Map<String, Object>> runningTasks() {
         return runningTasks.values().stream()
                 .sorted(Comparator.comparingLong(RunningTask::acceptedAtMs))
-                .map(RunningTask::toPayload)
+                .map(task -> task.toPayload(clock.millis()))
                 .toList();
     }
 
@@ -106,8 +108,8 @@ public class AgentTaskRunner {
         long started = clock.millis();
         runningTasks.computeIfPresent(taskId, (ignored, task) -> task.withRunning(started));
         Process process = null;
-        Path stdoutFile = null;
-        Path stderrFile = null;
+        StringBuilder output = new StringBuilder();
+        Thread outputReader = null;
         try {
             if (!Files.isRegularFile(Path.of(definition.scriptPath()))) {
                 enqueueResultMessages(resultMessages(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", "script not found"));
@@ -121,16 +123,19 @@ public class AgentTaskRunner {
             }
             command.add(definition.scriptPath());
             command.addAll(definition.args());
-            stdoutFile = Files.createTempFile("pulse-task-" + taskId + "-", ".stdout");
-            stderrFile = Files.createTempFile("pulse-task-" + taskId + "-", ".stderr");
             process = new ProcessBuilder(command)
-                    .redirectOutput(stdoutFile.toFile())
-                    .redirectError(stderrFile.toFile())
+                    .redirectErrorStream(true)
                     .start();
+            Process runningProcess = process;
+            outputReader = new Thread(() -> readOutput(taskId, runningProcess, output), "pulse-task-output-" + taskId);
+            outputReader.setDaemon(true);
+            outputReader.start();
             boolean finished = process.waitFor(Math.max(1, timeoutMs), TimeUnit.MILLISECONDS);
             long finishedAt = clock.millis();
             if (!finished) {
                 process.destroyForcibly();
+                joinQuietly(outputReader);
+                String currentOutput = output.toString();
                 enqueueResultMessages(resultMessages(
                         replyTo,
                         taskId,
@@ -140,11 +145,13 @@ public class AgentTaskRunner {
                         null,
                         started,
                         finishedAt,
-                        readUtf8(stdoutFile),
-                        appendError(readUtf8(stderrFile), "task timed out")));
+                        appendError(currentOutput, "task timed out"),
+                        "task timed out"));
                 return;
             }
+            joinQuietly(outputReader);
             int exitCode = process.exitValue();
+            String finalOutput = output.toString();
             enqueueResultMessages(resultMessages(
                     replyTo,
                     taskId,
@@ -154,18 +161,84 @@ public class AgentTaskRunner {
                     exitCode,
                     started,
                     finishedAt,
-                    readUtf8(stdoutFile),
-                    readUtf8(stderrFile)));
+                    finalOutput,
+                    exitCode == 0 ? "" : "exit_code=" + exitCode));
         } catch (Exception exception) {
             if (process != null) {
                 process.destroyForcibly();
             }
             enqueueResultMessages(resultMessages(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", exception.getMessage()));
         } finally {
-            deleteQuietly(stdoutFile);
-            deleteQuietly(stderrFile);
             runningTasks.remove(taskId);
         }
+    }
+
+    private void readOutput(String taskId, Process process, StringBuilder output) {
+        char[] buffer = new char[STREAM_CHUNK_CHARS];
+        try (java.io.Reader reader = new java.io.InputStreamReader(process.getInputStream(), java.nio.charset.StandardCharsets.UTF_8)) {
+            int read;
+            while ((read = reader.read(buffer)) >= 0) {
+                if (read == 0) {
+                    continue;
+                }
+                String chunk = new String(buffer, 0, read);
+                output.append(chunk);
+                RunningTask task = runningTasks.get(taskId);
+                if (task != null) {
+                    task.enqueueOutput(chunk, clock.millis());
+                }
+            }
+        } catch (Exception exception) {
+            RunningTask task = runningTasks.get(taskId);
+            if (task != null) {
+                task.markBackpressure();
+            }
+        }
+    }
+
+    private static void joinQuietly(Thread thread) {
+        if (thread == null) {
+            return;
+        }
+        try {
+            thread.join(1_000);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void drainOutputChunksToPendingReplies() {
+        for (RunningTask task : runningTasks.values()) {
+            int drained = 0;
+            OutputChunk chunk;
+            while (drained < MAX_STREAM_CHUNKS_PER_DRAIN && (chunk = task.pollOutput()) != null) {
+                drained++;
+                pendingReplies.add(new PendingReply(streamMessage(task, chunk), REPLY_REPLAY_SENDS));
+            }
+        }
+    }
+
+    private PulseMessage streamMessage(RunningTask task, OutputChunk chunk) {
+        return new PulseMessage(
+                "reply-task-output-" + agentId + "-" + task.taskId() + "-" + chunk.streamSeq(),
+                "reply.task_output_append",
+                1,
+                "cmd-task-" + task.taskId(),
+                null,
+                Map.ofEntries(
+                        Map.entry("task_id", task.taskId()),
+                        Map.entry("agent_id", agentId),
+                        Map.entry("task_type", task.taskType()),
+                        Map.entry("stream_id", "output"),
+                        Map.entry("stream_seq", chunk.streamSeq()),
+                        Map.entry("stream_offset", chunk.streamOffset()),
+                        Map.entry("output_encoding", TaskOutputCodec.IDENTITY),
+                        Map.entry("output_type", "text"),
+                        Map.entry("payload", chunk.payload()),
+                        Map.entry("payload_sha256", TaskOutputCodec.sha256(chunk.payload())),
+                        Map.entry("payload_bytes", chunk.payloadBytes()),
+                        Map.entry("payload_lines", chunk.payloadLines()),
+                        Map.entry("observed_at_ms", chunk.observedAtMs())));
     }
 
     private void enqueueResultMessages(List<PulseMessage> messages) {
@@ -199,6 +272,7 @@ public class AgentTaskRunner {
         resultPayload.put("output_encoding", encoded.encoding());
         resultPayload.put("output_sha256", encoded.sha256());
         resultPayload.put("output_bytes", encoded.bytes());
+        resultPayload.put("output_lines", lineCount(output));
         resultPayload.put("output_chunked", chunked);
         resultPayload.put("output_chunk_count", chunked ? chunkCount(encoded.value()) : 0);
         resultPayload.put("runner_error", runnerError == null ? "" : runnerError);
@@ -278,25 +352,11 @@ public class AgentTaskRunner {
         }
     }
 
-    private static String readUtf8(Path path) throws java.io.IOException {
-        return path == null ? "" : Files.readString(path, StandardCharsets.UTF_8);
-    }
-
     private static String appendError(String stderr, String error) {
         if (stderr == null || stderr.isBlank()) {
             return error;
         }
         return stderr + "\n" + error;
-    }
-
-    private static void deleteQuietly(Path path) {
-        try {
-            if (path != null) {
-                Files.deleteIfExists(path);
-            }
-        } catch (Exception ignored) {
-            // Temporary capture files are best-effort cleanup.
-        }
     }
 
     private static String detectOutputType(String output) {
@@ -314,21 +374,81 @@ public class AgentTaskRunner {
         return value.substring(start, end);
     }
 
+    private static long lineCount(String value) {
+        if (value == null || value.isEmpty()) {
+            return 0;
+        }
+        return value.chars().filter(ch -> ch == '\n').count() + (value.endsWith("\n") ? 0 : 1);
+    }
+
     private record PendingReply(PulseMessage message, int remainingSends) {}
 
-    private record RunningTask(
-            String taskId,
-            String traceId,
-            String taskType,
-            String status,
-            long acceptedAtMs,
-            Long startedAtMs,
-            long timeoutMs) {
+    private static final class RunningTask {
+        private final String taskId;
+        private final String traceId;
+        private final String taskType;
+        private final String status;
+        private final long acceptedAtMs;
+        private final Long startedAtMs;
+        private final long timeoutMs;
+        private final SpscArrayQueue<OutputChunk> outputQueue = new SpscArrayQueue<>(1024);
+        private long streamSeq;
+        private long streamOffset;
+        private long streamBytes;
+        private long streamLines;
+        private long streamChunks;
+        private Long lastOutputAtMs;
+        private boolean backpressureActive;
+
+        private RunningTask(String taskId, String traceId, String taskType, String status, long acceptedAtMs, Long startedAtMs, long timeoutMs) {
+            this.taskId = taskId;
+            this.traceId = traceId;
+            this.taskType = taskType;
+            this.status = status;
+            this.acceptedAtMs = acceptedAtMs;
+            this.startedAtMs = startedAtMs;
+            this.timeoutMs = timeoutMs;
+        }
+
         RunningTask withRunning(long startedAtMs) {
             return new RunningTask(taskId, traceId, taskType, "running", acceptedAtMs, startedAtMs, timeoutMs);
         }
 
-        Map<String, Object> toPayload() {
+        long acceptedAtMs() {
+            return acceptedAtMs;
+        }
+
+        String taskId() {
+            return taskId;
+        }
+
+        String taskType() {
+            return taskType;
+        }
+
+        void enqueueOutput(String payload, long observedAtMs) {
+            byte[] bytes = payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            long seq = streamSeq++;
+            OutputChunk chunk = new OutputChunk(seq, streamOffset, payload, bytes.length, lineCount(payload), observedAtMs);
+            streamOffset += bytes.length;
+            streamBytes += bytes.length;
+            streamLines += chunk.payloadLines();
+            streamChunks++;
+            lastOutputAtMs = observedAtMs;
+            if (!outputQueue.offer(chunk)) {
+                backpressureActive = true;
+            }
+        }
+
+        OutputChunk pollOutput() {
+            return outputQueue.poll();
+        }
+
+        void markBackpressure() {
+            backpressureActive = true;
+        }
+
+        Map<String, Object> toPayload(long now) {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("task_id", taskId);
             payload.put("trace_id", traceId);
@@ -336,8 +456,66 @@ public class AgentTaskRunner {
             payload.put("status", status);
             payload.put("accepted_at_ms", acceptedAtMs);
             payload.put("started_at_ms", startedAtMs == null ? "" : startedAtMs);
+            payload.put("updated_at_ms", now);
+            payload.put("runtime_ms", startedAtMs == null ? 0 : Math.max(0, now - startedAtMs));
             payload.put("timeout_ms", timeoutMs);
+            payload.put("stream_bytes", streamBytes);
+            payload.put("stream_chunks", streamChunks);
+            payload.put("stream_lines", streamLines);
+            payload.put("last_output_at_ms", lastOutputAtMs == null ? "" : lastOutputAtMs);
+            payload.put("spooled_bytes", 0);
+            payload.put("pending_bytes", outputQueue.size());
+            payload.put("backpressure_active", backpressureActive);
             return payload;
+        }
+    }
+
+    private record OutputChunk(
+            long streamSeq,
+            long streamOffset,
+            String payload,
+            long payloadBytes,
+            long payloadLines,
+            long observedAtMs) {}
+
+    static final class SpscArrayQueue<T> {
+        private final Object[] elements;
+        private volatile int head;
+        private volatile int tail;
+
+        SpscArrayQueue(int capacity) {
+            if (capacity < 2) {
+                throw new IllegalArgumentException("capacity must be >= 2");
+            }
+            this.elements = new Object[capacity + 1];
+        }
+
+        boolean offer(T value) {
+            int nextTail = (tail + 1) % elements.length;
+            if (nextTail == head) {
+                return false;
+            }
+            elements[tail] = value;
+            tail = nextTail;
+            return true;
+        }
+
+        @SuppressWarnings("unchecked")
+        T poll() {
+            int currentHead = head;
+            if (currentHead == tail) {
+                return null;
+            }
+            Object value = elements[currentHead];
+            elements[currentHead] = null;
+            head = (currentHead + 1) % elements.length;
+            return (T) value;
+        }
+
+        int size() {
+            int currentTail = tail;
+            int currentHead = head;
+            return currentTail >= currentHead ? currentTail - currentHead : elements.length - currentHead + currentTail;
         }
     }
 }

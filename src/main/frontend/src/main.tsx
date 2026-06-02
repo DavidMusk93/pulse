@@ -69,6 +69,7 @@ type TaskSnapshot = {
   completion_queue?: any[];
   traces?: any[];
   task_definitions?: string[];
+  output_streams?: any[];
 };
 
 const loadAverageWindowMs = 5 * 60 * 1000;
@@ -514,8 +515,9 @@ function TaskModal(props: {
   const completions = props.snapshot?.completion_queue || [];
   const executions = props.snapshot?.execution_queue || [];
   const latestCompletion = completions[0];
+  const streamLog = latestCompletion ? null : streamForTask(props.snapshot, agentTask?.task_id || executions[0]?.task_id);
   const visibleTraces = (props.snapshot?.traces || []).slice(0, 4);
-  const completionText = props.output || (latestCompletion ? completionOutput(latestCompletion) : (agentTask ? runningTaskText(agentTask) : ''));
+  const completionText = props.output || (latestCompletion ? completionOutput(latestCompletion) : (streamLog ? streamOutput(streamLog) : (agentTask ? runningTaskText(agentTask) : '')));
   const asyncTask = agentTask || executions[0];
   const currentTaskId = latestCompletion?.task_id || asyncTask?.task_id || props.snapshot?.traces?.[0]?.task_id || '';
   return <Modal open={props.open} onCancel={props.onClose} footer={null} width="min(1320px, calc(100vw - 44px))" className="task-modal" title={null} closeIcon={<span className="mac-close" />}>
@@ -559,26 +561,31 @@ function TaskModal(props: {
           className="agent-async-alert"
           type={asyncTask.status === 'running' ? 'info' : 'warning'}
           showIcon
-          message={`agent ${statusLabel(asyncTask.status)}，等待 completion`}
-          description={`${taskLabels[asyncTask.task_type] || asyncTask.task_type || '-'} · ${asyncTask.task_id || ''}`}
+          message={streamLog && streamLog.stream_chunks > 0 ? '任务执行中，正在展示运行中输出' : '任务执行中，暂未收到输出'}
+          description={`${taskLabels[asyncTask.task_type] || asyncTask.task_type || '-'} · ${asyncTask.task_id || ''} · ${streamSummary(streamLog, asyncTask)}`}
         />}
         <div className="completion-pane">
-          <CompletionViewer value={completionText} />
+          <CompletionViewer value={completionText} meta={latestCompletion || streamLog || asyncTask} running={!latestCompletion && !!asyncTask} />
         </div>
       </Card>
     </div>
   </Modal>;
 }
 
-function CompletionViewer({ value }: { value: string }) {
+function CompletionViewer({ value, meta, running }: { value: string; meta?: any; running?: boolean }) {
   const [mode, setMode] = useState<'auto' | 'raw'>('auto');
   const parsed = useMemo(() => parseJsonOutput(value), [value]);
   const display = mode === 'auto' && parsed.ok ? parsed.formatted : value;
+  const lines = Number(meta?.output_lines ?? meta?.stream_lines ?? countLines(value));
+  const bytes = Number(meta?.output_bytes ?? meta?.stream_bytes ?? new Blob([value]).size);
   return <div className="completion-viewer">
     <Flex className="completion-toolbar" justify="space-between" align="center" gap={8}>
       <Space size={8}>
         <Segmented size="small" value={mode} onChange={next => setMode(next as 'auto' | 'raw')} options={[{ label: '格式化', value: 'auto' }, { label: '原始', value: 'raw' }]} />
         {parsed.ok && <Tag color="blue">JSON</Tag>}
+        {running && <Tag color="gold">未完成</Tag>}
+        <Tag>{lines} 行</Tag>
+        <Tag>{formatBytes(bytes)}</Tag>
       </Space>
       <Button size="small" onClick={() => navigator.clipboard?.writeText(display)}>拷贝</Button>
     </Flex>
@@ -635,9 +642,10 @@ function runningTaskText(task: any) {
     '状态: ' + statusLabel(task.status),
     '任务: ' + (taskLabels[task.task_type] || task.task_type || ''),
     'task: ' + (task.task_id || ''),
-    'trace: ' + (task.trace_id || ''),
     '接收: ' + formatTime(task.accepted_at_ms),
-    '开始: ' + formatTime(task.started_at_ms)
+    '开始: ' + formatTime(task.started_at_ms),
+    '运行: ' + formatDuration(task.runtime_ms),
+    '输出: ' + (task.stream_lines ?? 0) + ' 行 / ' + formatBytes(task.stream_bytes ?? 0)
   ].join('\n');
 }
 
@@ -648,7 +656,9 @@ function renderCompletion(result: any) {
     `status: ${result.status || '-'}`,
     `exit_code: ${result.exit_code ?? '-'}`,
     `task_id: ${result.task_id || '-'}`,
-    `trace_id: ${result.trace_id || '-'}`,
+    `lines: ${result.output_lines ?? countLines(output)}`,
+    `bytes: ${result.output_bytes ?? new Blob([output]).size}`,
+    `sha256: ${result.output_sha256 || '-'}`,
     '',
     output,
     stderr
@@ -657,6 +667,52 @@ function renderCompletion(result: any) {
 
 function completionOutput(result: any) {
   return result.output || renderCompletion(result);
+}
+
+function streamForTask(snapshot: TaskSnapshot | null, taskId?: string) {
+  const streams = snapshot?.output_streams || [];
+  if (!streams.length) return null;
+  if (taskId) {
+    return streams.find(stream => stream.task_id === taskId || stream.taskId === taskId) || null;
+  }
+  return streams[0] || null;
+}
+
+function streamOutput(stream: any) {
+  return stream.output || [
+    '任务执行中，正在展示运行中输出',
+    `task_id: ${stream.task_id || stream.taskId || '-'}`,
+    `lines: ${stream.stream_lines ?? stream.streamLines ?? 0}`,
+    `bytes: ${stream.stream_bytes ?? stream.streamBytes ?? 0}`,
+    '',
+    stream.output || ''
+  ].join('\n');
+}
+
+function streamSummary(stream: any, task: any) {
+  if (stream) {
+    return `已接收 ${stream.stream_lines ?? stream.streamLines ?? 0} 行 / ${formatBytes(stream.stream_bytes ?? stream.streamBytes ?? 0)}`;
+  }
+  return `运行 ${formatDuration(task?.runtime_ms)}，尚无输出`;
+}
+
+function countLines(value: string) {
+  if (!value) return 0;
+  return value.endsWith('\n') ? value.split('\n').length - 1 : value.split('\n').length;
+}
+
+function formatBytes(value: any) {
+  const bytes = Number(value || 0);
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${bytes} B`;
+}
+
+function formatDuration(value: any) {
+  const ms = Number(value || 0);
+  if (ms <= 0) return '-';
+  if (ms >= 60_000) return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
+  return `${Math.floor(ms / 1000)}s`;
 }
 
 function parseJsonOutput(value: string) {

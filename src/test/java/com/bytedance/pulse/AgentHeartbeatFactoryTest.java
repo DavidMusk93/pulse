@@ -51,4 +51,24 @@ class AgentHeartbeatFactoryTest {
                         "status", "running")),
                 heartbeat.messages().get(0).payload().get("async_tasks"));
     }
+
+    @Test
+    void noOutputRunningTaskStillReportsAsyncState() {
+        Clock clock = Clock.fixed(Instant.ofEpochMilli(1_710_000_000_000L), ZoneOffset.UTC);
+        AgentHeartbeatFactory factory = new AgentHeartbeatFactory(
+                "agent-1", "host-1", "fd00::1", "cdn_new", "area-a", "az-a", "worker", 100, 15_000, clock);
+
+        Map<String, Object> task = Map.of(
+                "task_id", "task-1",
+                "task_type", "analyze_block_layout_dry_run",
+                "status", "running",
+                "runtime_ms", 30_000,
+                "stream_bytes", 0,
+                "stream_chunks", 0,
+                "stream_lines", 0);
+        HeartbeatRequest heartbeat = factory.nextHeartbeat(List.of(), List.of(task));
+
+        assertEquals(List.of(task), heartbeat.messages().get(0).payload().get("async_tasks"));
+        assertEquals(1, heartbeat.messages().size());
+    }
 }

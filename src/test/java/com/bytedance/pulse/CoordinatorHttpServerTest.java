@@ -177,6 +177,10 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("/pop"));
         assertTrue(js.body().contains(".slice(0,4)"));
         assertTrue(js.body().contains("task_id"));
+        assertTrue(js.body().contains("output_streams"));
+        assertTrue(js.body().contains("任务执行中，暂未收到输出"));
+        assertTrue(js.body().contains("未完成"));
+        assertTrue(js.body().contains("KiB"));
         assertTrue(js.body().contains("Trace"));
         assertTrue(!js.body().contains("status-led"));
         assertTrue(!js.body().contains("tile-seen"));
