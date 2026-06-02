@@ -2,7 +2,7 @@
 
 ## 结论
 
-长时间运行的任务可能持续产生 stdout/stderr，Pulse 需要把运行中输出作为 task state 的一部分上报和展示。该能力仍然只使用 heartbeat / group heartbeat 的 `PulseMessage` 链路，不新增 API、不引入 WebSocket/SSE、不增加 agent 入站接口。
+长时间运行的任务可能持续产生连续日志，Pulse 需要把运行中输出作为 task state 的一部分上报和展示。第一版不强区分 stdout 和 stderr，agent 侧合并为单一 `output` 流后上报。该能力仍然只使用 heartbeat / group heartbeat 的 `PulseMessage` 链路，不新增 API、不引入 WebSocket/SSE、不增加 agent 入站接口。
 
 核心约束：
 
@@ -30,7 +30,7 @@
     "trace_id": "trace-1",
     "agent_id": "agent-a",
     "task_type": "analyze_block_layout_dry_run",
-    "stream_id": "stdout",
+    "stream_id": "output",
     "stream_seq": 42,
     "stream_offset": 65536,
     "output_encoding": "identity",
@@ -47,8 +47,8 @@
 | --- | --- |
 | `task_id` | 当前任务 ID |
 | `trace_id` | 当前任务 trace ID |
-| `stream_id` | `stdout`、`stderr` 或未来扩展的 logical stream 名称 |
-| `stream_seq` | 单 task + stream 内单调递增序号，用于去重和乱序处理 |
+| `stream_id` | 第一版固定为 `output`；仅作为未来多 stream 扩展和幂等 key 字段 |
+| `stream_seq` | 单 task 的 `output` 流内单调递增序号，用于去重和乱序处理 |
 | `stream_offset` | 该 chunk 在 stream 中的字节偏移，便于 UI 或诊断解释丢弃窗口 |
 | `output_encoding` | `identity`、`base64` 或后续压缩编码；非 UTF-8 内容必须使用 `base64` |
 | `output_type` | `text`、`jsonl`、`binary` 等展示提示，不参与协议路由 |
@@ -76,12 +76,13 @@
 
 ### 输出采集
 
-- agent 执行任务时同时读取 stdout 和 stderr，不等待进程退出。
-- agent 将输出按大小或时间切片形成 `reply.task_output_append`：
+- 第一版 agent 必须把 stderr 合并到 stdout，形成单一 `output` 流，避免 UI、buffer 和 completion 逻辑围绕 stdout/stderr 分叉。
+- 合并输出仍能通过日志自身 tag 区分错误，Pulse 不在协议层重复建模日志级别。
+- agent 将合并输出按大小或时间切片形成 `reply.task_output_append`：
   - 单 chunk 建议不超过 `32 KiB`。
   - flush 间隔建议不超过 `1s`。
   - 每轮 heartbeat 至少 drain 一次 pending output。
-  - stdout/stderr 分别维护 `stream_seq` 和 `stream_offset`。
+  - 单 task 维护一组 `stream_seq` 和 `stream_offset`。
 - agent 本地必须保留有限 stream tail buffer，默认最近 `1-4 MiB` 或最近 `N` 条 chunk，避免长任务输出撑爆内存。
 - heartbeat payload 中的 `state.async_tasks` 必须继续包含任务执行中状态，并可附带轻量 stream 摘要：
   - `stream_bytes`
@@ -94,6 +95,16 @@
   - 小输出可以继续 inline。
   - 大输出继续使用 `reply.task_result_chunk`。
   - 如果最终结果太大或不是 JSON，completion viewer 必须至少展示 tail、大小、行数、编码和可拷贝内容。
+
+### stdout/stderr 取舍
+
+实践中任务错误日志通常已经带有明确 tag、level 或前缀，额外在 Pulse UI 中强制区分 stdout/stderr 会增加协议、buffer、排序和展示复杂度，但收益有限。第一版最佳选择是合并输出：
+
+- agent 侧使用单一输出管道或等价方式把 stderr 合并到 stdout，例如 Java runner 可使用 `redirectErrorStream(true)`。
+- `stream_id` 固定为 `output`，不作为 UI 分栏依据。
+- UI 默认只展示一个按产生顺序接近真实终端体验的 output viewer。
+- 错误识别依赖日志内容中的 `[ERROR]`、`level=error`、栈信息等 tag。
+- 后续只有在出现明确需求时，才扩展多 stream 或按来源过滤。
 
 ## Group 聚合发送状态机
 
@@ -170,7 +181,7 @@ BACKOFF
   - 优先保留每个 running task 最新 stream chunk。
   - 优先保留 `reply.task_result`、`reply.task_accepted` 等状态型消息。
   - 可以丢弃旧 stream chunk，但必须增加 `dropped_bytes/dropped_chunks` 并设置 `tail_truncated=true`。
-- leader 不解析 stdout/stderr 内容，不做 JSON 格式化、不改写 payload。
+- leader 不解析输出内容，不做 JSON 格式化、不改写 payload。
 - leader 不能因为某个 follower 输出量大而阻塞其他 follower 的心跳。
 
 ### 时间参数
@@ -212,9 +223,9 @@ BACKOFF
 
 ### Stream Viewer
 
-- stream viewer 必须支持普通文本，不强制 JSON 格式化。
+- stream viewer 必须支持普通文本，不强制 JSON 格式化；第一版只展示单一合并 output。
 - stream viewer 必须展示：
-  - `stdout/stderr`
+  - 合并输出
   - 行数
   - 字节数
   - chunk 数
@@ -225,7 +236,7 @@ BACKOFF
   - 用户暂停自动滚动。
   - 拷贝当前 tail。
   - 清晰标识当前内容不是最终 completion。
-- JSONL 可以按行轻量高亮；普通 text 只用等宽字体和内部滚动。
+- JSONL 可以按行轻量高亮；普通 text 只用等宽字体和内部滚动。错误行不依赖 stderr 来源，而依赖日志 tag 和内容识别。
 
 ### Completion Viewer
 
@@ -245,7 +256,7 @@ BACKOFF
 
 ## 背压与安全边界
 
-- 单 task stream buffer 必须有内存上限，禁止无界保存 stdout/stderr。
+- 单 task stream buffer 必须有内存上限，禁止无界保存输出。
 - 单 heartbeat 或 group heartbeat 的 stream chunk 数和总字节数必须有上限。
 - 当输出生产速度超过心跳传输能力时，系统选择“保留最近 tail、丢弃旧 chunk”，而不是阻塞 heartbeat。
 - 被丢弃的字节数和 chunk 数必须可见，至少通过 `tail_truncated`、`dropped_bytes` 和 `dropped_chunks` 暴露给 UI。
@@ -262,3 +273,4 @@ BACKOFF
 - 禁止 Run UI 在 task 未完成时把 stream tail 文案伪装成最终结果。
 - 禁止 completion viewer 不展示行数、字节数和未完成/截断状态。
 - 禁止 agent 同一时间并发执行多个 task，除非先完成并发资源隔离设计。
+- 禁止第一版 UI 强制拆分 stdout/stderr；除非先证明错误 tag 不足以支撑排障。

@@ -11,6 +11,8 @@
 ## 阶段 1：协议与模型
 
 - 新增 `reply.task_output_append` PulseMessage 类型。
+- 第一版采用单一合并输出流，`stream_id` 固定为 `output`。
+- 不在 UI、buffer 和 completion 逻辑中强制区分 stdout/stderr；错误识别依赖日志 tag 和内容。
 - 定义 stream payload 字段：
   - `task_id`
   - `trace_id`
@@ -23,7 +25,7 @@
   - `output_type`
   - `payload`
   - `payload_sha256`
-- `stream_seq` 必须在单 task + stream 内单调递增，用于 coordinator 和 leader 幂等去重。
+- `stream_seq` 必须在单 task 的 `output` 流内单调递增，用于 coordinator 和 leader 幂等去重。
 - `stream_offset` 必须按字节偏移计算，用于解释 tail 截断和丢弃窗口。
 - 非 UTF-8 或二进制内容必须使用 `base64`，禁止把非法文本直接塞进 JSON。
 - `reply.task_output_append` 禁止进入 completion queue，completion queue 只接受最终 `reply.task_result` 或 `reply.task_result_chunk`。
@@ -32,12 +34,12 @@
 
 - Agent task runner 第一版必须 per-agent 串行执行，并发度固定为 `1`。
 - Agent 本地最多只能有一个 `running` task；其他 task 只能停留在 coordinator execution queue 或 agent 已接收未运行状态。
-- 执行进程启动后必须同时 drain stdout 和 stderr，不能等进程退出后再一次性读取。
+- 执行进程启动后必须合并 stderr 到 stdout，并持续 drain 单一 output pipe，不能等进程退出后再一次性读取。
 - 输出 chunk 规则：
   - 单 chunk 建议不超过 `32 KiB`。
   - flush 间隔建议不超过 `1s`。
   - 每轮 heartbeat 至少 drain 一次 pending output。
-  - stdout/stderr 分别维护 `stream_seq`、`stream_offset`、行数和字节数。
+  - 单 task 维护一组 `stream_seq`、`stream_offset`、行数和字节数。
 - Agent 本地必须维护有限 tail buffer，默认最近 `1-4 MiB` 或最近 `N` 条 chunk。
 - 输出超过本地 buffer 时必须保留最近 tail，并累计 `dropped_bytes`、`dropped_chunks`、`tail_truncated`。
 - 任务结束时仍必须发送最终 `reply.task_result` 或 `reply.task_result_chunk`，stream tail 不能替代最终结果。
@@ -71,7 +73,7 @@
   - `SHUTDOWN`：进程退出前尽力 flush。
 - 紧急消息第一版包括 `reply.task_accepted`、`reply.task_result`、`reply.task_result_chunk`、带 `urgent=true` 的 `reply.task_output_append`、terminal failure 状态和 control reply。
 - 普通 stream chunk 默认不是紧急消息，必须按 `FIRST_AGENT_DUE` 或 `BATCH_FULL` 批量发送，避免输出型任务打穿 group 降压目标。
-- Leader 不解析 stdout/stderr 内容，不格式化 JSON，不改写 payload。
+- Leader 不解析输出内容，不格式化 JSON，不改写 payload。
 - 单 follower 输出过大时，leader 必须裁剪该 follower 的旧 stream chunk，不能阻塞其他 follower heartbeat。
 
 ## 阶段 5：Coordinator Stream Tail
@@ -79,7 +81,7 @@
 - Coordinator 处理 stream chunk 时必须按 `(agent_id, task_id, stream_id, stream_seq)` 去重。
 - Coordinator 必须维护 per running task 的有限 stream tail buffer。
 - Stream tail snapshot 至少包含：
-  - stdout/stderr 分 stream 的最近文本。
+  - 合并 output 的最近文本。
   - `first_stream_seq`
   - `last_stream_seq`
   - `stream_bytes`
@@ -101,7 +103,7 @@
   - 已接收行数
   - 已接收字节数
 - 尚无 stream 输出时必须展示 `任务未完成，暂未收到输出`，并展示 task_id、task_type、开始时间和队列位置。
-- Stream viewer 必须展示 stdout/stderr、行数、字节数、chunk 数、最后输出时间和截断状态。
+- Stream viewer 必须展示合并 output、行数、字节数、chunk 数、最后输出时间和截断状态。
 - Stream viewer 必须支持自动滚动、暂停自动滚动、拷贝当前 tail。
 - Completion viewer 必须展示 status、exit_code、duration、output_type、output_encoding、output_bytes、行数和 output_sha256。
 - 非 JSON completion 必须展示原始文本、行数、字节数和拷贝按钮。
@@ -114,7 +116,7 @@
   - 验证 `reply.task_output_append` 序列化和反序列化。
   - 验证非 UTF-8 内容必须 base64。
 - `AgentTaskRunnerTest`：
-  - 构造持续输出的长任务，验证运行中 stdout/stderr 形成 stream chunk。
+  - 构造持续输出且包含错误 tag 的长任务，验证运行中合并 output 形成 stream chunk。
   - 验证任务结束仍发送最终 `reply.task_result`。
   - 验证 per-agent 并发度为 `1`，第二个任务不会并发运行。
   - 验证 stream buffer 超限时保留最近 tail 并设置 dropped/truncated 字段。
@@ -132,7 +134,7 @@
   - 验证 queue full 拒绝新任务。
 - `CoordinatorHttpServerTest`：
   - 验证 task snapshot 暴露 stream tail 字段。
-  - 验证 Run UI bundle 包含 stream viewer、stdout/stderr、行数、字节数、tail truncated、未完成提示和拷贝文案。
+  - 验证 Run UI bundle 包含 stream viewer、合并 output、行数、字节数、tail truncated、未完成提示和拷贝文案。
   - 验证 completion viewer 包含行数、字节数、分片未齐提示。
   - 验证 pop 文案提示共享 completion queue 影响。
 
