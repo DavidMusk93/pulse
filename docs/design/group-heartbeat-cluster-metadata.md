@@ -529,6 +529,9 @@ Web 页面按 `cluster` 进行一级分组：
 - 任务执行中状态必须从当前 host 的 `state.async_tasks` 读取，并在 agent 已接收或正在执行时在结果区顶部用显著提示条展示。
 - Run UI 的 completion 输出必须展示，不允许空白吞掉 JSON；当输出是 JSON 时必须提供一键格式化、拷贝和基础高亮能力，结果区域必须是内部滚动容器，禁止大 JSON 撑破 modal 或页面。
 - `prepare_disk_layout_dry_run` 的 agent 端脚本来源为 olap-toolbox 的 `tidelet/prepare-disk-layout.sh`；更新时必须先同步到 Pulse 仓库 `docs/task/prepare-disk-layout.sh`，再分发到所有 agent 的 `/data24/otf/pulse/tasks/prepare-disk-layout.sh`。
+- `analyze_block_layout_dry_run` 的 agent 端脚本必须同时保存标准版与 Python 3.5 兼容版：`docs/task/analyze-block-layout.py` 与 `docs/task/analyze-block-layout-py35.py`。
+- 部署脚本必须在目标主机上探测 `python3` 主次版本；当目标主机为 Python `3.5` 时，将 `analyze-block-layout-py35.py` 安装为运行入口 `/data24/otf/pulse/tasks/analyze-block-layout.py`，其他 Python 3 版本使用标准版。
+- Pulse 任务类型保持 `analyze_block_layout_dry_run` 不变，任务入口保持 `analyze-block-layout.py`，Python 版本差异由部署期脚本选择解决，避免把运行时兼容性泄露到 UI 或 task API。
 
 UI 开发门禁：
 
@@ -550,7 +553,7 @@ UI 开发门禁：
 - 所有可见节点标识必须经过 IPv6-only 归一化，hostname、FQDN 和内部域名不得出现在页面文本或 DOM 标识里。
 - `5min AVG` 的排序与展示必须使用同一份固定窗口开窗采样结果，禁止窗口内每次轮询更新样本、均值或排序权重。
 - Run UI 和磁贴 UI 的最终验收必须在 coordinator 线上页面完成，使用真实浏览器确认 header 不换行、无独立状态点、任务按钮承载状态色、pid 卡片可读、completion JSON 可展示/格式化/拷贝、高亮、agent 执行中状态、IPv6-only 和无高光样式。
-- 远程任务脚本更新必须验证本地 `bash -n`、`--help`、SHA 一致性，并通过 auto-ops dry-run 确认全量 agent 范围后再分发；分发脚本不得重启 agent。
+- 远程任务脚本更新必须验证本地 `bash -n`、`py_compile` 或 `--help`、SHA 一致性，并通过 auto-ops dry-run 确认全量 agent 范围后再分发；分发脚本不得重启 agent，除非本次同时更新 agent jar 或 systemd 配置。
 
 ## 部署设计
 

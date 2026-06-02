@@ -2234,3 +2234,121 @@ Coordinator-only 线上升级验证：
 - `弹出结果` 已恢复为真正 queue pop 语义。
 - pop 后展示下一个 completion item。
 - trace 固定为最近 4 条，且不再出现 `task.completion_kept`。
+
+## OTel Python 3.5 Analyze Task 更新
+
+验证时间：2026-06-02 12:40-13:25 CST。
+
+背景：
+
+- `analyze_block_layout_dry_run` 需要支持目标主机 Python 3.5。
+- olap-toolbox 提供 Python 3.5 兼容脚本：`tidelet/analyze-block-layout-py35.py`。
+- Pulse 任务类型不应因为兼容性拆分成多个 UI/API 类型，部署期应按目标机 Python 版本选择最终入口。
+
+修复：
+
+- 新增 `docs/task/analyze-block-layout-py35.py`。
+- `docs/script/pulse-cdn-new-deploy.sh` 同步标准版与 py35 版：
+  - `analyze-block-layout.py`
+  - `analyze-block-layout-py35.py`
+- 远端部署时探测 `python3` 主次版本：
+  - Python `3.5`：将 `analyze-block-layout-py35.py` 安装为 `/data24/otf/pulse/tasks/analyze-block-layout.py`
+  - 其他 Python 3：保留标准版 `/data24/otf/pulse/tasks/analyze-block-layout.py`
+- Pulse task type 保持 `analyze_block_layout_dry_run` 不变，agent allowlist 和 UI 不需要暴露 Python 版本差异。
+
+本地验证：
+
+- `bash -n docs/script/pulse-cdn-new-deploy.sh`：通过。
+- `python3 -m py_compile docs/task/analyze-block-layout.py docs/task/analyze-block-layout-py35.py`：通过。
+- `mvn -Dtest=CoordinatorHttpServerTest test`：通过，9 个测试通过。
+- `mvn test`：通过，25 个测试通过。
+- `mvn package`：通过。
+- SHA：
+  - 标准版：`26049e40a0921bc54e5692c4ca8874a3f91619a848ef11788ecbd48d4bc4fcc6`
+  - py35 版：`fad136970a18c235a83e3af2f821b544d02d3064ced784437f31b87395ef2243`
+  - Pulse `docs/task/analyze-block-layout-py35.py` 与 olap-toolbox 源文件 SHA 一致。
+
+Auto-ops 范围：
+
+- runtime：central-runtime
+- runtime repo：`/Users/bytedance/Documents/gitlab/olap-toolbox`
+- project repo：`/Users/bytedance/Documents/01_Projects/pulse`
+- hosts file：`/Users/bytedance/Documents/gitlab/olap-toolbox/conf/cn.ini`
+- tag：`otel`
+- dry-run：87 台。
+- access demand：`summary: total=87 ok=87 failed=0`
+
+部署验证：
+
+- 命令使用 `--parallel 8`、`--timeout 240`、`--max-hosts 200`、`--yes`。
+- 部署结果：`summary: total=87 ok=87 failed=0 elapsed=1769s`
+- verify 结果：`summary: total=87 ok=87 failed=0 elapsed=8s`
+- probe 结果：`summary: total=87 ok=87 failed=0 elapsed=7s`
+- 所有 otel agent 服务均为 `active`。
+
+Python 版本选择证据：
+
+- Python 3.5 主机：
+
+```text
+PYTHON3=3.5
+/data24/otf/pulse/tasks/analyze-block-layout.py      fad136970a18c235a83e3af2f821b544d02d3064ced784437f31b87395ef2243
+/data24/otf/pulse/tasks/analyze-block-layout-py35.py fad136970a18c235a83e3af2f821b544d02d3064ced784437f31b87395ef2243
+```
+
+- Python 3.11 主机：
+
+```text
+PYTHON3=3.11
+/data24/otf/pulse/tasks/analyze-block-layout.py      26049e40a0921bc54e5692c4ca8874a3f91619a848ef11788ecbd48d4bc4fcc6
+/data24/otf/pulse/tasks/analyze-block-layout-py35.py fad136970a18c235a83e3af2f821b544d02d3064ced784437f31b87395ef2243
+```
+
+Coordinator API 验证：
+
+```json
+{
+  "total_hosts": 471,
+  "otel_hosts": 87,
+  "otel_status": {
+    "alive": 87
+  },
+  "otel_clusters": {
+    "otel_default_separation2": 87
+  },
+  "otel_group_modes": {
+    "leader": 13,
+    "follower": 74
+  }
+}
+```
+
+真实任务验证：
+
+- 目标节点：`fdbd:dc05:4:351::45`
+- agent：`dc05-p4-t351-n045.byted.org`
+- Python：`3.5`
+- task：`analyze_block_layout_dry_run`
+- script path：`/data24/otf/pulse/tasks/analyze-block-layout.py`
+
+结果：
+
+```json
+{
+  "task_id": "task-92881e16-13a8-493a-adf3-d2693f9e15a3",
+  "task_type": "analyze_block_layout_dry_run",
+  "status": "completed",
+  "exit_code": 0,
+  "output_type": "json",
+  "output_bytes": 55978,
+  "runner_error": ""
+}
+```
+
+结论：
+
+- otel 87 台已更新完成。
+- Python 3.5 主机使用 py35 兼容脚本作为任务入口。
+- 非 Python 3.5 主机继续使用标准版脚本。
+- `analyze_block_layout_dry_run` 在 Python 3.5 otel 节点上真实执行成功，返回 JSON 结果。
+- 部署后 otel 节点全部 `alive`，group heartbeat 仍正常降压。

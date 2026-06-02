@@ -75,6 +75,10 @@
   - 任务按钮和工具栏按钮水平排列，禁止竖排、折行和压缩成不可读状态。
   - Run UI 去掉“执行任务”标题，由执行按钮表达语义；任务类型选择控件展开为操作栏主区域。
   - 关闭控件改为 macOS 风格窗口控制点，放在独立标题栏，不覆盖业务内容。
+- 远程任务脚本：
+  - 将 olap-toolbox `tidelet/analyze-block-layout-py35.py` 同步到 `docs/task/analyze-block-layout-py35.py`。
+  - 保持 `analyze_block_layout_dry_run` 任务类型不变，仍指向 `/data24/otf/pulse/tasks/analyze-block-layout.py`。
+  - 部署时同步标准版与 py35 版，远端按 `python3` 版本选择安装入口：Python `3.5` 使用 py35 版，其他 Python 3 使用标准版。
 
 ## 阶段 2.1：减压型分组策略设计补充
 
@@ -173,6 +177,7 @@ mvn package
   - 读取 `tide_worker` 环境变量。
   - 写入 `PULSE_AGENT_CLUSTER`、`PULSE_AGENT_AREA`。
   - 检测 Java 17+，低版本自动切换 bundled JRE。
+  - 同步 `analyze-block-layout.py` 与 `analyze-block-layout-py35.py`，在目标主机上根据 `python3` 主次版本选择最终运行入口。
   - 部署后显式 `restart` agent/coordinator。
 - `docs/script/pulse-cdn-new-probe.sh`：
   - 输出 `tide_worker` pid 与 tide metadata。

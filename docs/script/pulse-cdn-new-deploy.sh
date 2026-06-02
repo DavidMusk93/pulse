@@ -24,7 +24,7 @@ call() {
   task_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../task" && pwd)"
   if [ -d "$task_dir" ]; then
     ssh "$host" "mkdir -p '$remote_tmp/tasks'"
-    scp "$task_dir"/prepare-disk-layout.sh "$task_dir"/analyze-block-layout.py "${scp_host}:${remote_tmp}/tasks/"
+    scp "$task_dir"/prepare-disk-layout.sh "$task_dir"/analyze-block-layout.py "$task_dir"/analyze-block-layout-py35.py "${scp_host}:${remote_tmp}/tasks/"
   fi
   if [ -n "$jre_tarball" ] && [ "$jre_tarball" != "-" ]; then
     scp "$jre_tarball" "${scp_host}:${remote_tmp}/pulse-jre.tar.gz"
@@ -50,6 +50,22 @@ if [ -d "$remote_tmp/tasks" ]; then
   cp "$remote_tmp/tasks/"* "$install_root/tasks/"
   chmod 0755 "$install_root/tasks/"*
 fi
+
+python3_version=$(
+  python3 - <<'PY' 2>/dev/null || true
+import sys
+print('%d.%d' % (sys.version_info[0], sys.version_info[1]))
+PY
+)
+task_script_variant="standard"
+if [ "$python3_version" = "3.5" ]; then
+  if [ -f "$install_root/tasks/analyze-block-layout-py35.py" ]; then
+    cp "$install_root/tasks/analyze-block-layout-py35.py" "$install_root/tasks/analyze-block-layout.py"
+    chmod 0755 "$install_root/tasks/analyze-block-layout.py"
+    task_script_variant="py35"
+  fi
+fi
+echo "TASK_SCRIPT analyze-block-layout.py variant=${task_script_variant} python3=${python3_version:-unknown}"
 
 java_major_version() {
   local candidate=$1

@@ -12,6 +12,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -218,6 +220,18 @@ class CoordinatorHttpServerTest {
         assertTrue(css.body().contains(".completion-toolbar"));
         assertTrue(css.body().contains(".json-key"));
         assertTrue(!response.body().contains("http-equiv=\"refresh\""));
+    }
+
+    @Test
+    void deployScriptShipsPython35AnalyzerAndSelectsByTargetPythonVersion() throws Exception {
+        String deploy = Files.readString(Path.of("docs/script/pulse-cdn-new-deploy.sh"));
+
+        assertTrue(Files.exists(Path.of("docs/task/analyze-block-layout-py35.py")));
+        assertTrue(deploy.contains("analyze-block-layout-py35.py"));
+        assertTrue(deploy.contains("python3_version"));
+        assertTrue(deploy.contains("task_script_variant=\"py35\""));
+        assertTrue(deploy.contains("TASK_SCRIPT analyze-block-layout.py variant=${task_script_variant}"));
+        assertTrue(deploy.contains("cp \"$install_root/tasks/analyze-block-layout-py35.py\" \"$install_root/tasks/analyze-block-layout.py\""));
     }
 
     @Test
