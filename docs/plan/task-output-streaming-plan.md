@@ -16,7 +16,6 @@
 - 不在 UI、buffer 和 completion 逻辑中强制区分 stdout/stderr；错误识别依赖日志 tag 和内容。
 - 定义 stream payload 字段：
   - `task_id`
-  - `trace_id`
   - `agent_id`
   - `task_type`
   - `stream_id`
@@ -30,6 +29,7 @@
 - `stream_offset` 必须按字节偏移计算，用于校验顺序和定位缺口。
 - 非 UTF-8 或二进制内容必须使用 `base64`，禁止把非法文本直接塞进 JSON。
 - `reply.task_output_append` 禁止进入 completion queue，completion queue 只接受最终 `reply.task_result` 或 `reply.task_result_chunk`。
+- `task_id` 是任务生命周期唯一关联 ID；第一版禁止在 stream payload 中引入重复关联字段。
 
 ## 阶段 2：Agent Runner
 

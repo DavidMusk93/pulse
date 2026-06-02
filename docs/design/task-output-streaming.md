@@ -27,7 +27,6 @@
   "reply_to": "cmd-task-task-1",
   "payload": {
     "task_id": "task-1",
-    "trace_id": "trace-1",
     "agent_id": "agent-a",
     "task_type": "analyze_block_layout_dry_run",
     "stream_id": "output",
@@ -46,7 +45,6 @@
 | 字段 | 说明 |
 | --- | --- |
 | `task_id` | 当前任务 ID |
-| `trace_id` | 当前任务 trace ID |
 | `stream_id` | 第一版固定为 `output`；仅作为未来多 stream 扩展和幂等 key 字段 |
 | `stream_seq` | 单 task 的 `output` 流内单调递增序号，用于去重和乱序处理 |
 | `stream_offset` | 该 chunk 在 stream 中的字节偏移，便于校验顺序和定位缺口 |
@@ -54,6 +52,12 @@
 | `output_type` | `text`、`jsonl`、`binary` 等展示提示，不参与协议路由 |
 | `payload` | 当前增量内容 |
 | `payload_sha256` | 当前 payload 校验值 |
+
+第一版字段约束：
+
+- `task_id` 是任务生命周期唯一关联 ID，用于串联下发、accepted/running、stream log、completion 和 pop。
+- `reply.task_output_append` 禁止引入无业务语义的重复关联字段。
+- 如果未来接入外部观测系统，新增观测字段只能作为可选元信息，不能参与路由、幂等、队列或 UI 主展示。
 
 ## Agent 任务执行规则
 
@@ -273,7 +277,7 @@ BACKOFF
 - 禁止让 follower 因每个 stream chunk 都直接打 coordinator，必须继续通过 leader 聚合。
 - 禁止 group leader 发送不包含自己 heartbeat 的 batch。
 - 禁止普通 stream chunk 绕过 group batch 约束成为 coordinator 请求风暴。
-- 禁止 Run UI 在 task 未完成时把 stream tail 文案伪装成最终结果。
+- 禁止 Run UI 在 task 未完成时把 stream log 或运行中输出文案伪装成最终结果。
 - 禁止 completion viewer 不展示行数、字节数和未完成/传输积压状态。
 - 禁止 agent 同一时间并发执行多个 task，除非先完成并发资源隔离设计。
 - 禁止第一版 UI 强制拆分 stdout/stderr；除非先证明错误 tag 不足以支撑排障。
