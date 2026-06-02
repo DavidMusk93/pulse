@@ -2,11 +2,12 @@
 
 ## 执行原则
 
-- 本计划只覆盖长任务运行中输出、stream tail、completion 展示增强、group 聚合发送状态机、agent 串行执行和多用户队列语义。
+- 本计划只覆盖长任务运行中输出、stream log、completion 展示增强、group 聚合发送状态机、agent 串行执行和多用户队列语义。
 - 基础 group heartbeat、集群元数据和 Web 分组计划继续维护在 `docs/plan/group-heartbeat-cluster-metadata-plan.md`。
 - 设计约束以 `docs/design/task-output-streaming.md` 为准；实现前必须先检查该文档的“实现门禁”。
 - 不新增 task streaming API，不新增 WebSocket/SSE，不新增 agent 入站端口。
 - 所有运行中输出仍通过 heartbeat / group heartbeat 的 `PulseMessage` 链路传输。
+- 生产级门禁：禁止截断、丢弃或只保留最近 tail；容量不足只能排队、落盘、backpressure 或失败。
 
 ## 阶段 1：协议与模型
 
@@ -26,7 +27,7 @@
   - `payload`
   - `payload_sha256`
 - `stream_seq` 必须在单 task 的 `output` 流内单调递增，用于 coordinator 和 leader 幂等去重。
-- `stream_offset` 必须按字节偏移计算，用于解释 tail 截断和丢弃窗口。
+- `stream_offset` 必须按字节偏移计算，用于校验顺序和定位缺口。
 - 非 UTF-8 或二进制内容必须使用 `base64`，禁止把非法文本直接塞进 JSON。
 - `reply.task_output_append` 禁止进入 completion queue，completion queue 只接受最终 `reply.task_result` 或 `reply.task_result_chunk`。
 
@@ -40,9 +41,9 @@
   - flush 间隔建议不超过 `1s`。
   - 每轮 heartbeat 至少 drain 一次 pending output。
   - 单 task 维护一组 `stream_seq`、`stream_offset`、行数和字节数。
-- Agent 本地必须维护有限 tail buffer，默认最近 `1-4 MiB` 或最近 `N` 条 chunk。
-- 输出超过本地 buffer 时必须保留最近 tail，并累计 `dropped_bytes`、`dropped_chunks`、`tail_truncated`。
-- 任务结束时仍必须发送最终 `reply.task_result` 或 `reply.task_result_chunk`，stream tail 不能替代最终结果。
+- Agent 本地内存 buffer 必须有上限，但超过内存上限后必须写入本地 spool 或待发送队列。
+- 输出超过内存 buffer 时禁止保留最近 tail 后丢弃旧数据；容量不足必须 backpressure、阻塞读取或让任务失败并上报明确错误。
+- 任务结束时仍必须发送最终 `reply.task_result` 或 `reply.task_result_chunk`，stream log 不能替代最终结果。
 
 ## 阶段 3：多用户队列
 
@@ -74,25 +75,25 @@
 - 紧急消息第一版包括 `reply.task_accepted`、`reply.task_result`、`reply.task_result_chunk`、带 `urgent=true` 的 `reply.task_output_append`、terminal failure 状态和 control reply。
 - 普通 stream chunk 默认不是紧急消息，必须按 `FIRST_AGENT_DUE` 或 `BATCH_FULL` 批量发送，避免输出型任务打穿 group 降压目标。
 - Leader 不解析输出内容，不格式化 JSON，不改写 payload。
-- 单 follower 输出过大时，leader 必须裁剪该 follower 的旧 stream chunk，不能阻塞其他 follower heartbeat。
+- 单 follower 输出过大时，leader 必须拆分 batch、排队或触发 backpressure，不能裁剪旧 stream chunk，也不能阻塞其他 follower heartbeat。
 
-## 阶段 5：Coordinator Stream Tail
+## 阶段 5：Coordinator Stream Log
 
 - Coordinator 处理 stream chunk 时必须按 `(agent_id, task_id, stream_id, stream_seq)` 去重。
-- Coordinator 必须维护 per running task 的有限 stream tail buffer。
-- Stream tail snapshot 至少包含：
-  - 合并 output 的最近文本。
+- Coordinator 必须维护 per running task 的完整 stream log，内存只作为缓存，超过内存预算必须写入 spool 或持久化结构。
+- Stream log snapshot 至少包含：
+  - 合并 output 的完整文本或完整 chunk 视图。
   - `first_stream_seq`
   - `last_stream_seq`
   - `stream_bytes`
   - `stream_lines`
   - `stream_chunks`
   - `last_output_at_ms`
-  - `dropped_bytes`
-  - `dropped_chunks`
-  - `tail_truncated`
-- `/api/agents/{agent}/tasks` 可扩展只读 snapshot 字段返回 stream tail；这不是新增 API。
-- Peer lazy sync 不要求 stream tail 强一致；最终 task terminal 状态仍以 `reply.task_result` 为准。
+  - `spooled_bytes`
+  - `pending_bytes`
+  - `backpressure_active`
+- `/api/agents/{agent}/tasks` 可扩展只读 snapshot 字段返回 stream log；这不是新增 API。
+- Peer lazy sync 不要求 stream log 强一致；接收该 task 的 coordinator 必须保证本地 stream 完整，最终 task terminal 状态仍以 `reply.task_result` 为准。
 
 ## 阶段 6：Run UI
 
@@ -103,8 +104,8 @@
   - 已接收行数
   - 已接收字节数
 - 尚无 stream 输出时必须展示 `任务未完成，暂未收到输出`，并展示 task_id、task_type、开始时间和队列位置。
-- Stream viewer 必须展示合并 output、行数、字节数、chunk 数、最后输出时间和截断状态。
-- Stream viewer 必须支持自动滚动、暂停自动滚动、拷贝当前 tail。
+- Stream viewer 必须展示合并 output、行数、字节数、chunk 数、最后输出时间和传输积压状态。
+- Stream viewer 必须支持自动滚动、暂停自动滚动、拷贝当前输出或完整输出。
 - Completion viewer 必须展示 status、exit_code、duration、output_type、output_encoding、output_bytes、行数和 output_sha256。
 - 非 JSON completion 必须展示原始文本、行数、字节数和拷贝按钮。
 - 最终结果分片未齐时禁止展示为完成结果，只能显示 `结果接收中`。
@@ -119,7 +120,7 @@
   - 构造持续输出且包含错误 tag 的长任务，验证运行中合并 output 形成 stream chunk。
   - 验证任务结束仍发送最终 `reply.task_result`。
   - 验证 per-agent 并发度为 `1`，第二个任务不会并发运行。
-  - 验证 stream buffer 超限时保留最近 tail 并设置 dropped/truncated 字段。
+  - 验证 stream 内存 buffer 超限时写入 spool 或触发 backpressure，禁止 dropped/truncated 成功路径。
 - `GroupHeartbeatCollectorTest`：
   - 验证 `SELF_DUE` flush 每次携带 leader 自己 heartbeat。
   - 验证 `FIRST_AGENT_DUE` 在 `5s + 3s` 到期后 flush 第一个 follower。
@@ -127,14 +128,14 @@
   - 验证普通 stream chunk 不会每条都触发 coordinator 请求。
   - 验证单 follower 大输出不会阻塞其他 follower。
 - `CoordinatorServiceTest`：
-  - 验证重复和乱序 stream chunk 不重复进入 stream tail。
+  - 验证重复和乱序 stream chunk 不重复进入 stream log。
   - 验证 stream chunk 不进入 completion queue。
   - 验证最终 `reply.task_result` 才进入 completion queue。
   - 验证多用户 task 按同一 agent FIFO 排队。
   - 验证 queue full 拒绝新任务。
 - `CoordinatorHttpServerTest`：
-  - 验证 task snapshot 暴露 stream tail 字段。
-  - 验证 Run UI bundle 包含 stream viewer、合并 output、行数、字节数、tail truncated、未完成提示和拷贝文案。
+  - 验证 task snapshot 暴露 stream log 字段。
+  - 验证 Run UI bundle 包含 stream viewer、合并 output、行数、字节数、传输积压、未完成提示和拷贝文案。
   - 验证 completion viewer 包含行数、字节数、分片未齐提示。
   - 验证 pop 文案提示共享 completion queue 影响。
 
@@ -142,14 +143,15 @@
 
 - 本地执行 Maven 测试和前端构建。
 - 使用浏览器验证 Run UI：
-  - 长任务运行中能展示 stream tail。
+  - 长任务运行中能展示 stream log。
   - 无输出时能提示任务未完成。
   - completion 到达后能切换到 completion viewer。
   - JSON 与非 JSON completion 都能展示行数和字节数。
 - 线上灰度优先选择少量 agent，确认 group leader 请求量不会因 stream chunk 显著上升。
 - 线上验证必须记录：
   - group batch flush trigger 分布。
-  - per-agent stream tail 内存占用。
-  - tail_truncated 发生次数。
+  - per-agent stream log 内存和 spool 占用。
+  - backpressure 发生次数。
+  - dropped/truncated 字段不存在或为零。
   - completion queue pop 语义保持队头弹出。
 - 验证通过后再扩大到目标集群。

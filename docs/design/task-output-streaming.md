@@ -10,8 +10,8 @@
 - 最终结果仍通过 `reply.task_result` 或 `reply.task_result_chunk` 进入 completion queue。
 - stream chunk 不进入 completion queue。
 - group follower 的 stream chunk 先到 leader，再由 leader 的 group heartbeat 聚合上报 coordinator。
-- coordinator 继续作为 task queue、stream tail、completion queue 和 trace 的权威。
-- `/api/agents/{agent}/tasks` 可以扩展只读 snapshot 字段承载 stream tail，这不是新增 API。
+- coordinator 继续作为 task queue、stream log、completion queue 和 trace 的权威。
+- `/api/agents/{agent}/tasks` 可以扩展只读 snapshot 字段承载 stream log metadata 和完整输出视图，这不是新增 API。
 
 ## 消息类型
 
@@ -49,7 +49,7 @@
 | `trace_id` | 当前任务 trace ID |
 | `stream_id` | 第一版固定为 `output`；仅作为未来多 stream 扩展和幂等 key 字段 |
 | `stream_seq` | 单 task 的 `output` 流内单调递增序号，用于去重和乱序处理 |
-| `stream_offset` | 该 chunk 在 stream 中的字节偏移，便于 UI 或诊断解释丢弃窗口 |
+| `stream_offset` | 该 chunk 在 stream 中的字节偏移，便于校验顺序和定位缺口 |
 | `output_encoding` | `identity`、`base64` 或后续压缩编码；非 UTF-8 内容必须使用 `base64` |
 | `output_type` | `text`、`jsonl`、`binary` 等展示提示，不参与协议路由 |
 | `payload` | 当前增量内容 |
@@ -83,18 +83,19 @@
   - flush 间隔建议不超过 `1s`。
   - 每轮 heartbeat 至少 drain 一次 pending output。
   - 单 task 维护一组 `stream_seq` 和 `stream_offset`。
-- agent 本地必须保留有限 stream tail buffer，默认最近 `1-4 MiB` 或最近 `N` 条 chunk，避免长任务输出撑爆内存。
+- agent 本地内存 buffer 必须有上限，但超过内存上限后必须转入本地 spool 或待发送队列，禁止丢弃已产生输出。
 - heartbeat payload 中的 `state.async_tasks` 必须继续包含任务执行中状态，并可附带轻量 stream 摘要：
   - `stream_bytes`
   - `stream_chunks`
   - `stream_lines`
   - `last_output_at_ms`
-  - `tail_truncated`
-  - `dropped_bytes`
+  - `spooled_bytes`
+  - `pending_bytes`
+  - `backpressure_active`
 - 任务结束时仍发送 `reply.task_result`：
   - 小输出可以继续 inline。
   - 大输出继续使用 `reply.task_result_chunk`。
-  - 如果最终结果太大或不是 JSON，completion viewer 必须至少展示 tail、大小、行数、编码和可拷贝内容。
+  - 如果最终结果太大或不是 JSON，completion viewer 必须展示完整结果的大小、行数、编码、校验值和可拷贝/可读取内容；禁止只展示截断 tail 后伪装完成。
 
 ### stdout/stderr 取舍
 
@@ -134,7 +135,7 @@ leader 在 `ACCUMULATING` 状态遇到以下任一条件时必须 flush：
 | --- | --- | --- |
 | `SELF_DUE` | leader 自己的 heartbeat 发送时间到 | 每次 group batch 都必须带 leader 自己的 heartbeat，不能只转发 follower |
 | `FIRST_AGENT_DUE` | 第一个进入 buffer 的 follower 距上次成功上报达到 `heartbeat_interval + grace`，默认 `5s + 3s` | 防止 follower 被 leader 长时间缓存导致 coordinator 误判 warming/offline |
-| `URGENT_MESSAGE` | buffer 中存在紧急消息 | 降低 task accepted/result/stream tail 的可见延迟 |
+| `URGENT_MESSAGE` | buffer 中存在紧急消息 | 降低 task accepted/result/stream 可见延迟 |
 | `BATCH_FULL` | agent 数、message 数或字节数达到 batch 上限 | 防止内存和单次请求过大 |
 | `PLAN_CHANGE` | leader 收到新的 group plan 或成员变化 | 避免 stale member 继续积压 |
 | `SHUTDOWN` | agent 进程准备退出 | 尽力 flush 最后一批状态 |
@@ -178,9 +179,9 @@ BACKOFF
 - follower heartbeat 按 `agent_id` 合并，保留最新 `state.heartbeat` 和尚未成功上报的 task/stream messages。
 - 对同一 `(agent_id, task_id, stream_id, stream_seq)` 的 stream chunk，leader 必须幂等去重。
 - 当 batch 超过大小预算时：
-  - 优先保留每个 running task 最新 stream chunk。
-  - 优先保留 `reply.task_result`、`reply.task_accepted` 等状态型消息。
-  - 可以丢弃旧 stream chunk，但必须增加 `dropped_bytes/dropped_chunks` 并设置 `tail_truncated=true`。
+  - 必须拆分为多个 heartbeat batch，或保留在 leader spool/pending queue 中等待后续发送。
+  - 可以优先发送 `reply.task_result`、`reply.task_accepted` 等状态型消息，但不能删除旧 stream chunk。
+  - 如果 spool 或 pending queue 达到硬上限，必须触发 backpressure、拒绝继续接收该 follower 的新增输出，或让任务失败并上报明确错误；禁止截断后继续标记成功。
 - leader 不解析输出内容，不做 JSON 格式化、不改写 payload。
 - leader 不能因为某个 follower 输出量大而阻塞其他 follower 的心跳。
 
@@ -199,13 +200,13 @@ BACKOFF
 ## Coordinator 行为
 
 - coordinator 处理 `reply.task_output_append` 时按 `(agent_id, task_id, stream_id, stream_seq)` 去重。
-- coordinator 为每个 running task 维护有限 stream buffer：
-  - 保存最近 chunk 列表和拼接后的 tail 文本。
-  - 记录 `first_stream_seq`、`last_stream_seq`、`stream_bytes`、`stream_lines`、`dropped_bytes`、`dropped_chunks`、`tail_truncated`。
+- coordinator 为每个 running task 维护完整 stream log，内存只作为缓存，超过内存预算必须写入本地 spool 或持久化结构：
+  - 保存完整 chunk 列表或等价可恢复表示。
+  - 记录 `first_stream_seq`、`last_stream_seq`、`stream_bytes`、`stream_lines`、`stream_chunks`、`spooled_bytes`、`pending_bytes`、`backpressure_active`。
 - coordinator 不把 stream chunk 放入 completion queue；completion queue 只保存最终 `TaskResult`。
-- coordinator snapshot 可以通过已有 `/api/agents/{agent}/tasks` 返回 `output_streams` 或 `stream_tail` 字段，供 Run UI 展示运行中输出。
-- coordinator peer sync 仍只通过已有 lazy sync 机制传播必要 task state；stream tail 不要求 peers 强一致。
-- 如果最终 `reply.task_result` 到达，coordinator 必须把 task 状态切到 terminal，并保留最近 stream 摘要供 trace 解释。
+- coordinator snapshot 可以通过已有 `/api/agents/{agent}/tasks` 返回 `output_streams` 或 `stream_log` 字段，供 Run UI 展示运行中输出。
+- coordinator peer sync 仍只通过已有 lazy sync 机制传播必要 task state；stream log 不要求 peers 强一致，但接收该 task 的 coordinator 必须保证本地完整性。
+- 如果最终 `reply.task_result` 到达，coordinator 必须把 task 状态切到 terminal，并保留完整 stream log 摘要供 trace 解释。
 
 ## Run UI 规则
 
@@ -218,8 +219,9 @@ BACKOFF
 - 如果尚无 stream 输出，展示：
   - `任务未完成，暂未收到输出`
   - 当前 task_id、task_type、开始时间和队列位置。
-- 如果发生 tail 截断，展示低饱和提示：
-  - `仅保留最近输出，已丢弃 X KiB / Y chunks`
+- 如果发生 backpressure，展示低饱和提示：
+  - `输出较多，正在排队传输，已缓存 X KiB`
+  - 该提示只能表示传输延迟，不能表示数据被截断或丢弃。
 
 ### Stream Viewer
 
@@ -230,11 +232,11 @@ BACKOFF
   - 字节数
   - chunk 数
   - 最后输出时间
-  - 是否截断
+  - 是否存在传输积压
 - stream viewer 必须支持：
   - 自动滚动到最新输出。
   - 用户暂停自动滚动。
-  - 拷贝当前 tail。
+  - 拷贝当前输出或完整输出。
   - 清晰标识当前内容不是最终 completion。
 - JSONL 可以按行轻量高亮；普通 text 只用等宽字体和内部滚动。错误行不依赖 stderr 来源，而依赖日志 tag 和内容识别。
 
@@ -256,12 +258,13 @@ BACKOFF
 
 ## 背压与安全边界
 
-- 单 task stream buffer 必须有内存上限，禁止无界保存输出。
-- 单 heartbeat 或 group heartbeat 的 stream chunk 数和总字节数必须有上限。
-- 当输出生产速度超过心跳传输能力时，系统选择“保留最近 tail、丢弃旧 chunk”，而不是阻塞 heartbeat。
-- 被丢弃的字节数和 chunk 数必须可见，至少通过 `tail_truncated`、`dropped_bytes` 和 `dropped_chunks` 暴露给 UI。
-- stream chunk 是运行中观测数据，允许最终一致和尾部窗口丢弃；最终任务成功/失败状态仍以 `reply.task_result` 为准。
-- task result 是最终语义结果，不允许因为 stream tail 策略而被截断或丢弃。
+- 单 task 内存 buffer 必须有上限，禁止无界占用内存。
+- 单 heartbeat 或 group heartbeat 的 stream chunk 数和总字节数必须有上限，超过上限时必须分批发送。
+- 当输出生产速度超过心跳传输能力时，系统必须选择排队、落盘 spool、backpressure 或任务失败，而不是截断输出。
+- stream chunk 是生产级任务输出的一部分，禁止静默丢弃，禁止只保留最近 tail。
+- 若本地 spool 或 pending queue 达到硬上限，必须让任务进入 `failed` 或 `output_blocked` 等明确状态，并上报完整错误原因；禁止返回成功但输出不完整。
+- task result 是最终语义结果，不允许因为 stream 传输策略而被截断或丢弃。
+- UI 可以虚拟滚动或分页展示大输出，但展示优化不能改变后端数据完整性。
 
 ## 实现门禁
 
@@ -271,6 +274,8 @@ BACKOFF
 - 禁止 group leader 发送不包含自己 heartbeat 的 batch。
 - 禁止普通 stream chunk 绕过 group batch 约束成为 coordinator 请求风暴。
 - 禁止 Run UI 在 task 未完成时把 stream tail 文案伪装成最终结果。
-- 禁止 completion viewer 不展示行数、字节数和未完成/截断状态。
+- 禁止 completion viewer 不展示行数、字节数和未完成/传输积压状态。
 - 禁止 agent 同一时间并发执行多个 task，除非先完成并发资源隔离设计。
 - 禁止第一版 UI 强制拆分 stdout/stderr；除非先证明错误 tag 不足以支撑排障。
+- 禁止截断、丢弃或只保留最近 tail；生产级任务输出必须完整传输、完整保存，并能被 UI 识别为完整或明确失败。
+- 禁止使用 `tail_truncated`、`dropped_bytes`、`dropped_chunks` 作为正常成功路径字段；容量不足只能触发 backpressure、spool 或失败。
