@@ -31,10 +31,21 @@ public class AgentTaskRunner {
     private final Map<String, RunningTask> runningTasks = new ConcurrentHashMap<>();
 
     public AgentTaskRunner(String agentId, Clock clock) {
+        this(
+                agentId,
+                clock,
+                System.getenv().getOrDefault("PULSE_TASK_DIR", "/data24/otf/pulse/tasks"),
+                Math.max(1, Integer.parseInt(System.getenv().getOrDefault("PULSE_TASK_MAX_CONCURRENCY", "1"))));
+    }
+
+    AgentTaskRunner(String agentId, Clock clock, String taskDir) {
+        this(agentId, clock, taskDir, 1);
+    }
+
+    private AgentTaskRunner(String agentId, Clock clock, String taskDir, int concurrency) {
         this.agentId = agentId;
         this.clock = clock;
-        this.taskDir = System.getenv().getOrDefault("PULSE_TASK_DIR", "/data24/otf/pulse/tasks");
-        int concurrency = Math.max(1, Integer.parseInt(System.getenv().getOrDefault("PULSE_TASK_MAX_CONCURRENCY", "1")));
+        this.taskDir = taskDir;
         this.executor = Executors.newFixedThreadPool(concurrency);
     }
 
@@ -82,8 +93,15 @@ public class AgentTaskRunner {
             return;
         }
         TaskDefinition definition = definition(taskType);
-        if (definition == null || !definition.scriptPath().equals(scriptPath) || !definition.args().equals(argsValue(payload))) {
+        if (definition == null || !definition.scriptPath().equals(scriptPath)) {
             enqueueResultMessages(resultMessages(message.messageId(), taskId, traceId, taskType, "rejected", null, 0, 0, "", "task is not in agent allowlist"));
+            return;
+        }
+        List<String> args;
+        try {
+            args = normalizeArgs(argsValue(payload), definition.args());
+        } catch (IllegalArgumentException exception) {
+            enqueueResultMessages(resultMessages(message.messageId(), taskId, traceId, taskType, "rejected", null, 0, 0, "", exception.getMessage()));
             return;
         }
         long acceptedAt = clock.millis();
@@ -101,10 +119,10 @@ public class AgentTaskRunner {
                         "task_type", taskType,
                         "status", "accepted",
                         "accepted_at_ms", acceptedAt)), REPLY_REPLAY_SENDS));
-        executor.submit(() -> execute(message.messageId(), taskId, traceId, definition, timeoutMs));
+        executor.submit(() -> execute(message.messageId(), taskId, traceId, definition, args, timeoutMs));
     }
 
-    private void execute(String replyTo, String taskId, String traceId, TaskDefinition definition, long timeoutMs) {
+    private void execute(String replyTo, String taskId, String traceId, TaskDefinition definition, List<String> args, long timeoutMs) {
         long started = clock.millis();
         runningTasks.computeIfPresent(taskId, (ignored, task) -> task.withRunning(started));
         Process process = null;
@@ -122,7 +140,7 @@ public class AgentTaskRunner {
                 command.add("bash");
             }
             command.add(definition.scriptPath());
-            command.addAll(definition.args());
+            command.addAll(args);
             process = new ProcessBuilder(command)
                     .redirectErrorStream(true)
                     .start();
@@ -333,6 +351,27 @@ public class AgentTaskRunner {
             return list.stream().map(Object::toString).toList();
         }
         return List.of();
+    }
+
+    private static List<String> normalizeArgs(List<String> requestedArgs, List<String> defaultArgs) {
+        List<String> args = requestedArgs == null || requestedArgs.isEmpty() ? defaultArgs : requestedArgs;
+        if (args.isEmpty()) {
+            return List.of("--dry-run");
+        }
+        if (args.size() > 32) {
+            throw new IllegalArgumentException("too many task args");
+        }
+        List<String> normalized = new ArrayList<>();
+        for (String arg : args) {
+            if (arg == null || arg.isBlank()) {
+                continue;
+            }
+            if (arg.length() > 256 || arg.indexOf('\n') >= 0 || arg.indexOf('\r') >= 0 || arg.indexOf('\0') >= 0) {
+                throw new IllegalArgumentException("invalid task arg");
+            }
+            normalized.add(arg);
+        }
+        return normalized.isEmpty() ? List.of("--dry-run") : List.copyOf(normalized);
     }
 
     private static String stringValue(Map<String, Object> payload, String key) {
