@@ -173,6 +173,7 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("json-output"));
         assertTrue(js.body().contains("Markdown"));
         assertTrue(js.body().contains("搜索输出"));
+        assertTrue(js.body().contains("暂无命令输出"));
         assertTrue(js.body().contains("不换行"));
         assertTrue(js.body().contains("拷贝"));
         assertTrue(js.body().contains("/tasks/completions/"));

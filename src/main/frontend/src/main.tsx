@@ -287,7 +287,7 @@ function App() {
     const data = await fetchJson<TaskSnapshot>(`/api/agents/${id}/tasks`);
     setSnapshot(data);
     const latest = data.completion_queue?.[0];
-    setOutput(latest ? renderCompletion(latest) : '');
+    setOutput(latest ? completionOutput(latest) : '');
   }
 
   useEffect(() => {
@@ -396,7 +396,7 @@ function App() {
           const id = encodeURIComponent(agentId(activeHost));
           const data = await fetchJson<TaskSnapshot>(`/api/agents/${id}/tasks`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ task_type: taskType }) });
           setSnapshot(data);
-          setOutput('任务已下发，等待 agent 心跳反馈执行状态。');
+          setOutput('');
         }}
         onPop={async () => {
           if (!activeHost || !snapshot?.completion_queue?.[0]) {
@@ -518,7 +518,7 @@ function TaskModal(props: {
   const latestCompletion = completions[0];
   const streamLog = latestCompletion ? null : streamForTask(props.snapshot, agentTask?.task_id || executions[0]?.task_id);
   const visibleTraces = (props.snapshot?.traces || []).slice(0, 4);
-  const completionText = props.output || (latestCompletion ? completionOutput(latestCompletion) : (streamLog ? streamOutput(streamLog) : (agentTask ? runningTaskText(agentTask) : '')));
+  const completionText = props.output || (latestCompletion ? completionOutput(latestCompletion) : (streamLog ? streamOutput(streamLog) : ''));
   const asyncTask = agentTask || executions[0];
   const currentTaskId = latestCompletion?.task_id || asyncTask?.task_id || props.snapshot?.traces?.[0]?.task_id || '';
   return <Modal open={props.open} onCancel={props.onClose} footer={null} width="min(1320px, calc(100vw - 44px))" className="task-modal" title={null} closeIcon={<span className="mac-close" />}>
@@ -601,6 +601,8 @@ function CompletionViewer({ value, meta, running }: { value: string; meta?: any;
         {parsed.ok && <Tag color="blue">JSON</Tag>}
         {markdownHint && <Tag color="purple">Markdown</Tag>}
         {running && <Tag color="gold">未完成</Tag>}
+        {meta?.status && <Tag color={statusColor(meta.status)}>{statusLabel(meta.status)}</Tag>}
+        {meta?.exit_code !== undefined && meta?.exit_code !== null && <Tag>exit {meta.exit_code}</Tag>}
         <Tag>{lines} 行</Tag>
         <Tag>{formatBytes(bytes)}</Tag>
         {query && <Tag color={matches > 0 ? 'green' : 'red'}>{matches} 匹配</Tag>}
@@ -619,7 +621,9 @@ function CompletionViewer({ value, meta, running }: { value: string; meta?: any;
       </Space>
     </Flex>
     {mode === 'markdown'
-      ? <div className="task-output markdown-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(value) }} />
+      ? value
+        ? <div className="task-output markdown-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(value) }} />
+        : <Empty className="output-empty" image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无命令输出" />
       : <LineNumberedOutput
           value={display}
           mode={mode}
@@ -643,6 +647,9 @@ function LineNumberedOutput({
   wrap: boolean;
   json: boolean;
 }) {
+  if (!value) {
+    return <Empty className="output-empty" image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无命令输出" />;
+  }
   const rows = value.length > 0 ? value.split('\n') : [''];
   const lineNumberWidth = Math.max(2, String(rows.length).length);
   return <div
@@ -704,33 +711,10 @@ function AutoFitText({
   </span>;
 }
 
-function runningTaskText(task: any) {
-  return [
-    'agent 已反馈执行状态',
-    '状态: ' + statusLabel(task.status),
-    '任务: ' + (taskLabels[task.task_type] || task.task_type || ''),
-    'task: ' + (task.task_id || ''),
-    '接收: ' + formatTime(task.accepted_at_ms),
-    '开始: ' + formatTime(task.started_at_ms),
-    '运行: ' + formatDuration(task.runtime_ms),
-    '输出: ' + (task.stream_lines ?? 0) + ' 行 / ' + formatBytes(task.stream_bytes ?? 0)
-  ].join('\n');
-}
-
 function renderCompletion(result: any) {
   const output = result.output || result.stdout_tail || result.stdout || '';
   const stderr = result.stderr_tail || result.stderr || '';
-  return [
-    `status: ${result.status || '-'}`,
-    `exit_code: ${result.exit_code ?? '-'}`,
-    `task_id: ${result.task_id || '-'}`,
-    `lines: ${result.output_lines ?? countLines(output)}`,
-    `bytes: ${result.output_bytes ?? new Blob([output]).size}`,
-    `sha256: ${result.output_sha256 || '-'}`,
-    '',
-    output,
-    stderr
-  ].join('\n');
+  return [output, stderr].filter(Boolean).join('\n');
 }
 
 function completionOutput(result: any) {

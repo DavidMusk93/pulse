@@ -453,6 +453,13 @@ body {
   min-height: 0;
   overflow: auto;
 }
+.output-empty {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+}
 .output-lines {
   padding: 0;
   font-variant-ligatures: none;
