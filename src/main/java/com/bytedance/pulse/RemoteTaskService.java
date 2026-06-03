@@ -38,6 +38,11 @@ public class RemoteTaskService {
                 new TaskDefinition(
                         "analyze_block_layout_dry_run",
                         taskDir + "/analyze-block-layout.py",
+                        List.of("--dry-run")),
+                "repair_corrupt_sqlite3_dry_run",
+                new TaskDefinition(
+                        "repair_corrupt_sqlite3_dry_run",
+                        taskDir + "/repair-corrupt-sqlite3.sh",
                         List.of("--dry-run")));
     }
 

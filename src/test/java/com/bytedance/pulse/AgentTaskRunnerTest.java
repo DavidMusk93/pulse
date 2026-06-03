@@ -46,6 +46,23 @@ class AgentTaskRunnerTest {
         assertEquals("invalid task arg", result.payload().get("runner_error"));
     }
 
+    @Test
+    void acceptsRepairCorruptSqlite3Task() throws Exception {
+        Path script = taskDir.resolve("repair-corrupt-sqlite3.sh");
+        Files.writeString(script, "printf 'REPAIR:%s\\n' \"$*\"\n");
+        AgentTaskRunner runner = new AgentTaskRunner("agent-1", fixedClock(), taskDir.toString());
+
+        runner.handleMessages(List.of(command(
+                "task-1",
+                "repair_corrupt_sqlite3_dry_run",
+                script.toString(),
+                List.of("--dry-run", "--port", "12345"))));
+
+        PulseMessage result = awaitResult(runner);
+        assertEquals("completed", result.payload().get("status"));
+        assertEquals("REPAIR:--dry-run --port 12345\n", result.payload().get("output"));
+    }
+
     private static PulseMessage command(String taskId, String taskType, String scriptPath, List<String> args) {
         return new PulseMessage(
                 "cmd-" + taskId,

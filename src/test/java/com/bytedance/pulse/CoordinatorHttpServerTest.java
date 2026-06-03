@@ -240,15 +240,16 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
-    void deployScriptShipsPython35AnalyzerAndSelectsByTargetPythonVersion() throws Exception {
+    void deployScriptShipsSingleAnalyzerAndRepairTask() throws Exception {
         String deploy = Files.readString(Path.of("docs/script/pulse-cdn-new-deploy.sh"));
 
-        assertTrue(Files.exists(Path.of("docs/task/analyze-block-layout-py35.py")));
-        assertTrue(deploy.contains("analyze-block-layout-py35.py"));
+        assertTrue(Files.exists(Path.of("docs/task/analyze-block-layout.py")));
+        assertTrue(Files.exists(Path.of("docs/task/repair-corrupt-sqlite3.sh")));
+        assertTrue(deploy.contains("analyze-block-layout.py"));
+        assertTrue(deploy.contains("repair-corrupt-sqlite3.sh"));
+        assertTrue(!deploy.contains("analyze-block-layout-py35.py"));
         assertTrue(deploy.contains("python3_version"));
-        assertTrue(deploy.contains("task_script_variant=\"py35\""));
-        assertTrue(deploy.contains("TASK_SCRIPT analyze-block-layout.py variant=${task_script_variant}"));
-        assertTrue(deploy.contains("cp \"$install_root/tasks/analyze-block-layout-py35.py\" \"$install_root/tasks/analyze-block-layout.py\""));
+        assertTrue(deploy.contains("TASK_SCRIPT analyze-block-layout.py variant=standard"));
     }
 
     @Test
@@ -275,6 +276,15 @@ class CoordinatorHttpServerTest {
         assertEquals(200, customArgs.statusCode());
         JsonNode custom = mapper.readTree(customArgs.body());
         assertEquals("--limit", custom.get("execution_queue").get(1).get("args").get(1).asText());
+
+        HttpResponse<String> repair = postJson("/api/agents/agent-1/tasks", """
+                {"task_type":"repair_corrupt_sqlite3_dry_run","args":["--dry-run","--port","12345"]}
+                """);
+
+        assertEquals(200, repair.statusCode());
+        JsonNode repairJson = mapper.readTree(repair.body());
+        assertEquals("repair_corrupt_sqlite3_dry_run", repairJson.get("execution_queue").get(2).get("task_type").asText());
+        assertEquals("--port", repairJson.get("execution_queue").get(2).get("args").get(1).asText());
     }
 
     @Test

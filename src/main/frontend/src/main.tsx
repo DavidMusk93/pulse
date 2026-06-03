@@ -79,7 +79,8 @@ const clusterCollapseStorageKey = 'pulse.cluster-collapse.v1';
 
 const taskLabels: Record<string, string> = {
   prepare_disk_layout_dry_run: '磁盘布局',
-  analyze_block_layout_dry_run: '块分布'
+  analyze_block_layout_dry_run: '块分布',
+  repair_corrupt_sqlite3_dry_run: '修复 SQLite'
 };
 const defaultTaskArgs = '--dry-run';
 
