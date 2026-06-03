@@ -171,7 +171,9 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("threads"));
         assertTrue(js.body().contains("completion-viewer"));
         assertTrue(js.body().contains("json-output"));
-        assertTrue(js.body().contains("格式化"));
+        assertTrue(js.body().contains("Markdown"));
+        assertTrue(js.body().contains("搜索输出"));
+        assertTrue(js.body().contains("不换行"));
         assertTrue(js.body().contains("拷贝"));
         assertTrue(js.body().contains("/tasks/completions/"));
         assertTrue(js.body().contains("/pop"));
@@ -222,6 +224,9 @@ class CoordinatorHttpServerTest {
         assertTrue(css.body().contains(".task-workspace .ant-card-head"));
         assertTrue(css.body().contains(".task-workspace .ant-card-head-title"));
         assertTrue(css.body().contains(".completion-toolbar"));
+        assertTrue(css.body().contains(".output-line-number"));
+        assertTrue(css.body().contains(".output-line-error"));
+        assertTrue(css.body().contains(".markdown-output"));
         assertTrue(css.body().contains(".json-key"));
         assertTrue(!response.body().contains("http-equiv=\"refresh\""));
     }

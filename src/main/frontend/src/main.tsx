@@ -9,6 +9,7 @@ import {
   ConfigProvider,
   Empty,
   Flex,
+  Input,
   List,
   Modal,
   Progress,
@@ -573,25 +574,92 @@ function TaskModal(props: {
 }
 
 function CompletionViewer({ value, meta, running }: { value: string; meta?: any; running?: boolean }) {
-  const [mode, setMode] = useState<'auto' | 'raw'>('auto');
+  const [mode, setMode] = useState<'log' | 'json' | 'markdown' | 'raw'>('log');
+  const [query, setQuery] = useState('');
+  const [wrap, setWrap] = useState(true);
   const parsed = useMemo(() => parseJsonOutput(value), [value]);
-  const display = mode === 'auto' && parsed.ok ? parsed.formatted : value;
+  const display = mode === 'json' && parsed.ok ? parsed.formatted : value;
   const lines = Number(meta?.output_lines ?? meta?.stream_lines ?? countLines(value));
   const bytes = Number(meta?.output_bytes ?? meta?.stream_bytes ?? new Blob([value]).size);
+  const outputType = String(meta?.output_type ?? meta?.outputType ?? meta?.stream_id ?? '').toLowerCase();
+  const markdownHint = outputType === 'markdown' || looksLikeMarkdown(value);
+  const matches = query ? countMatches(display, query) : 0;
   return <div className="completion-viewer">
     <Flex className="completion-toolbar" justify="space-between" align="center" gap={8}>
-      <Space size={8}>
-        <Segmented size="small" value={mode} onChange={next => setMode(next as 'auto' | 'raw')} options={[{ label: '格式化', value: 'auto' }, { label: '原始', value: 'raw' }]} />
+      <Space size={8} wrap>
+        <Segmented
+          size="small"
+          value={mode}
+          onChange={next => setMode(next as 'log' | 'json' | 'markdown' | 'raw')}
+          options={[
+            { label: '日志', value: 'log' },
+            { label: 'JSON', value: 'json', disabled: !parsed.ok },
+            { label: 'Markdown', value: 'markdown' },
+            { label: '原始', value: 'raw' }
+          ]}
+        />
         {parsed.ok && <Tag color="blue">JSON</Tag>}
+        {markdownHint && <Tag color="purple">Markdown</Tag>}
         {running && <Tag color="gold">未完成</Tag>}
         <Tag>{lines} 行</Tag>
         <Tag>{formatBytes(bytes)}</Tag>
+        {query && <Tag color={matches > 0 ? 'green' : 'red'}>{matches} 匹配</Tag>}
       </Space>
-      <Button size="small" onClick={() => navigator.clipboard?.writeText(display)}>拷贝</Button>
+      <Space size={8}>
+        <Input.Search
+          size="small"
+          allowClear
+          className="output-search"
+          placeholder="搜索输出"
+          value={query}
+          onChange={event => setQuery(event.target.value)}
+        />
+        <Button size="small" onClick={() => setWrap(next => !next)}>{wrap ? '不换行' : '自动换行'}</Button>
+        <Button size="small" onClick={() => navigator.clipboard?.writeText(display)}>拷贝</Button>
+      </Space>
     </Flex>
-    {mode === 'auto' && parsed.ok
-      ? <pre className="task-output json-output" dangerouslySetInnerHTML={{ __html: highlightJson(display) }} />
-      : <pre className="task-output">{display}</pre>}
+    {mode === 'markdown'
+      ? <div className="task-output markdown-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(value) }} />
+      : <LineNumberedOutput
+          value={display}
+          mode={mode}
+          query={query}
+          wrap={wrap}
+          json={mode === 'json' && parsed.ok}
+        />}
+  </div>;
+}
+
+function LineNumberedOutput({
+  value,
+  mode,
+  query,
+  wrap,
+  json
+}: {
+  value: string;
+  mode: 'log' | 'json' | 'raw';
+  query: string;
+  wrap: boolean;
+  json: boolean;
+}) {
+  const rows = value.length > 0 ? value.split('\n') : [''];
+  const lineNumberWidth = Math.max(2, String(rows.length).length);
+  return <div
+    className={`task-output output-lines ${wrap ? 'output-wrap' : 'output-nowrap'} ${json ? 'json-output' : ''}`}
+    data-mode={mode}
+    style={{ '--line-number-width': `${lineNumberWidth}ch` } as React.CSSProperties}
+  >
+    {rows.map((line, index) => {
+      const normalized = mode === 'log' ? stripAnsi(line) : line;
+      return <div className={`output-line ${logLevelClass(normalized)}`} key={`${index}-${line.length}`}>
+        <span className="output-line-number">{index + 1}</span>
+        <span
+          className="output-line-content"
+          dangerouslySetInnerHTML={{ __html: json ? highlightJsonLine(normalized, query) : highlightSearch(escapeHtml(normalized), query) }}
+        />
+      </div>;
+    })}
   </div>;
 }
 
@@ -744,6 +812,134 @@ function highlightJson(value: string) {
       }
       return `<span class="json-number">${match}</span>`;
     });
+}
+
+function highlightJsonLine(value: string, query: string) {
+  return query ? highlightSearch(escapeHtml(value), query) : highlightJson(value);
+}
+
+function highlightSearch(escapedHtml: string, query: string) {
+  if (!query) return escapedHtml;
+  const escapedQuery = escapeHtml(query);
+  if (!escapedQuery) return escapedHtml;
+  return escapedHtml.replace(new RegExp(escapeRegExp(escapedQuery), 'gi'), match => `<mark>${match}</mark>`);
+}
+
+function countMatches(value: string, query: string) {
+  if (!query) return 0;
+  return Array.from(value.matchAll(new RegExp(escapeRegExp(query), 'gi'))).length;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripAnsi(value: string) {
+  return value.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+}
+
+function logLevelClass(line: string) {
+  const lower = line.toLowerCase();
+  if (/\b(error|failed|failure|exception|fatal|panic)\b/.test(lower)) return 'output-line-error';
+  if (/\b(warn|warning|retry|timeout|backpressure)\b/.test(lower)) return 'output-line-warn';
+  if (/\b(success|ok|done|completed|active)\b/.test(lower)) return 'output-line-ok';
+  if (/\b(info|start|running|progress)\b/.test(lower)) return 'output-line-info';
+  return '';
+}
+
+function looksLikeMarkdown(value: string) {
+  const sample = value.slice(0, 4096);
+  return /(^|\n)#{1,3}\s+\S/.test(sample)
+    || /(^|\n)\s*[-*]\s+\S/.test(sample)
+    || /(^|\n)>\s+\S/.test(sample)
+    || /```/.test(sample)
+    || /\[[^\]]+\]\(https?:\/\/[^)]+\)/.test(sample);
+}
+
+function renderMarkdown(value: string) {
+  const rows = value.split('\n');
+  const html: string[] = [];
+  const code: string[] = [];
+  let inCode = false;
+  let listOpen = false;
+
+  const closeList = () => {
+    if (listOpen) {
+      html.push('</ul>');
+      listOpen = false;
+    }
+  };
+
+  for (const row of rows) {
+    const fence = row.trim().match(/^```/);
+    if (fence) {
+      if (inCode) {
+        html.push(`<pre class="markdown-code"><code>${escapeHtml(code.join('\n'))}</code></pre>`);
+        code.length = 0;
+        inCode = false;
+      } else {
+        closeList();
+        inCode = true;
+      }
+      continue;
+    }
+    if (inCode) {
+      code.push(row);
+      continue;
+    }
+
+    const heading = row.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      closeList();
+      const level = heading[1].length;
+      html.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
+      continue;
+    }
+
+    const bullet = row.match(/^\s*[-*]\s+(.+)$/);
+    if (bullet) {
+      if (!listOpen) {
+        html.push('<ul>');
+        listOpen = true;
+      }
+      html.push(`<li>${inlineMarkdown(bullet[1])}</li>`);
+      continue;
+    }
+
+    const quote = row.match(/^\s*>\s+(.+)$/);
+    if (quote) {
+      closeList();
+      html.push(`<blockquote>${inlineMarkdown(quote[1])}</blockquote>`);
+      continue;
+    }
+
+    if (!row.trim()) {
+      closeList();
+      html.push('<div class="markdown-gap"></div>');
+      continue;
+    }
+
+    closeList();
+    html.push(`<p>${inlineMarkdown(row)}</p>`);
+  }
+  closeList();
+  if (inCode) {
+    html.push(`<pre class="markdown-code"><code>${escapeHtml(code.join('\n'))}</code></pre>`);
+  }
+  return html.join('');
+}
+
+function inlineMarkdown(value: string) {
+  return escapeHtml(value)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_match, text, url) => {
+      return `<a href="${escapeAttribute(url)}" target="_blank" rel="noreferrer">${text}</a>`;
+    });
+}
+
+function escapeAttribute(value: string) {
+  return escapeHtml(value).replace(/`/g, '&#96;');
 }
 
 function escapeHtml(value: string) {
