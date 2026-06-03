@@ -115,6 +115,10 @@ public class CoordinatorService {
         return taskService.enqueue(agentId, taskType);
     }
 
+    public TaskSnapshot enqueueTask(String agentId, String taskType, List<String> args) {
+        return taskService.enqueue(agentId, taskType, args);
+    }
+
     public TaskSnapshot keepCompletion(String agentId, String taskId) {
         return taskService.keepCompletion(agentId, taskId);
     }

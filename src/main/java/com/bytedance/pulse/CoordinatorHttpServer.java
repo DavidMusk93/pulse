@@ -95,7 +95,7 @@ public class CoordinatorHttpServer {
                     if (taskType == null || taskType.toString().isBlank()) {
                         throw new IllegalArgumentException("task_type is required");
                     }
-                    writeJson(exchange, 200, service.enqueueTask(agentId, taskType.toString()));
+                    writeJson(exchange, 200, service.enqueueTask(agentId, taskType.toString(), parseArgs(body.get("args"))));
                     return;
                 }
             }
@@ -129,6 +129,24 @@ public class CoordinatorHttpServer {
         try (InputStream body = exchange.getRequestBody()) {
             return mapper.readValue(body, type);
         }
+    }
+
+    private static List<String> parseArgs(Object rawArgs) {
+        if (rawArgs == null) {
+            return null;
+        }
+        if (rawArgs instanceof List<?> values) {
+            return values.stream()
+                    .map(String::valueOf)
+                    .toList();
+        }
+        String value = rawArgs.toString();
+        if (value.isBlank()) {
+            return null;
+        }
+        return Arrays.stream(value.trim().split("\\s+"))
+                .filter(part -> !part.isBlank())
+                .toList();
     }
 
     private void writeJson(HttpExchange exchange, int status, Object body) throws IOException {

@@ -141,8 +141,11 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("/api/hosts"));
         assertTrue(js.body().contains("prepare_disk_layout_dry_run"));
         assertTrue(js.body().contains("analyze_block_layout_dry_run"));
-        assertTrue(js.body().contains("磁盘布局 dry-run"));
-        assertTrue(js.body().contains("块分布 dry-run"));
+        assertTrue(js.body().contains("磁盘布局"));
+        assertTrue(js.body().contains("块分布"));
+        assertTrue(js.body().contains("自定义参数"));
+        assertTrue(js.body().contains("默认参数为 --dry-run"));
+        assertTrue(js.body().contains("Run UI"));
         assertTrue(js.body().contains("sampledAtMs"));
         assertTrue(js.body().contains("agent 执行中"));
         assertTrue(js.body().contains("run-button"));
@@ -208,6 +211,7 @@ class CoordinatorHttpServerTest {
         assertTrue(css.body().contains(".metric-row>.ant-col>.ant-card"));
         assertTrue(css.body().contains(".metric-row .ant-statistic"));
         assertTrue(css.body().contains(".cluster-toggle-button"));
+        assertTrue(css.body().contains(".cluster-run-button"));
         assertTrue(css.body().contains(".cluster-section.cluster-section-collapsed"));
         assertTrue(css.body().contains("writing-mode:horizontal-tb"));
         assertTrue(css.body().contains("overflow:hidden auto") || css.body().contains("overflow-y:auto"));
@@ -263,6 +267,14 @@ class CoordinatorHttpServerTest {
         assertEquals("agent-1", json.get("agent_id").asText());
         assertEquals("analyze_block_layout_dry_run", json.get("execution_queue").get(0).get("task_type").asText());
         assertEquals("--dry-run", json.get("execution_queue").get(0).get("args").get(0).asText());
+
+        HttpResponse<String> customArgs = postJson("/api/agents/agent-1/tasks", """
+                {"task_type":"analyze_block_layout_dry_run","args":["--dry-run","--limit","10"]}
+                """);
+
+        assertEquals(200, customArgs.statusCode());
+        JsonNode custom = mapper.readTree(customArgs.body());
+        assertEquals("--limit", custom.get("execution_queue").get(1).get("args").get(1).asText());
     }
 
     @Test

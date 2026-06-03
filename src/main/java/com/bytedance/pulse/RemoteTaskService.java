@@ -60,10 +60,15 @@ public class RemoteTaskService {
     }
 
     public synchronized TaskSnapshot enqueue(String agentId, String taskType) {
+        return enqueue(agentId, taskType, null);
+    }
+
+    public synchronized TaskSnapshot enqueue(String agentId, String taskType, List<String> requestedArgs) {
         TaskDefinition definition = taskDefinitions.get(taskType);
         if (definition == null) {
             throw new IllegalArgumentException("unknown task_type: " + taskType);
         }
+        List<String> args = normalizeArgs(requestedArgs, definition.args());
         long now = clock.millis();
         String taskId = "task-" + UUID.randomUUID();
         String traceId = "trace-" + UUID.randomUUID();
@@ -73,7 +78,7 @@ public class RemoteTaskService {
                 agentId,
                 taskType,
                 definition.scriptPath(),
-                definition.args(),
+                args,
                 "queued",
                 now,
                 null,
@@ -84,8 +89,29 @@ public class RemoteTaskService {
                 "pulse-ui",
                 1);
         queue(agentId).add(task);
-        trace(task, "task.enqueued", "ui", "pulse-ui", Map.of("task_type", taskType));
+        trace(task, "task.enqueued", "ui", "pulse-ui", Map.of("task_type", taskType, "args", args));
         return snapshot(agentId);
+    }
+
+    private static List<String> normalizeArgs(List<String> requestedArgs, List<String> defaultArgs) {
+        List<String> args = requestedArgs == null || requestedArgs.isEmpty() ? defaultArgs : requestedArgs;
+        if (args.isEmpty()) {
+            return List.of("--dry-run");
+        }
+        if (args.size() > 32) {
+            throw new IllegalArgumentException("too many task args");
+        }
+        List<String> normalized = new ArrayList<>();
+        for (String arg : args) {
+            if (arg == null || arg.isBlank()) {
+                continue;
+            }
+            if (arg.length() > 256 || arg.indexOf('\n') >= 0 || arg.indexOf('\r') >= 0 || arg.indexOf('\0') >= 0) {
+                throw new IllegalArgumentException("invalid task arg");
+            }
+            normalized.add(arg);
+        }
+        return normalized.isEmpty() ? List.of("--dry-run") : List.copyOf(normalized);
     }
 
     public synchronized Optional<PulseMessage> nextCommand(String agentId) {

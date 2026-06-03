@@ -78,9 +78,12 @@ const loadWindows = new Map<string, { windowStart: number; displayAvg: number; s
 const clusterCollapseStorageKey = 'pulse.cluster-collapse.v1';
 
 const taskLabels: Record<string, string> = {
-  prepare_disk_layout_dry_run: '磁盘布局 dry-run',
-  analyze_block_layout_dry_run: '块分布 dry-run'
+  prepare_disk_layout_dry_run: '磁盘布局',
+  analyze_block_layout_dry_run: '块分布'
 };
+const defaultTaskArgs = '--dry-run';
+
+type ActiveClusterRun = { name: string; hosts: HostView[] };
 
 function normalizeAddress(value?: string) {
   const raw = String(value || '').replaceAll('[', '').replaceAll(']', '');
@@ -255,16 +258,23 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json();
 }
 
+function parseTaskArgs(input: string) {
+  return input.split(/\s+/).map(part => part.trim()).filter(Boolean);
+}
+
 function App() {
   const [hosts, setHosts] = useState<HostView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [activeHost, setActiveHost] = useState<HostView | null>(null);
+  const [activeCluster, setActiveCluster] = useState<ActiveClusterRun | null>(null);
   const [snapshot, setSnapshot] = useState<TaskSnapshot | null>(null);
   const [output, setOutput] = useState('');
   const [taskType, setTaskType] = useState('prepare_disk_layout_dry_run');
+  const [taskArgs, setTaskArgs] = useState(defaultTaskArgs);
   const [collapsedClusters, setCollapsedClusters] = useState<Record<string, boolean>>(() => loadCollapsedClusters());
   const viewport = useRef({ left: 0, top: 0 });
+  const activeTargetHost = activeHost || activeCluster?.hosts[0] || null;
 
   async function refreshHosts() {
     viewport.current = { left: window.scrollX, top: window.scrollY };
@@ -296,11 +306,11 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!activeHost) return;
-    refreshSnapshot(activeHost).catch(err => setOutput(String(err)));
-    const timer = window.setInterval(() => refreshSnapshot(activeHost).catch(err => setOutput(String(err))), 2000);
+    if (!activeTargetHost) return;
+    refreshSnapshot(activeTargetHost).catch(err => setOutput(String(err)));
+    const timer = window.setInterval(() => refreshSnapshot(activeTargetHost).catch(err => setOutput(String(err))), 2000);
     return () => window.clearInterval(timer);
-  }, [activeHost?.ip, activeHost?.agent_id, activeHost?.agentId]);
+  }, [activeTargetHost?.ip, activeTargetHost?.agent_id, activeTargetHost?.agentId]);
 
   const groups = useMemo(() => groupByCluster(hosts), [hosts]);
   const attentionClusters = useMemo(() => new Set(groups.filter(([, clusterHosts]) => clusterNeedsAttention(clusterHosts)).map(([cluster]) => cluster)), [groups]);
@@ -378,34 +388,56 @@ function App() {
             else next[cluster] = true;
             return next;
           })}
-          onRun={host => { setActiveHost(host); setSnapshot(null); setOutput(''); }}
+          onRun={host => { setActiveHost(host); setActiveCluster(null); setSnapshot(null); setOutput(''); }}
+          onClusterRun={() => {
+            setActiveHost(null);
+            setActiveCluster({ name: cluster, hosts: sortHosts(clusterHosts) });
+            setSnapshot(null);
+            setOutput('');
+          }}
         />)}
       </section>
 
       <TaskModal
-        host={activeHost}
-        open={!!activeHost}
-        onClose={() => setActiveHost(null)}
+        host={activeTargetHost}
+        clusterName={activeCluster?.name || ''}
+        clusterHosts={activeCluster?.hosts || []}
+        open={!!activeTargetHost}
+        onClose={() => { setActiveHost(null); setActiveCluster(null); }}
         snapshot={snapshot}
         output={output}
         taskType={taskType}
         setTaskType={setTaskType}
-        onRun={async () => {
-          if (!activeHost) return;
-          const id = encodeURIComponent(agentId(activeHost));
-          const data = await fetchJson<TaskSnapshot>(`/api/agents/${id}/tasks`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ task_type: taskType }) });
-          setSnapshot(data);
+        taskArgs={taskArgs}
+        setTaskArgs={setTaskArgs}
+        onRun={async args => {
+          const targets = activeCluster?.hosts || (activeHost ? [activeHost] : []);
+          if (!targets.length) return;
+          const results = await Promise.allSettled(targets.map(async target => {
+            const id = encodeURIComponent(agentId(target));
+            return fetchJson<TaskSnapshot>(`/api/agents/${id}/tasks`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ task_type: taskType, args })
+            });
+          }));
+          const first = results.find((result): result is PromiseFulfilledResult<TaskSnapshot> => result.status === 'fulfilled');
+          if (first) setSnapshot(first.value);
           setOutput('');
+          const failed = results.filter(result => result.status === 'rejected');
+          if (failed.length) {
+            setOutput(`集群下发部分失败: ${failed.length}/${targets.length}\n${failed.map(result => String((result as PromiseRejectedResult).reason)).join('\n')}`);
+          }
         }}
         onPop={async () => {
-          if (!activeHost || !snapshot?.completion_queue?.[0]) {
-            await refreshSnapshot(activeHost as HostView);
+          if (!activeTargetHost || !snapshot?.completion_queue?.[0]) {
+            if (activeTargetHost) await refreshSnapshot(activeTargetHost);
             return;
           }
-          const id = encodeURIComponent(agentId(activeHost));
+          const id = encodeURIComponent(agentId(activeTargetHost));
           const taskId = encodeURIComponent(snapshot.completion_queue[0].task_id);
           await fetchJson(`/api/agents/${id}/tasks/completions/${taskId}/pop`, { method: 'POST' });
-          await refreshSnapshot(activeHost);
+          await refreshSnapshot(activeTargetHost);
         }}
       />
     </main>
@@ -419,7 +451,8 @@ function ClusterSection({
   collapsed,
   needsAttention,
   onToggle,
-  onRun
+  onRun,
+  onClusterRun
 }: {
   cluster: string;
   hosts: HostView[];
@@ -428,13 +461,17 @@ function ClusterSection({
   needsAttention: boolean;
   onToggle: () => void;
   onRun: (host: HostView) => void;
+  onClusterRun: () => void;
 }) {
   const sorted = sortHosts(hosts);
   return <Card
     className={`cluster-section ${collapsed ? 'cluster-section-collapsed' : ''}`.trim()}
     style={{ ['--cluster-hue' as any]: hue }}
     title={<Space size={8}><span>{cluster}</span><Tag>{hosts.length} 台</Tag>{needsAttention && <Tag color="warning">需关注</Tag>}</Space>}
-    extra={<Button size="small" type="text" className="cluster-toggle-button" onClick={onToggle} disabled={needsAttention}>{needsAttention ? '异常展开' : (collapsed ? '展开' : '折叠')}</Button>}
+    extra={<Space size={6}>
+      <Button size="small" className="cluster-run-button" onClick={onClusterRun}>Run UI</Button>
+      <Button size="small" type="text" className="cluster-toggle-button" onClick={onToggle} disabled={needsAttention}>{needsAttention ? '异常展开' : (collapsed ? '展开' : '折叠')}</Button>
+    </Space>}
     variant="outlined"
   >
     {!collapsed && <div className="tile-grid">
@@ -501,15 +538,21 @@ function HostTile({ host, onRun }: { host: HostView; onRun: () => void }) {
 
 function TaskModal(props: {
   host: HostView | null;
+  clusterName: string;
+  clusterHosts: HostView[];
   open: boolean;
   onClose: () => void;
   snapshot: TaskSnapshot | null;
   output: string;
   taskType: string;
   setTaskType: (value: string) => void;
-  onRun: () => Promise<void>;
+  taskArgs: string;
+  setTaskArgs: (value: string) => void;
+  onRun: (args: string[]) => Promise<void>;
   onPop: () => Promise<void>;
 }) {
+  const [argsUnlocked, setArgsUnlocked] = useState(false);
+  const unlockClicks = useRef<number[]>([]);
   const tasks = activeHostTasks(props.host || undefined);
   const agentTask = tasks[0];
   const completions = props.snapshot?.completion_queue || [];
@@ -523,17 +566,46 @@ function TaskModal(props: {
   const outputMeta = latestCompletion || streamLog || asyncTask;
   const outputRunning = !latestCompletion && !!asyncTask;
   const outputNotice = outputStatusNotice(completionText, outputMeta, outputRunning);
+  const isClusterRun = props.clusterHosts.length > 0;
+  const targetTitle = isClusterRun ? props.clusterName : normalizeAddress(props.host?.ip);
+  const targetDescription = isClusterRun ? `${props.clusterHosts.length} 台 host，将逐台下发作业` : '单节点作业';
+  function handleResultTitleClick() {
+    const now = Date.now();
+    const next = [...unlockClicks.current.filter(value => now - value <= 5000), now];
+    unlockClicks.current = next;
+    if (next.length >= 3) {
+      setArgsUnlocked(true);
+      if (!props.taskArgs.trim()) {
+        props.setTaskArgs(defaultTaskArgs);
+      }
+    }
+  }
   return <Modal open={props.open} onCancel={props.onClose} footer={null} width="min(1320px, calc(100vw - 44px))" className="task-modal" title={null} closeIcon={<span className="mac-close" />}>
     <div className="task-shell">
       <div className="task-sidebar">
         <Card className="task-hero" variant="outlined">
           <Flex gap={8} align="center">
             <Select value={props.taskType} onChange={props.setTaskType} className="task-select" options={Object.entries(taskLabels).map(([value, label]) => ({ value, label }))}/>
-            <Button type="primary" onClick={props.onRun}>执行</Button>
+            <Button type="primary" onClick={() => props.onRun(parseTaskArgs(props.taskArgs || defaultTaskArgs))}>执行</Button>
             <Button onClick={props.onPop} icon={<InboxOutlined />}>弹出结果</Button>
           </Flex>
+          {argsUnlocked && <div className="task-args-panel">
+            <Typography.Text className="task-args-title">自定义参数</Typography.Text>
+            <Input.TextArea
+              value={props.taskArgs}
+              onChange={event => props.setTaskArgs(event.target.value)}
+              autoSize={{ minRows: 1, maxRows: 3 }}
+              placeholder={defaultTaskArgs}
+            />
+            <Typography.Text type="secondary">默认参数为 --dry-run。非 dry-run 操作会真实修改线上机器，执行前必须确认目标范围。</Typography.Text>
+          </div>}
         </Card>
-        <Card title="目标节点"><Typography.Text strong>{normalizeAddress(props.host?.ip)}</Typography.Text></Card>
+        <Card title={isClusterRun ? '目标集群' : '目标节点'}>
+          <Space direction="vertical" size={4}>
+            <Typography.Text strong>{targetTitle}</Typography.Text>
+            <Typography.Text type="secondary">{targetDescription}</Typography.Text>
+          </Space>
+        </Card>
         <Card title="当前任务">
           <Space direction="vertical" size={6} className="task-state-card">
             <Badge status={statusColor(agentTask?.status || executions[0]?.status)} text={statusLabel(agentTask?.status || executions[0]?.status || '空闲')} />
@@ -561,7 +633,7 @@ function TaskModal(props: {
       </div>
       <Card
         className="task-workspace"
-        title={<OutputPanelTitle meta={outputMeta} notice={outputNotice} value={completionText} />}
+        title={<OutputPanelTitle meta={outputMeta} notice={outputNotice} value={completionText} onUnlock={handleResultTitleClick} />}
         variant="outlined"
       >
         <div className="completion-pane">
@@ -572,11 +644,11 @@ function TaskModal(props: {
   </Modal>;
 }
 
-function OutputPanelTitle({ meta, notice, value }: { meta?: any; notice: OutputNotice | null; value: string }) {
+function OutputPanelTitle({ meta, notice, value, onUnlock }: { meta?: any; notice: OutputNotice | null; value: string; onUnlock?: () => void }) {
   const lines = Number(meta?.output_lines ?? meta?.stream_lines ?? countLines(value));
   const bytes = Number(meta?.output_bytes ?? meta?.stream_bytes ?? new Blob([value]).size);
   return <div className="output-panel-title">
-    <span className="output-title-main">结果查看</span>
+    <button type="button" className="output-title-main output-title-trigger" onClick={onUnlock}>结果查看</button>
     <span className="output-title-spacer" />
     {notice && <OutputStatusNotice notice={notice} compact />}
     {meta?.status && <span className={`output-title-pill output-title-${statusColor(meta.status)}`}>{statusLabel(meta.status)}</span>}

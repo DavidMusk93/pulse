@@ -154,6 +154,10 @@ body {
 .cluster-toggle-button:disabled {
   color: #9aa8bc !important;
 }
+.cluster-run-button {
+  border-radius: 999px !important;
+  font-weight: 600;
+}
 .tile-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
@@ -378,6 +382,23 @@ body {
   flex: 1 1 0;
   min-width: 180px;
 }
+.task-args-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #fde68a;
+  border-radius: 16px;
+  background: #fffbeb;
+}
+.task-args-title {
+  display: block;
+  margin-bottom: 8px;
+  color: #92400e;
+  font-weight: 650;
+}
+.task-args-panel .ant-input {
+  margin-bottom: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
 .task-state-card {
   width: 100%;
 }
@@ -417,6 +438,20 @@ body {
   color: #111827;
   font-weight: 680;
   letter-spacing: -.01em;
+}
+.output-title-trigger {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: default;
+  font: inherit;
+  text-align: left;
+}
+.output-title-trigger:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 4px;
+  border-radius: 6px;
 }
 .output-title-spacer {
   flex: 1 1 auto;
