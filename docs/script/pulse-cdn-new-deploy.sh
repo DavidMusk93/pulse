@@ -11,6 +11,34 @@ sha256_file() {
   fi
 }
 
+last_error_line() {
+  local file=$1
+  if [ -s "$file" ]; then
+    tail -n 1 "$file" | tr '\t\r\n' '   ' | sed 's/  */ /g'
+  else
+    echo "no_stderr"
+  fi
+}
+
+run_with_stderr() {
+  local host=$1
+  local index=$2
+  local step=$3
+  shift 3
+  local err_file
+  local rc
+  local reason
+  err_file=$(mktemp "/tmp/pulse-deploy.${index}.${step}.stderr.XXXXXX")
+  "$@" 2> >(tee "$err_file" >&2)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    reason=$(last_error_line "$err_file")
+    echo "ERROR phase=deploy host=${host} index=${index} step=${step} rc=${rc} reason=${reason}" >&2
+  fi
+  rm -f "$err_file"
+  return "$rc"
+}
+
 call() {
   local host=$1
   local index=$2
@@ -44,44 +72,20 @@ call() {
   remote_tmp="/tmp/pulse-deploy.${index}.$$"
 
   echo "EVENT phase=deploy host=${host} index=${index} status=start root=${install_root}"
-  ssh "$host" "rm -rf '$remote_tmp' && mkdir -p '$remote_tmp'" || {
-    rc=$?
-    echo "ERROR phase=deploy host=${host} index=${index} step=stage_remote_tmp rc=${rc}" >&2
-    return "$rc"
-  }
-  scp "$jar_path" "${scp_host}:${remote_tmp}/pulse.jar" || {
-    rc=$?
-    echo "ERROR phase=deploy host=${host} index=${index} step=upload_jar rc=${rc}" >&2
-    return "$rc"
-  }
+  run_with_stderr "$host" "$index" stage_remote_tmp ssh "$host" "rm -rf '$remote_tmp' && mkdir -p '$remote_tmp'" || return "$?"
+  run_with_stderr "$host" "$index" upload_jar scp "$jar_path" "${scp_host}:${remote_tmp}/pulse.jar" || return "$?"
   task_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../task" && pwd)"
   if [ -d "$task_dir" ]; then
-    ssh "$host" "mkdir -p '$remote_tmp/tasks'" || {
-      rc=$?
-      echo "ERROR phase=deploy host=${host} index=${index} step=stage_task_dir rc=${rc}" >&2
-      return "$rc"
-    }
-    scp "$task_dir"/prepare-disk-layout.sh "$task_dir"/analyze-block-layout.py "$task_dir"/analyze-block-layout-py35.py "${scp_host}:${remote_tmp}/tasks/" || {
-      rc=$?
-      echo "ERROR phase=deploy host=${host} index=${index} step=upload_tasks rc=${rc}" >&2
-      return "$rc"
-    }
+    run_with_stderr "$host" "$index" stage_task_dir ssh "$host" "mkdir -p '$remote_tmp/tasks'" || return "$?"
+    run_with_stderr "$host" "$index" upload_tasks scp "$task_dir"/prepare-disk-layout.sh "$task_dir"/analyze-block-layout.py "$task_dir"/analyze-block-layout-py35.py "${scp_host}:${remote_tmp}/tasks/" || return "$?"
   fi
   if [ -n "$jre_tarball" ] && [ "$jre_tarball" != "-" ]; then
-    scp "$jre_tarball" "${scp_host}:${remote_tmp}/pulse-jre.tar.gz" || {
-      rc=$?
-      echo "ERROR phase=deploy host=${host} index=${index} step=upload_jre rc=${rc}" >&2
-      return "$rc"
-    }
+    run_with_stderr "$host" "$index" upload_jre scp "$jre_tarball" "${scp_host}:${remote_tmp}/pulse-jre.tar.gz" || return "$?"
   fi
   if [ -n "$group_plan_path" ] && [ "$group_plan_path" != "-" ] && [ -f "$group_plan_path" ]; then
-    scp "$group_plan_path" "${scp_host}:${remote_tmp}/pulse-group-plan.csv" || {
-      rc=$?
-      echo "ERROR phase=deploy host=${host} index=${index} step=upload_group_plan rc=${rc}" >&2
-      return "$rc"
-    }
+    run_with_stderr "$host" "$index" upload_group_plan scp "$group_plan_path" "${scp_host}:${remote_tmp}/pulse-group-plan.csv" || return "$?"
   fi
-  ssh "$host" 'bash -s' -- "$host" "$coordinators_csv" "$install_root" "$remote_tmp" "$cluster_fallback" "$expected_jar_sha" <<'REMOTE'
+  run_with_stderr "$host" "$index" remote_install ssh "$host" 'bash -s' -- "$host" "$coordinators_csv" "$install_root" "$remote_tmp" "$cluster_fallback" "$expected_jar_sha" <<'REMOTE'
 set -euo pipefail
 
 host=$1
@@ -395,7 +399,7 @@ echo "ROLE agent=1 coordinator=${is_coordinator} cluster=${tide_cluster} area=${
 REMOTE
   rc=$?
   if [ "$rc" -ne 0 ]; then
-    echo "ERROR phase=deploy host=${host} index=${index} step=remote_install rc=${rc} remote_tmp=${remote_tmp}" >&2
+    echo "ERROR phase=deploy host=${host} index=${index} step=remote_install_cleanup rc=${rc} remote_tmp=${remote_tmp}" >&2
     return "$rc"
   fi
   echo "EVENT phase=deploy host=${host} index=${index} status=ok"
