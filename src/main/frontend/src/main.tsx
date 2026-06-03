@@ -520,6 +520,9 @@ function TaskModal(props: {
   const completionText = props.output || (latestCompletion ? completionOutput(latestCompletion) : (streamLog ? streamOutput(streamLog) : ''));
   const asyncTask = agentTask || executions[0];
   const currentTaskId = latestCompletion?.task_id || asyncTask?.task_id || props.snapshot?.traces?.[0]?.task_id || '';
+  const outputMeta = latestCompletion || streamLog || asyncTask;
+  const outputRunning = !latestCompletion && !!asyncTask;
+  const outputNotice = outputStatusNotice(completionText, outputMeta, outputRunning);
   return <Modal open={props.open} onCancel={props.onClose} footer={null} width="min(1320px, calc(100vw - 44px))" className="task-modal" title={null} closeIcon={<span className="mac-close" />}>
     <div className="task-shell">
       <div className="task-sidebar">
@@ -556,30 +559,45 @@ function TaskModal(props: {
           />
         </Card>
       </div>
-      <Card className="task-workspace" title="结果查看" variant="outlined">
+      <Card
+        className="task-workspace"
+        title={<OutputPanelTitle meta={outputMeta} notice={outputNotice} value={completionText} />}
+        variant="outlined"
+      >
         <div className="completion-pane">
-          <CompletionViewer value={completionText} meta={latestCompletion || streamLog || asyncTask} running={!latestCompletion && !!asyncTask} />
+          <CompletionViewer value={completionText} meta={outputMeta} />
         </div>
       </Card>
     </div>
   </Modal>;
 }
 
-function CompletionViewer({ value, meta, running }: { value: string; meta?: any; running?: boolean }) {
+function OutputPanelTitle({ meta, notice, value }: { meta?: any; notice: OutputNotice | null; value: string }) {
+  const lines = Number(meta?.output_lines ?? meta?.stream_lines ?? countLines(value));
+  const bytes = Number(meta?.output_bytes ?? meta?.stream_bytes ?? new Blob([value]).size);
+  return <div className="output-panel-title">
+    <span className="output-title-main">结果查看</span>
+    <span className="output-title-spacer" />
+    {notice && <OutputStatusNotice notice={notice} compact />}
+    {meta?.status && <span className={`output-title-pill output-title-${statusColor(meta.status)}`}>{statusLabel(meta.status)}</span>}
+    {meta?.exit_code !== undefined && meta?.exit_code !== null && <span className="output-title-pill">exit {meta.exit_code}</span>}
+    <span className="output-title-pill">{lines} 行</span>
+    <span className="output-title-pill">{formatBytes(bytes)}</span>
+  </div>;
+}
+
+function CompletionViewer({ value, meta }: { value: string; meta?: any }) {
   const [mode, setMode] = useState<'log' | 'json' | 'markdown' | 'raw'>('log');
   const [query, setQuery] = useState('');
   const [wrap, setWrap] = useState(true);
   const parsed = useMemo(() => parseJsonOutput(value), [value]);
   const display = mode === 'json' && parsed.ok ? parsed.formatted : value;
-  const lines = Number(meta?.output_lines ?? meta?.stream_lines ?? countLines(value));
-  const bytes = Number(meta?.output_bytes ?? meta?.stream_bytes ?? new Blob([value]).size);
   const outputType = String(meta?.output_type ?? meta?.outputType ?? meta?.stream_id ?? '').toLowerCase();
   const markdownHint = outputType === 'markdown' || looksLikeMarkdown(value);
   const matches = query ? countMatches(display, query) : 0;
-  const notice = outputStatusNotice(value, meta, running);
   return <div className="completion-viewer">
     <Flex className="completion-toolbar" justify="space-between" align="center" gap={8}>
-      <Space size={8} wrap>
+      <Space size={8}>
         <Segmented
           size="small"
           value={mode}
@@ -593,11 +611,6 @@ function CompletionViewer({ value, meta, running }: { value: string; meta?: any;
         />
         {parsed.ok && <Tag color="blue">JSON</Tag>}
         {markdownHint && <Tag color="purple">Markdown</Tag>}
-        {running && <Tag color="gold">未完成</Tag>}
-        {meta?.status && <Tag color={statusColor(meta.status)}>{statusLabel(meta.status)}</Tag>}
-        {meta?.exit_code !== undefined && meta?.exit_code !== null && <Tag>exit {meta.exit_code}</Tag>}
-        <Tag>{lines} 行</Tag>
-        <Tag>{formatBytes(bytes)}</Tag>
         {query && <Tag color={matches > 0 ? 'green' : 'red'}>{matches} 匹配</Tag>}
       </Space>
       <Space size={8}>
@@ -613,7 +626,6 @@ function CompletionViewer({ value, meta, running }: { value: string; meta?: any;
         <Button size="small" onClick={() => navigator.clipboard?.writeText(display)}>拷贝</Button>
       </Space>
     </Flex>
-    {notice && <OutputStatusNotice notice={notice} />}
     {mode === 'markdown'
       ? value
         ? <div className="task-output markdown-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(value) }} />
@@ -628,8 +640,10 @@ function CompletionViewer({ value, meta, running }: { value: string; meta?: any;
   </div>;
 }
 
-function OutputStatusNotice({ notice }: { notice: { tone: 'running' | 'empty' | 'done'; text: string } }) {
-  return <div className={`output-status-notice output-status-${notice.tone}`}>
+type OutputNotice = { tone: 'running' | 'empty' | 'done'; text: string };
+
+function OutputStatusNotice({ notice, compact }: { notice: OutputNotice; compact?: boolean }) {
+  return <div className={`output-status-notice output-status-${notice.tone} ${compact ? 'output-status-compact' : ''}`}>
     <span className="output-status-dot" />
     <span>{notice.text}</span>
   </div>;

@@ -184,7 +184,7 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("task_id"));
         assertTrue(js.body().contains("output_streams"));
         assertTrue(js.body().contains("暂无命令输出"));
-        assertTrue(js.body().contains("未完成"));
+        assertTrue(js.body().contains("队列中"));
         assertTrue(js.body().contains("KiB"));
         assertTrue(js.body().contains("Trace"));
         assertTrue(!js.body().contains("status-led"));
