@@ -109,6 +109,7 @@ if [ -d "$remote_tmp/tasks" ] && compgen -G "$remote_tmp/tasks/*" >/dev/null; th
   cp "$remote_tmp/tasks/"* "$install_root/tasks/"
   chmod 0755 "$install_root/tasks/"*
 fi
+rm -f "$install_root/tasks/analyze-block-layout-py35.py"
 
 python3_version=$(
   python3 - <<'PY' 2>/dev/null || true
