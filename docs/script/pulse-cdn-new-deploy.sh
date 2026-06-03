@@ -2,6 +2,15 @@
 
 CALL_RISK_LEVEL=destructive
 
+sha256_file() {
+  local file=$1
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}'
+  else
+    shasum -a 256 "$file" | awk '{print $1}'
+  fi
+}
+
 call() {
   local host=$1
   local index=$2
@@ -14,25 +23,65 @@ call() {
   local task_dir
   local scp_host
   local remote_tmp
+  local expected_jar_sha
+  local rc
+
+  if [ ! -f "$jar_path" ]; then
+    echo "ERROR phase=deploy host=${host} index=${index} step=local_validate reason=jar_not_found path=${jar_path}" >&2
+    return 2
+  fi
+  expected_jar_sha=$(sha256_file "$jar_path") || {
+    rc=$?
+    echo "ERROR phase=deploy host=${host} index=${index} step=local_validate reason=jar_sha_failed rc=${rc}" >&2
+    return "$rc"
+  }
+  if [ -n "$jre_tarball" ] && [ "$jre_tarball" != "-" ] && [ ! -f "$jre_tarball" ]; then
+    echo "ERROR phase=deploy host=${host} index=${index} step=local_validate reason=jre_not_found path=${jre_tarball}" >&2
+    return 3
+  fi
 
   scp_host=$(adapt "$host")
   remote_tmp="/tmp/pulse-deploy.${index}.$$"
 
   echo "EVENT phase=deploy host=${host} index=${index} status=start root=${install_root}"
-  ssh "$host" "mkdir -p '$remote_tmp'"
-  scp "$jar_path" "${scp_host}:${remote_tmp}/pulse.jar"
+  ssh "$host" "rm -rf '$remote_tmp' && mkdir -p '$remote_tmp'" || {
+    rc=$?
+    echo "ERROR phase=deploy host=${host} index=${index} step=stage_remote_tmp rc=${rc}" >&2
+    return "$rc"
+  }
+  scp "$jar_path" "${scp_host}:${remote_tmp}/pulse.jar" || {
+    rc=$?
+    echo "ERROR phase=deploy host=${host} index=${index} step=upload_jar rc=${rc}" >&2
+    return "$rc"
+  }
   task_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../task" && pwd)"
   if [ -d "$task_dir" ]; then
-    ssh "$host" "mkdir -p '$remote_tmp/tasks'"
-    scp "$task_dir"/prepare-disk-layout.sh "$task_dir"/analyze-block-layout.py "$task_dir"/analyze-block-layout-py35.py "${scp_host}:${remote_tmp}/tasks/"
+    ssh "$host" "mkdir -p '$remote_tmp/tasks'" || {
+      rc=$?
+      echo "ERROR phase=deploy host=${host} index=${index} step=stage_task_dir rc=${rc}" >&2
+      return "$rc"
+    }
+    scp "$task_dir"/prepare-disk-layout.sh "$task_dir"/analyze-block-layout.py "$task_dir"/analyze-block-layout-py35.py "${scp_host}:${remote_tmp}/tasks/" || {
+      rc=$?
+      echo "ERROR phase=deploy host=${host} index=${index} step=upload_tasks rc=${rc}" >&2
+      return "$rc"
+    }
   fi
   if [ -n "$jre_tarball" ] && [ "$jre_tarball" != "-" ]; then
-    scp "$jre_tarball" "${scp_host}:${remote_tmp}/pulse-jre.tar.gz"
+    scp "$jre_tarball" "${scp_host}:${remote_tmp}/pulse-jre.tar.gz" || {
+      rc=$?
+      echo "ERROR phase=deploy host=${host} index=${index} step=upload_jre rc=${rc}" >&2
+      return "$rc"
+    }
   fi
   if [ -n "$group_plan_path" ] && [ "$group_plan_path" != "-" ] && [ -f "$group_plan_path" ]; then
-    scp "$group_plan_path" "${scp_host}:${remote_tmp}/pulse-group-plan.csv"
+    scp "$group_plan_path" "${scp_host}:${remote_tmp}/pulse-group-plan.csv" || {
+      rc=$?
+      echo "ERROR phase=deploy host=${host} index=${index} step=upload_group_plan rc=${rc}" >&2
+      return "$rc"
+    }
   fi
-  ssh "$host" 'bash -s' -- "$host" "$coordinators_csv" "$install_root" "$remote_tmp" "$cluster_fallback" <<'REMOTE'
+  ssh "$host" 'bash -s' -- "$host" "$coordinators_csv" "$install_root" "$remote_tmp" "$cluster_fallback" "$expected_jar_sha" <<'REMOTE'
 set -euo pipefail
 
 host=$1
@@ -40,13 +89,19 @@ coordinators_csv=$2
 install_root=$3
 remote_tmp=$4
 cluster_fallback=$5
+expected_jar_sha=$6
 
 java_bin="${PULSE_JAVA_BIN:-$(command -v java || true)}"
 
 mkdir -p "$install_root/bin" "$install_root/etc" "$install_root/logs" "$install_root/tasks"
 cp "$remote_tmp/pulse.jar" "$install_root/bin/pulse.jar"
 chmod 0644 "$install_root/bin/pulse.jar"
-if [ -d "$remote_tmp/tasks" ]; then
+actual_jar_sha=$(sha256sum "$install_root/bin/pulse.jar" | awk '{print $1}')
+if [ "$actual_jar_sha" != "$expected_jar_sha" ]; then
+  echo "ERROR remote JAR SHA mismatch: actual=${actual_jar_sha} expected=${expected_jar_sha}" >&2
+  exit 22
+fi
+if [ -d "$remote_tmp/tasks" ] && compgen -G "$remote_tmp/tasks/*" >/dev/null; then
   cp "$remote_tmp/tasks/"* "$install_root/tasks/"
   chmod 0755 "$install_root/tasks/"*
 fi
@@ -115,6 +170,10 @@ fi
 java_version=$("$java_bin" -version 2>&1 | head -n 1 || true)
 echo "JAVA_BIN=${java_bin}"
 echo "JAVA_VERSION=${java_version}"
+if [ -z "$(java_major_version "$java_bin")" ] || [ "$(java_major_version "$java_bin")" -lt 17 ]; then
+  echo "ERROR Java 17+ runtime required: ${java_version}" >&2
+  exit 23
+fi
 
 is_coordinator=0
 IFS=',' read -r -a coordinators <<< "$coordinators_csv"
@@ -277,6 +336,21 @@ if [ "$(id -u)" -eq 0 ]; then
   else
     systemctl disable --now pulse-coordinator.service >/dev/null 2>&1 || true
   fi
+  sleep 2
+  agent_status=$(systemctl is-active pulse-agent.service || true)
+  if [ "$agent_status" != "active" ]; then
+    echo "ERROR pulse-agent.service not active: ${agent_status}" >&2
+    journalctl -u pulse-agent.service -n 80 --no-pager || true
+    exit 31
+  fi
+  if [ "$is_coordinator" -eq 1 ]; then
+    coordinator_status=$(systemctl is-active pulse-coordinator.service || true)
+    if [ "$coordinator_status" != "active" ]; then
+      echo "ERROR pulse-coordinator.service not active: ${coordinator_status}" >&2
+      journalctl -u pulse-coordinator.service -n 80 --no-pager || true
+      exit 32
+    fi
+  fi
   systemctl --no-pager --full status pulse-agent.service | head -n 20 || true
   if [ "$is_coordinator" -eq 1 ]; then
     systemctl --no-pager --full status pulse-coordinator.service | head -n 20 || true
@@ -294,6 +368,21 @@ else
   else
     systemctl --user disable --now pulse-coordinator.service >/dev/null 2>&1 || true
   fi
+  sleep 2
+  agent_status=$(systemctl --user is-active pulse-agent.service || true)
+  if [ "$agent_status" != "active" ]; then
+    echo "ERROR user pulse-agent.service not active: ${agent_status}" >&2
+    journalctl --user -u pulse-agent.service -n 80 --no-pager || true
+    exit 41
+  fi
+  if [ "$is_coordinator" -eq 1 ]; then
+    coordinator_status=$(systemctl --user is-active pulse-coordinator.service || true)
+    if [ "$coordinator_status" != "active" ]; then
+      echo "ERROR user pulse-coordinator.service not active: ${coordinator_status}" >&2
+      journalctl --user -u pulse-coordinator.service -n 80 --no-pager || true
+      exit 42
+    fi
+  fi
   systemctl --user --no-pager --full status pulse-agent.service | head -n 20 || true
   if [ "$is_coordinator" -eq 1 ]; then
     systemctl --user --no-pager --full status pulse-coordinator.service | head -n 20 || true
@@ -301,7 +390,13 @@ else
 fi
 
 rm -rf "$remote_tmp"
+echo "VERIFY JAR_SHA=${actual_jar_sha} AGENT=active COORDINATOR=${is_coordinator} JAVA=${java_version}"
 echo "ROLE agent=1 coordinator=${is_coordinator} cluster=${tide_cluster} area=${tide_area} group=${group_id} mode=${group_mode} urls=${coordinator_urls}"
 REMOTE
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "ERROR phase=deploy host=${host} index=${index} step=remote_install rc=${rc} remote_tmp=${remote_tmp}" >&2
+    return "$rc"
+  fi
   echo "EVENT phase=deploy host=${host} index=${index} status=ok"
 }

@@ -63,18 +63,23 @@ cluster
 
 ### 分片策略
 
-cluster 内先按 area 分桶，再在每个 area 内按 IPv6 排序。
+cluster 内先按 area 分桶，再在每个 area 内按 IPv6 排序。group 总数先由 cluster 机器数唯一决定：
 
-leader 数分配按 area 规模决定：
+```text
+target_group_count = floor(sqrt(cluster_agents))
+```
 
-- 对每个 area，若 area 内候选数 `m < 5`，默认不单独建立 group。
-- 若 `m >= 5`，该 area 的 group 数为 `floor(sqrt(m))`。
-- 这使 group leader 数量符合每个位置域的规模，且最大限度避免跨 area。
+leader 数再按 area 规模分配：
+
+- 如果 area 数量小于或等于 `target_group_count`，每个 area 至少分配 1 个 group。
+- 剩余 group 按 `area_agents * target_group_count / cluster_agents` 的小数余量从大到小分配。
+- 如果 area 数量大于 `target_group_count`，无法保证每个 area 独立成组，此时退化为全 cluster 的位置排序连续切片，只允许相邻 area 在边界处合并。
+- 这使 cluster leader 总数严格等于 `floor(sqrt(cluster_agents))`，同时最大限度避免跨 area。
 
 area 内分片使用连续切片：
 
 ```text
-group_count = floor(sqrt(area_agents))
+group_count = allocated_area_group_count
 start = shard_index * area_agents / group_count
 end = (shard_index + 1) * area_agents / group_count
 members = sorted_area_agents[start:end]
@@ -88,15 +93,14 @@ members = sorted_area_agents[start:end]
 
 ### 小 area 处理
 
-小 area 不应为了凑 group 而跨 area 混组。
+小 area 不应为了凑 group 而随意跨 area 混组。
 
 第一版策略：
 
-- `area_agents < 5` 的 area 保持 direct。
-- 不把多个小 area 合并成一个跨 area group。
-- 这样可能导致 cluster 级别 leader 数小于 `floor(sqrt(cluster_agents))`，但换来更强的位置局部性和更低故障域耦合。
-
-如果后续确实需要严格满足 cluster 级别 `floor(sqrt(cluster_agents))`，可以引入“同 zone 相邻 area 合并”策略，但必须依赖明确的机房拓扑元数据，不能仅靠字符串拼接猜测。
+- cluster 级别 `n < 5` 时整体 direct。
+- cluster 级别 `n >= 5` 时，哪怕某个 area 自身少于 5 台，也可以作为该 area 的独立 group，前提是 `target_group_count` 足够覆盖所有 area。
+- 当 area 数多于 `target_group_count` 时，只合并排序相邻的小 area，不跨越位置序列做远距离合并。
+- 不使用字符串相似度猜测机架，只使用 `area + IPv6 numeric order` 作为第一版位置近似。
 
 ## Leader 选择
 
@@ -154,23 +158,31 @@ group sizes ~= 7, 7, 7, 7, 7, 7, 8
 如果 `cdn2` 有两个 area：
 
 ```text
-area_a = 36 -> floor(sqrt(36)) = 6 groups
-area_b = 14 -> floor(sqrt(14)) = 3 groups
+cluster_agents = 50
+target_group_count = floor(sqrt(50)) = 7
+area_a = 36 -> 5 groups
+area_b = 14 -> 2 groups
 ```
 
 两个 area 分别在自己的 IPv6 排序序列内连续切片，不跨 area 建组。
 
-如果某个 area 只有 4 台：
+如果 cluster 有 3 个 area：
 
 ```text
-area_c = 4 -> direct
+cluster_agents = 50
+target_group_count = 7
+area_a = 40 -> 5 groups
+area_b = 6 -> 1 group
+area_c = 4 -> 1 group
 ```
+
+虽然 `area_c` 自身少于 5 台，但 cluster 总数已经达到 group leader 门槛，且 leader 数足以覆盖该 area，因此保持 area 独立，不强行跨 area。
 
 ## 门禁
 
-- 集群或 area 候选机器数小于 5 时不得产生 leader。
-- group 数必须来自 `floor(sqrt(area_agents))`，不得由固定 group size 反推。
-- group members 必须是同 area 内 IPv6 排序后的连续切片。
+- 集群候选机器数小于 5 时不得产生 leader。
+- group 数必须来自 cluster 级 `floor(sqrt(cluster_agents))`，不得由固定 group size 反推。
+- group members 必须优先是同 area 内 IPv6 排序后的连续切片；当 area 数量多于 leader 数时，只允许位置序列相邻的 area 在边界处合并。
 - 不得读取或写入 `PULSE_GROUP_SIZE_LIMIT`。
 - leader batch 不得因为旧 size limit 截断当前 plan members。
 - 测试必须覆盖：
