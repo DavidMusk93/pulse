@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Badge,
@@ -262,6 +262,31 @@ function parseTaskArgs(input: string) {
   return input.split(/\s+/).map(part => part.trim()).filter(Boolean);
 }
 
+function taskVersion(task: any) {
+  if (!task) return '-';
+  return [
+    task.task_id || task.taskId || '-',
+    task.task_type || task.taskType || '-',
+    task.status || '-',
+    task.exit_code ?? task.exitCode ?? '-',
+    task.output_sha256 || task.outputSha256 || '-',
+    task.output_bytes ?? task.outputBytes ?? task.output?.length ?? '-',
+    task.output_lines ?? task.outputLines ?? '-',
+    task.stream_seq ?? task.streamSeq ?? '-',
+    task.stream_bytes ?? task.streamBytes ?? '-',
+    task.stream_lines ?? task.streamLines ?? '-'
+  ].join(':');
+}
+
+function snapshotVersion(snapshot: TaskSnapshot | null) {
+  if (!snapshot) return '-';
+  const executions = (snapshot.execution_queue || []).map(taskVersion).join('|');
+  const completions = (snapshot.completion_queue || []).map(taskVersion).join('|');
+  const streams = (snapshot.output_streams || []).map(taskVersion).join('|');
+  const traces = (snapshot.traces || []).slice(0, 4).map(trace => [trace.task_id || '-', trace.event || trace.status || '-', trace.observed_at_ms || trace.observedAtMs || '-'].join(':')).join('|');
+  return [snapshot.agent_id || '-', executions, completions, streams, traces].join('||');
+}
+
 function App() {
   const [hosts, setHosts] = useState<HostView[]>([]);
   const [loading, setLoading] = useState(true);
@@ -271,9 +296,9 @@ function App() {
   const [snapshot, setSnapshot] = useState<TaskSnapshot | null>(null);
   const [output, setOutput] = useState('');
   const [taskType, setTaskType] = useState('prepare_disk_layout_dry_run');
-  const [taskArgs, setTaskArgs] = useState(defaultTaskArgs);
   const [collapsedClusters, setCollapsedClusters] = useState<Record<string, boolean>>(() => loadCollapsedClusters());
   const viewport = useRef({ left: 0, top: 0 });
+  const snapshotVersionRef = useRef('');
   const activeTargetHost = activeHost || activeCluster?.hosts[0] || null;
 
   async function refreshHosts() {
@@ -294,9 +319,14 @@ function App() {
   async function refreshSnapshot(host: HostView) {
     const id = encodeURIComponent(agentId(host));
     const data = await fetchJson<TaskSnapshot>(`/api/agents/${id}/tasks`);
-    setSnapshot(data);
+    const version = snapshotVersion(data);
+    if (snapshotVersionRef.current !== version) {
+      snapshotVersionRef.current = version;
+      setSnapshot(data);
+    }
     const latest = data.completion_queue?.[0];
-    setOutput(latest ? completionOutput(latest) : '');
+    const latestOutput = latest ? completionOutput(latest) : '';
+    setOutput(current => current === latestOutput ? current : latestOutput);
   }
 
   useEffect(() => {
@@ -316,6 +346,32 @@ function App() {
   const attentionClusters = useMemo(() => new Set(groups.filter(([, clusterHosts]) => clusterNeedsAttention(clusterHosts)).map(([cluster]) => cluster)), [groups]);
   const alive = hosts.filter(host => host.status === 'alive').length;
   const avgLoad = hosts.length ? hosts.reduce((sum, host) => sum + averageLoad(host), 0) / hosts.length : 0;
+  const handleHostRun = useCallback((host: HostView) => {
+    snapshotVersionRef.current = '';
+    setActiveHost(host);
+    setActiveCluster(null);
+    setSnapshot(null);
+    setOutput('');
+  }, []);
+  const handleClusterRun = useCallback((cluster: string, clusterHosts: HostView[]) => {
+    snapshotVersionRef.current = '';
+    setActiveHost(null);
+    setActiveCluster({ name: cluster, hosts: sortHosts(clusterHosts) });
+    setSnapshot(null);
+    setOutput('');
+  }, []);
+  const handleClusterToggle = useCallback((cluster: string) => {
+    setCollapsedClusters(prev => {
+      const next = { ...prev };
+      if (attentionClusters.has(cluster)) {
+        delete next[cluster];
+        return next;
+      }
+      if (next[cluster]) delete next[cluster];
+      else next[cluster] = true;
+      return next;
+    });
+  }, [attentionClusters]);
 
   useEffect(() => {
     setCollapsedClusters(prev => {
@@ -378,23 +434,9 @@ function App() {
           hue={clusterHue(index)}
           collapsed={!!collapsedClusters[cluster] && !attentionClusters.has(cluster)}
           needsAttention={attentionClusters.has(cluster)}
-          onToggle={() => setCollapsedClusters(prev => {
-            const next = { ...prev };
-            if (attentionClusters.has(cluster)) {
-              delete next[cluster];
-              return next;
-            }
-            if (next[cluster]) delete next[cluster];
-            else next[cluster] = true;
-            return next;
-          })}
-          onRun={host => { setActiveHost(host); setActiveCluster(null); setSnapshot(null); setOutput(''); }}
-          onClusterRun={() => {
-            setActiveHost(null);
-            setActiveCluster({ name: cluster, hosts: sortHosts(clusterHosts) });
-            setSnapshot(null);
-            setOutput('');
-          }}
+          onToggle={handleClusterToggle}
+          onRun={handleHostRun}
+          onClusterRun={handleClusterRun}
         />)}
       </section>
 
@@ -408,8 +450,6 @@ function App() {
         output={output}
         taskType={taskType}
         setTaskType={setTaskType}
-        taskArgs={taskArgs}
-        setTaskArgs={setTaskArgs}
         onRun={async args => {
           const targets = activeCluster?.hosts || (activeHost ? [activeHost] : []);
           if (!targets.length) return;
@@ -444,7 +484,7 @@ function App() {
   </ConfigProvider>;
 }
 
-function ClusterSection({
+const ClusterSection = memo(function ClusterSection({
   cluster,
   hosts,
   hue,
@@ -459,28 +499,28 @@ function ClusterSection({
   hue: number;
   collapsed: boolean;
   needsAttention: boolean;
-  onToggle: () => void;
+  onToggle: (cluster: string) => void;
   onRun: (host: HostView) => void;
-  onClusterRun: () => void;
+  onClusterRun: (cluster: string, hosts: HostView[]) => void;
 }) {
-  const sorted = sortHosts(hosts);
+  const sorted = useMemo(() => sortHosts(hosts), [hosts]);
   return <Card
     className={`cluster-section ${collapsed ? 'cluster-section-collapsed' : ''}`.trim()}
     style={{ ['--cluster-hue' as any]: hue }}
     title={<Space size={8}><span>{cluster}</span><Tag>{hosts.length} 台</Tag>{needsAttention && <Tag color="warning">需关注</Tag>}</Space>}
     extra={<Space size={6}>
-      <Button size="small" className="cluster-run-button" onClick={onClusterRun}>Run UI</Button>
-      <Button size="small" type="text" className="cluster-toggle-button" onClick={onToggle} disabled={needsAttention}>{needsAttention ? '异常展开' : (collapsed ? '展开' : '折叠')}</Button>
+      <Button size="small" className="cluster-run-button" onClick={() => onClusterRun(cluster, hosts)}>Run UI</Button>
+      <Button size="small" type="text" className="cluster-toggle-button" onClick={() => onToggle(cluster)} disabled={needsAttention}>{needsAttention ? '异常展开' : (collapsed ? '展开' : '折叠')}</Button>
     </Space>}
     variant="outlined"
   >
     {!collapsed && <div className="tile-grid">
-      {sorted.map(host => <HostTile host={host} key={hostKey(host)} onRun={() => onRun(host)} />)}
+      {sorted.map(host => <HostTile host={host} key={hostKey(host)} onRun={onRun} />)}
     </div>}
   </Card>;
-}
+});
 
-function HostTile({ host, onRun }: { host: HostView; onRun: () => void }) {
+const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun: (host: HostView) => void }) {
   const avg = averageLoad(host);
   const level = Math.min(1, avg / 400);
   const confirmations = host.heartbeat_confirmations ?? host.heartbeatConfirmations ?? 0;
@@ -495,7 +535,7 @@ function HostTile({ host, onRun }: { host: HostView; onRun: () => void }) {
   return <Card className="host-tile" style={{ ['--load-level' as any]: level }} data-agent-key={hostKey(host)} variant="borderless">
     <Flex className="tile-header" justify="space-between" align="center" gap={10}>
       <AutoFitText className="seen" title={formatTime(observedAt)} text={formatSeenTime(observedAt)} minFontSize={9} maxFontSize={11} />
-      <Button className="run-button" data-status={statusColor(host.status)} type="primary" size="small" onClick={onRun} disabled={confirmations < 3 || host.status !== 'alive'}>任务</Button>
+      <Button className="run-button" data-status={statusColor(host.status)} type="primary" size="small" onClick={() => onRun(host)} disabled={confirmations < 3 || host.status !== 'alive'}>任务</Button>
     </Flex>
     <div className="tile-scroll">
       <Typography.Title level={4} className="ip-title" data-field="ip_title">{normalizeAddress(host.ip)}</Typography.Title>
@@ -534,7 +574,7 @@ function HostTile({ host, onRun }: { host: HostView; onRun: () => void }) {
       </div>}
     </div>
   </Card>;
-}
+});
 
 function TaskModal(props: {
   host: HostView | null;
@@ -546,8 +586,6 @@ function TaskModal(props: {
   output: string;
   taskType: string;
   setTaskType: (value: string) => void;
-  taskArgs: string;
-  setTaskArgs: (value: string) => void;
   onRun: (args: string[]) => Promise<void>;
   onPop: () => Promise<void>;
 }) {
@@ -575,30 +613,19 @@ function TaskModal(props: {
     unlockClicks.current = next;
     if (next.length >= 3) {
       setArgsUnlocked(true);
-      if (!props.taskArgs.trim()) {
-        props.setTaskArgs(defaultTaskArgs);
-      }
     }
   }
   return <Modal open={props.open} onCancel={props.onClose} footer={null} width="min(1320px, calc(100vw - 44px))" className="task-modal" title={null} closeIcon={<span className="mac-close" />}>
     <div className="task-shell">
       <div className="task-sidebar">
         <Card className="task-hero" variant="outlined">
-          <Flex gap={8} align="center">
-            <Select value={props.taskType} onChange={props.setTaskType} className="task-select" options={Object.entries(taskLabels).map(([value, label]) => ({ value, label }))}/>
-            <Button type="primary" onClick={() => props.onRun(parseTaskArgs(props.taskArgs || defaultTaskArgs))}>执行</Button>
-            <Button onClick={props.onPop} icon={<InboxOutlined />}>弹出结果</Button>
-          </Flex>
-          {argsUnlocked && <div className="task-args-panel">
-            <Typography.Text className="task-args-title">自定义参数</Typography.Text>
-            <Input.TextArea
-              value={props.taskArgs}
-              onChange={event => props.setTaskArgs(event.target.value)}
-              autoSize={{ minRows: 1, maxRows: 3 }}
-              placeholder={defaultTaskArgs}
-            />
-            <Typography.Text type="secondary">默认参数为 --dry-run。非 dry-run 操作会真实修改线上机器，执行前必须确认目标范围。</Typography.Text>
-          </div>}
+          <TaskCommandPanel
+            taskType={props.taskType}
+            setTaskType={props.setTaskType}
+            argsUnlocked={argsUnlocked}
+            onRun={props.onRun}
+            onPop={props.onPop}
+          />
         </Card>
         <Card title={isClusterRun ? '目标集群' : '目标节点'}>
           <Space direction="vertical" size={4}>
@@ -644,7 +671,41 @@ function TaskModal(props: {
   </Modal>;
 }
 
-function OutputPanelTitle({ meta, notice, value, onUnlock }: { meta?: any; notice: OutputNotice | null; value: string; onUnlock?: () => void }) {
+const TaskCommandPanel = memo(function TaskCommandPanel({
+  taskType,
+  setTaskType,
+  argsUnlocked,
+  onRun,
+  onPop
+}: {
+  taskType: string;
+  setTaskType: (value: string) => void;
+  argsUnlocked: boolean;
+  onRun: (args: string[]) => Promise<void>;
+  onPop: () => Promise<void>;
+}) {
+  const [taskArgs, setTaskArgs] = useState(defaultTaskArgs);
+  const parsedArgs = useMemo(() => parseTaskArgs(taskArgs || defaultTaskArgs), [taskArgs]);
+  return <>
+    <Flex gap={8} align="center">
+      <Select value={taskType} onChange={setTaskType} className="task-select" options={Object.entries(taskLabels).map(([value, label]) => ({ value, label }))}/>
+      <Button type="primary" onClick={() => onRun(parsedArgs)}>执行</Button>
+      <Button onClick={onPop} icon={<InboxOutlined />}>弹出结果</Button>
+    </Flex>
+    {argsUnlocked && <div className="task-args-panel">
+      <Typography.Text className="task-args-title">自定义参数</Typography.Text>
+      <Input.TextArea
+        value={taskArgs}
+        onChange={event => setTaskArgs(event.target.value)}
+        autoSize={{ minRows: 1, maxRows: 3 }}
+        placeholder={defaultTaskArgs}
+      />
+      <Typography.Text type="secondary">默认参数为 --dry-run。非 dry-run 操作会真实修改线上机器，执行前必须确认目标范围。</Typography.Text>
+    </div>}
+  </>;
+});
+
+const OutputPanelTitle = memo(function OutputPanelTitle({ meta, notice, value, onUnlock }: { meta?: any; notice: OutputNotice | null; value: string; onUnlock?: () => void }) {
   const lines = Number(meta?.output_lines ?? meta?.stream_lines ?? countLines(value));
   const bytes = Number(meta?.output_bytes ?? meta?.stream_bytes ?? new Blob([value]).size);
   return <div className="output-panel-title">
@@ -656,17 +717,18 @@ function OutputPanelTitle({ meta, notice, value, onUnlock }: { meta?: any; notic
     <span className="output-title-pill">{lines} 行</span>
     <span className="output-title-pill">{formatBytes(bytes)}</span>
   </div>;
-}
+});
 
-function CompletionViewer({ value, meta }: { value: string; meta?: any }) {
+const CompletionViewer = memo(function CompletionViewer({ value, meta }: { value: string; meta?: any }) {
   const [mode, setMode] = useState<'log' | 'json' | 'markdown' | 'raw'>('log');
   const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);
   const [wrap, setWrap] = useState(true);
   const parsed = useMemo(() => parseJsonOutput(value), [value]);
   const display = mode === 'json' && parsed.ok ? parsed.formatted : value;
   const outputType = String(meta?.output_type ?? meta?.outputType ?? meta?.stream_id ?? '').toLowerCase();
-  const markdownHint = outputType === 'markdown' || looksLikeMarkdown(value);
-  const matches = query ? countMatches(display, query) : 0;
+  const markdownHint = useMemo(() => outputType === 'markdown' || looksLikeMarkdown(value), [outputType, value]);
+  const matches = useMemo(() => deferredQuery ? countMatches(display, deferredQuery) : 0, [display, deferredQuery]);
   return <div className="completion-viewer">
     <Flex className="completion-toolbar" justify="space-between" align="center" gap={8}>
       <Space size={8}>
@@ -683,17 +745,10 @@ function CompletionViewer({ value, meta }: { value: string; meta?: any }) {
         />
         {parsed.ok && <Tag color="blue">JSON</Tag>}
         {markdownHint && <Tag color="purple">Markdown</Tag>}
-        {query && <Tag color={matches > 0 ? 'green' : 'red'}>{matches} 匹配</Tag>}
+        {deferredQuery && <Tag color={matches > 0 ? 'green' : 'red'}>{matches} 匹配</Tag>}
       </Space>
       <Space size={8}>
-        <Input.Search
-          size="small"
-          allowClear
-          className="output-search"
-          placeholder="搜索输出"
-          value={query}
-          onChange={event => setQuery(event.target.value)}
-        />
+        <OutputSearch value={query} onCommit={setQuery} />
         <Button size="small" onClick={() => setWrap(next => !next)}>{wrap ? '不换行' : '自动换行'}</Button>
         <Button size="small" onClick={() => navigator.clipboard?.writeText(display)}>拷贝</Button>
       </Space>
@@ -705,12 +760,28 @@ function CompletionViewer({ value, meta }: { value: string; meta?: any }) {
       : <LineNumberedOutput
           value={display}
           mode={mode}
-          query={query}
+          query={deferredQuery}
           wrap={wrap}
           json={mode === 'json' && parsed.ok}
         />}
   </div>;
-}
+});
+
+const OutputSearch = memo(function OutputSearch({ value, onCommit }: { value: string; onCommit: (value: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => onCommit(draft), 160);
+    return () => window.clearTimeout(timer);
+  }, [draft, onCommit]);
+  return <input
+    type="search"
+    className="output-search"
+    placeholder="搜索输出"
+    value={draft}
+    onChange={event => setDraft(event.target.value)}
+  />;
+});
 
 type OutputNotice = { tone: 'running' | 'empty' | 'done'; text: string };
 
@@ -735,7 +806,7 @@ function outputStatusNotice(value: string, meta: any, running: boolean) {
   return null;
 }
 
-function LineNumberedOutput({
+const LineNumberedOutput = memo(function LineNumberedOutput({
   value,
   mode,
   query,
@@ -748,10 +819,10 @@ function LineNumberedOutput({
   wrap: boolean;
   json: boolean;
 }) {
+  const rows = useMemo(() => value.length > 0 ? value.split('\n') : [''], [value]);
   if (!value) {
     return <Empty className="output-empty" image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无命令输出" />;
   }
-  const rows = value.length > 0 ? value.split('\n') : [''];
   const lineNumberWidth = Math.max(2, String(rows.length).length);
   return <div
     className={`task-output output-lines ${wrap ? 'output-wrap' : 'output-nowrap'} ${json ? 'json-output' : ''}`}
@@ -769,7 +840,7 @@ function LineNumberedOutput({
       </div>;
     })}
   </div>;
-}
+});
 
 function AutoFitText({
   text,
