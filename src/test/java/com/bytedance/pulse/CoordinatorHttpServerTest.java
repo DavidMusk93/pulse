@@ -174,6 +174,8 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("Markdown"));
         assertTrue(js.body().contains("搜索输出"));
         assertTrue(js.body().contains("暂无命令输出"));
+        assertTrue(js.body().contains("尚未收到命令输出"));
+        assertTrue(js.body().contains("正在展示实时命令输出"));
         assertTrue(js.body().contains("不换行"));
         assertTrue(js.body().contains("拷贝"));
         assertTrue(js.body().contains("/tasks/completions/"));
@@ -181,7 +183,7 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains(".slice(0,4)"));
         assertTrue(js.body().contains("task_id"));
         assertTrue(js.body().contains("output_streams"));
-        assertTrue(js.body().contains("任务执行中，暂未收到输出"));
+        assertTrue(js.body().contains("暂无命令输出"));
         assertTrue(js.body().contains("未完成"));
         assertTrue(js.body().contains("KiB"));
         assertTrue(js.body().contains("Trace"));
@@ -217,7 +219,8 @@ class CoordinatorHttpServerTest {
         assertTrue(css.body().contains(".debug-panel"));
         assertTrue(css.body().contains(".debug-grid"));
         assertTrue(css.body().contains(".completion-viewer"));
-        assertTrue(css.body().contains(".agent-async-alert"));
+        assertTrue(css.body().contains(".output-status-notice"));
+        assertTrue(css.body().contains(".output-status-empty"));
         assertTrue(css.body().contains(".trace-list"));
         assertTrue(css.body().contains(".completion-pane"));
         assertTrue(css.body().contains(".task-trace-card"));

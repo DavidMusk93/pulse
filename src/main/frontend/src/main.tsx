@@ -1,7 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  Alert,
   Badge,
   Button,
   Card,
@@ -558,13 +557,6 @@ function TaskModal(props: {
         </Card>
       </div>
       <Card className="task-workspace" title="结果查看" variant="outlined">
-        {asyncTask && !latestCompletion && <Alert
-          className="agent-async-alert"
-          type={asyncTask.status === 'running' ? 'info' : 'warning'}
-          showIcon
-          message={streamLog && streamLog.stream_chunks > 0 ? '任务执行中，正在展示运行中输出' : '任务执行中，暂未收到输出'}
-          description={`${taskLabels[asyncTask.task_type] || asyncTask.task_type || '-'} · ${asyncTask.task_id || ''} · ${streamSummary(streamLog, asyncTask)}`}
-        />}
         <div className="completion-pane">
           <CompletionViewer value={completionText} meta={latestCompletion || streamLog || asyncTask} running={!latestCompletion && !!asyncTask} />
         </div>
@@ -584,6 +576,7 @@ function CompletionViewer({ value, meta, running }: { value: string; meta?: any;
   const outputType = String(meta?.output_type ?? meta?.outputType ?? meta?.stream_id ?? '').toLowerCase();
   const markdownHint = outputType === 'markdown' || looksLikeMarkdown(value);
   const matches = query ? countMatches(display, query) : 0;
+  const notice = outputStatusNotice(value, meta, running);
   return <div className="completion-viewer">
     <Flex className="completion-toolbar" justify="space-between" align="center" gap={8}>
       <Space size={8} wrap>
@@ -620,6 +613,7 @@ function CompletionViewer({ value, meta, running }: { value: string; meta?: any;
         <Button size="small" onClick={() => navigator.clipboard?.writeText(display)}>拷贝</Button>
       </Space>
     </Flex>
+    {notice && <OutputStatusNotice notice={notice} />}
     {mode === 'markdown'
       ? value
         ? <div className="task-output markdown-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(value) }} />
@@ -632,6 +626,27 @@ function CompletionViewer({ value, meta, running }: { value: string; meta?: any;
           json={mode === 'json' && parsed.ok}
         />}
   </div>;
+}
+
+function OutputStatusNotice({ notice }: { notice: { tone: 'running' | 'empty' | 'done'; text: string } }) {
+  return <div className={`output-status-notice output-status-${notice.tone}`}>
+    <span className="output-status-dot" />
+    <span>{notice.text}</span>
+  </div>;
+}
+
+function outputStatusNotice(value: string, meta: any, running: boolean) {
+  const taskName = taskLabels[meta?.task_type] || meta?.task_type || '任务';
+  if (running && value) {
+    return { tone: 'running' as const, text: `${taskName}运行中，正在展示实时命令输出` };
+  }
+  if (running) {
+    return { tone: 'empty' as const, text: `${taskName}运行中，尚未收到命令输出` };
+  }
+  if (!value && meta?.status) {
+    return { tone: 'done' as const, text: `${taskName}已结束，无命令输出` };
+  }
+  return null;
 }
 
 function LineNumberedOutput({
@@ -739,13 +754,6 @@ function streamOutput(stream: any) {
     '',
     stream.output || ''
   ].join('\n');
-}
-
-function streamSummary(stream: any, task: any) {
-  if (stream) {
-    return `已接收 ${stream.stream_lines ?? stream.streamLines ?? 0} 行 / ${formatBytes(stream.stream_bytes ?? stream.streamBytes ?? 0)}`;
-  }
-  return `运行 ${formatDuration(task?.runtime_ms)}，尚无输出`;
 }
 
 function countLines(value: string) {
