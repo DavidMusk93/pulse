@@ -192,7 +192,6 @@ PULSE_GROUP_ID=${group_id}
 PULSE_GROUP_MODE=${group_mode}
 PULSE_GROUP_LEADER_URL=${group_leader_url}
 PULSE_GROUP_MEMBERS=${group_members}
-PULSE_GROUP_SIZE_LIMIT=7
 PULSE_GROUP_PORT=9977
 PULSE_TASK_DIR=${install_root}/tasks
 ENV
@@ -201,7 +200,6 @@ cat > "$install_root/etc/pulse-coordinator.env" <<ENV
 PULSE_COORDINATOR_ID=${hostname_value}
 PULSE_BIND_HOST=::
 PULSE_PORT=9966
-PULSE_GROUP_SIZE_LIMIT=7
 PULSE_GROUP_PORT=9977
 PULSE_COORDINATOR_PEERS=${coordinator_peer_urls}
 PULSE_PEER_TIMEOUT_MS=1000

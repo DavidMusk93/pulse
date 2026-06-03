@@ -279,21 +279,22 @@ class CoordinatorHttpServerTest {
 
     @Test
     void heartbeatResponseCarriesGroupPlanMessage() throws Exception {
-        postAlive("agent-1", "host-1", "10.0.0.1");
-        postAlive("agent-2", "host-2", "10.0.0.2");
+        for (int i = 1; i <= 5; i++) {
+            postAlive("agent-" + i, "host-" + i, "10.0.0." + i);
+        }
 
         HttpResponse<String> response = postJson("/heartbeat", """
                 {
-                  "agent_id": "agent-2",
+                  "agent_id": "agent-5",
                   "epoch": 1,
                   "seq": 44,
                   "ttl_ms": 15000,
                   "messages": [
                     {
-                      "message_id": "msg-agent-2-44",
+                      "message_id": "msg-agent-5-44",
                       "type": "state.heartbeat",
                       "version": 1,
-                      "payload": {"host": "host-2", "ip": "10.0.0.2", "cluster": "cluster-a", "area": "area-a"}
+                      "payload": {"host": "host-5", "ip": "10.0.0.5", "cluster": "cluster-a", "area": "area-a"}
                     }
                   ]
                 }
@@ -304,7 +305,8 @@ class CoordinatorHttpServerTest {
         JsonNode payload = json.get("messages").get(0).get("payload");
         assertEquals("cmd.group_plan", json.get("messages").get(0).get("type").asText());
         assertEquals("follower", payload.get("group_mode").asText());
-        assertEquals("agent-1", payload.get("leader_agent_id").asText());
+        assertEquals("agent-3", payload.get("leader_agent_id").asText());
+        assertEquals(3, payload.get("size_limit").asInt());
     }
 
     @Test

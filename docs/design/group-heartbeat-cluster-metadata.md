@@ -118,23 +118,27 @@ coordinator 或部署侧进行分组时使用以下输入：
 
 - 不跨 `cluster`。
 - 优先不跨 `area`。
-- 单组 agent 数不超过 `7`。
+- 集群机器数小于 5 时不启用 group leader。
+- group leader 数量为 `floor(sqrt(num_agents))`。
+- 不再使用固定 group size 上限；`PULSE_GROUP_SIZE_LIMIT` 已废弃。
 - `cluster=unknown` 的 agent 单独进入 `unknown` 集合，不与已知 cluster 混组。
 - `area=unknown` 的 agent 可以在同 cluster 内组成 `unknown` area group。
+- 详细算法见 `docs/design/group-leader-location-aware-plan.md`。
 
 ### 稳定排序
 
-为了避免频繁换组，分组前对同一 `(cluster, area)` 内的 agent 做稳定排序：
+为了避免频繁换组，分组前对同一 `cluster` 内的 agent 做稳定排序：
 
 ```text
-sort_key = normalized_ipv6_prefix(ip) + "/" + agent_id
+sort_key = area + "/" + ipv6_numeric_order(ip) + "/" + agent_id
 ```
 
 排序规则：
 
 - IPv6 地址可解析时，优先按 IPv6 数值或前缀排序。
 - IPv6 缺失或不可解析时，按 `agent_id` 排序。
-- 排序后每 7 台切一个 group。
+- 按 cluster 级 `floor(sqrt(num_agents))` 计算 group 数。
+- 优先在 area 内连续切片；只有 area 数量多于 leader 数时，才允许位置序列相邻 area 在边界处合并。
 
 ### Group ID
 
@@ -243,7 +247,7 @@ NodeState(agent_id) -> HostView -> GroupAssignment
   "members": ["dc05-p11-t636-n010.byted.org", "dc05-p11-t636-n012.byted.org"],
   "cluster": "cdn2",
   "area": "yg",
-  "size_limit": 7
+  "size_limit": 8
 }
 ```
 
@@ -259,7 +263,7 @@ NodeState(agent_id) -> HostView -> GroupAssignment
   "members": ["new-agent"],
   "cluster": "unknown",
   "area": "unknown",
-  "size_limit": 7
+  "size_limit": 1
 }
 ```
 
@@ -299,14 +303,12 @@ agent 环境变量：
 | `PULSE_GROUP_ID` | 当前 agent 所属 group | `cdn2/yg/000` |
 | `PULSE_GROUP_LEADER` | 当前 group leader agent id | `dc05-p11-t636-n012.byted.org` |
 | `PULSE_GROUP_MEMBERS` | 当前 group 成员列表 | `agent-a,agent-b` |
-| `PULSE_GROUP_SIZE_LIMIT` | group size 上限 | `7` |
 | `PULSE_GROUP_MODE` | `dynamic`、`direct`、`leader` 或 `follower` | `dynamic` |
 
 coordinator 可选配置：
 
 | 变量 | 含义 | 默认 |
 | --- | --- | --- |
-| `PULSE_GROUP_SIZE_LIMIT` | 分组大小上限 | `7` |
 | `PULSE_GROUP_STRATEGY` | 分组策略 | `cluster_area_ipv6` |
 
 ## 后续实现建议

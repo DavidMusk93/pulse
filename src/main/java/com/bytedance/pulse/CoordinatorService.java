@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class CoordinatorService {
     private static final long ALIVE_CONFIRMATION_WINDOW_MS = 20_000;
     private static final int ALIVE_CONFIRMATION_THRESHOLD = 3;
+    private static final int MIN_AGENTS_FOR_GROUP_LEADER = 5;
     private static final long DEFAULT_HOST_SNAPSHOT_TTL_MS = 1_000;
     private static final long DEFAULT_GROUP_RECOMPUTE_INTERVAL_MS = 1_000;
 
@@ -21,7 +22,6 @@ public class CoordinatorService {
     private final Map<String, NodeState> states = new ConcurrentHashMap<>();
     private final Map<String, AgentGroupPlan> groupPlans = new ConcurrentHashMap<>();
     private final Map<String, GroupView> groupViews = new ConcurrentHashMap<>();
-    private final int groupSizeLimit;
     private final int groupLeaderPort;
     private final RemoteTaskService taskService;
     private final long hostSnapshotTtlMs;
@@ -36,7 +36,6 @@ public class CoordinatorService {
     public CoordinatorService(String coordinatorId, Clock clock) {
         this.coordinatorId = coordinatorId;
         this.clock = clock;
-        this.groupSizeLimit = Math.max(1, Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_SIZE_LIMIT", "7")));
         this.groupLeaderPort = Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_PORT", "9977"));
         this.taskService = new RemoteTaskService(clock);
         this.hostSnapshotTtlMs = positiveLong("PULSE_HOST_SNAPSHOT_TTL_MS", DEFAULT_HOST_SNAPSHOT_TTL_MS);
@@ -131,7 +130,7 @@ public class CoordinatorService {
         if (agentId == null || agentId.isBlank()) {
             throw new IllegalArgumentException("agent_id is required");
         }
-        return groupPlans.getOrDefault(agentId, AgentGroupPlan.direct(agentId, groupSizeLimit));
+        return groupPlans.getOrDefault(agentId, AgentGroupPlan.direct(agentId));
     }
 
     private PulseMessage groupPlanMessage(String agentId) {
@@ -204,7 +203,7 @@ public class CoordinatorService {
     private List<HostView> buildHosts(long now, boolean sorted) {
         List<HostView> hosts = new ArrayList<>(states.size());
         for (NodeState state : states.values()) {
-            hosts.add(state.toHostView(now, groupPlans.getOrDefault(state.agentId, AgentGroupPlan.direct(state.agentId, groupSizeLimit))));
+            hosts.add(state.toHostView(now, groupPlans.getOrDefault(state.agentId, AgentGroupPlan.direct(state.agentId))));
         }
         if (sorted) {
             hosts.sort(Comparator.comparing(HostView::cluster)
@@ -237,52 +236,23 @@ public class CoordinatorService {
                 continue;
             }
             String cluster = blankToUnknown(host.cluster());
-            String area = blankToUnknown(host.area());
-            buckets.computeIfAbsent(cluster + "\n" + area, ignored -> new ArrayList<>()).add(host);
+            buckets.computeIfAbsent(cluster, ignored -> new ArrayList<>()).add(host);
         }
 
         Map<String, AgentGroupPlan> nextPlans = new HashMap<>();
         Map<String, GroupView> nextGroups = new HashMap<>();
         for (Map.Entry<String, List<HostView>> entry : buckets.entrySet()) {
-            String[] key = entry.getKey().split("\n", 2);
-            String cluster = key[0];
-            String area = key.length > 1 ? key[1] : "unknown";
+            String cluster = entry.getKey();
             List<HostView> members = entry.getValue().stream()
-                    .sorted(Comparator.comparing(CoordinatorService::ipSortKey).thenComparing(HostView::agentId))
+                    .sorted(Comparator.comparing(CoordinatorService::locationSortKey).thenComparing(HostView::agentId))
                     .toList();
-            for (int start = 0; start < members.size(); start += groupSizeLimit) {
-                int end = Math.min(start + groupSizeLimit, members.size());
-                List<HostView> groupMembers = members.subList(start, end);
-                int shard = start / groupSizeLimit;
-                String groupId = "%s/%s/%03d".formatted(cluster, area, shard);
-                HostView leader = groupMembers.stream()
-                        .filter(member -> "alive".equals(member.status()))
-                        .findFirst()
-                        .orElse(groupMembers.get(0));
-                String leaderUrl = leaderUrl(leader);
-                List<String> memberIds = groupMembers.stream().map(HostView::agentId).toList();
-                nextGroups.put(groupId, new GroupView(
-                        groupId,
-                        cluster,
-                        area,
-                        leader.agentId(),
-                        leaderUrl,
-                        memberIds,
-                        memberIds.size(),
-                        groupSizeLimit));
-                for (HostView member : groupMembers) {
-                    String mode = member.agentId().equals(leader.agentId()) ? "leader" : "follower";
-                    nextPlans.put(member.agentId(), new AgentGroupPlan(
-                            member.agentId(),
-                            groupId,
-                            mode,
-                            leader.agentId(),
-                            leaderUrl,
-                            memberIds,
-                            cluster,
-                            area,
-                            groupSizeLimit));
-                }
+            if (members.size() < MIN_AGENTS_FOR_GROUP_LEADER) {
+                continue;
+            }
+            int groupCount = Math.max(1, (int) Math.floor(Math.sqrt(members.size())));
+            List<List<HostView>> shards = locationAwareShards(members, groupCount);
+            for (int shard = 0; shard < shards.size(); shard++) {
+                registerGroup(cluster, shard, shards.get(shard), nextPlans, nextGroups);
             }
         }
 
@@ -305,6 +275,123 @@ public class CoordinatorService {
 
     private static String blankToUnknown(String value) {
         return value == null || value.isBlank() || "-".equals(value) ? "unknown" : value;
+    }
+
+    private void registerGroup(
+            String cluster,
+            int shard,
+            List<HostView> groupMembers,
+            Map<String, AgentGroupPlan> nextPlans,
+            Map<String, GroupView> nextGroups) {
+        if (groupMembers.isEmpty()) {
+            return;
+        }
+        String area = groupArea(groupMembers);
+        String groupId = "%s/%s/%03d".formatted(cluster, area, shard);
+        HostView leader = groupMembers.stream()
+                .filter(member -> "alive".equals(member.status()))
+                .findFirst()
+                .orElse(groupMembers.get(0));
+        String leaderUrl = leaderUrl(leader);
+        List<String> memberIds = groupMembers.stream().map(HostView::agentId).toList();
+        nextGroups.put(groupId, new GroupView(
+                groupId,
+                cluster,
+                area,
+                leader.agentId(),
+                leaderUrl,
+                memberIds,
+                memberIds.size(),
+                groupMembers.size()));
+        for (HostView member : groupMembers) {
+            String mode = member.agentId().equals(leader.agentId()) ? "leader" : "follower";
+            nextPlans.put(member.agentId(), new AgentGroupPlan(
+                    member.agentId(),
+                    groupId,
+                    mode,
+                    leader.agentId(),
+                    leaderUrl,
+                    memberIds,
+                    cluster,
+                    area,
+                    groupMembers.size()));
+        }
+    }
+
+    private static List<List<HostView>> locationAwareShards(List<HostView> members, int groupCount) {
+        Map<String, List<HostView>> byArea = new LinkedHashMap<>();
+        for (HostView member : members) {
+            byArea.computeIfAbsent(blankToUnknown(member.area()), ignored -> new ArrayList<>()).add(member);
+        }
+        if (byArea.size() > groupCount) {
+            return continuousShards(members, groupCount);
+        }
+
+        Map<String, Integer> groupCounts = allocateAreaGroupCounts(byArea, groupCount, members.size());
+        List<List<HostView>> shards = new ArrayList<>(groupCount);
+        for (Map.Entry<String, List<HostView>> area : byArea.entrySet()) {
+            int areaGroupCount = groupCounts.getOrDefault(area.getKey(), 0);
+            shards.addAll(continuousShards(area.getValue(), areaGroupCount));
+        }
+        return shards;
+    }
+
+    private static Map<String, Integer> allocateAreaGroupCounts(
+            Map<String, List<HostView>> byArea,
+            int groupCount,
+            int totalMembers) {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        Map<String, Double> remainders = new LinkedHashMap<>();
+        int allocated = 0;
+        for (Map.Entry<String, List<HostView>> entry : byArea.entrySet()) {
+            double exact = (double) entry.getValue().size() * groupCount / totalMembers;
+            int count = Math.max(1, (int) Math.floor(exact));
+            counts.put(entry.getKey(), count);
+            remainders.put(entry.getKey(), exact - Math.floor(exact));
+            allocated += count;
+        }
+        while (allocated < groupCount) {
+            String selected = remainders.entrySet().stream()
+                    .max(Comparator.<Map.Entry<String, Double>>comparingDouble(Map.Entry::getValue)
+                            .thenComparing(Map.Entry::getKey))
+                    .map(Map.Entry::getKey)
+                    .orElseThrow();
+            counts.put(selected, counts.get(selected) + 1);
+            remainders.put(selected, -1.0);
+            allocated++;
+        }
+        while (allocated > groupCount) {
+            String selected = counts.entrySet().stream()
+                    .filter(entry -> entry.getValue() > 1)
+                    .min(Comparator.<Map.Entry<String, Integer>>comparingInt(Map.Entry::getValue)
+                            .thenComparing(Map.Entry::getKey))
+                    .map(Map.Entry::getKey)
+                    .orElseThrow();
+            counts.put(selected, counts.get(selected) - 1);
+            allocated--;
+        }
+        return counts;
+    }
+
+    private static List<List<HostView>> continuousShards(List<HostView> members, int groupCount) {
+        List<List<HostView>> shards = new ArrayList<>(groupCount);
+        for (int shard = 0; shard < groupCount; shard++) {
+            int start = shard * members.size() / groupCount;
+            int end = (shard + 1) * members.size() / groupCount;
+            shards.add(members.subList(start, end));
+        }
+        return shards;
+    }
+
+    private static String groupArea(List<HostView> members) {
+        if (members.isEmpty()) {
+            return "unknown";
+        }
+        String first = blankToUnknown(members.get(0).area());
+        boolean sameArea = members.stream()
+                .map(host -> blankToUnknown(host.area()))
+                .allMatch(first::equals);
+        return sameArea ? first : "mixed";
     }
 
     private String leaderUrl(HostView leader) {
@@ -330,6 +417,10 @@ public class CoordinatorService {
         } catch (Exception ignored) {
             return "1/" + host.agentId();
         }
+    }
+
+    private static String locationSortKey(HostView host) {
+        return blankToUnknown(host.area()) + "/" + ipSortKey(host);
     }
 
     private static long positiveLong(String key, long fallback) {
@@ -424,7 +515,7 @@ public class CoordinatorService {
         private HostView toHostView(long now, AgentGroupPlan plan) {
             int confirmations = recentConfirmations(now);
             String status = now > expireAtMs ? "expired" : confirmations >= ALIVE_CONFIRMATION_THRESHOLD ? "alive" : "warming";
-            AgentGroupPlan debugPlan = plan == null ? AgentGroupPlan.direct(agentId, 1) : plan;
+            AgentGroupPlan debugPlan = plan == null ? AgentGroupPlan.direct(agentId) : plan;
             return new HostView(
                     agentId,
                     epoch,

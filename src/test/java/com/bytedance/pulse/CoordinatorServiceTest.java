@@ -33,12 +33,12 @@ class CoordinatorServiceTest {
         assertEquals("alive", host.status());
         assertEquals(3, host.heartbeatConfirmations());
         assertEquals(0, host.lastObservedAgeMs());
-        assertEquals("cluster-a/area-a/000", host.groupId());
-        assertEquals("leader", host.groupMode());
+        assertEquals("direct", host.groupId());
+        assertEquals("direct", host.groupMode());
         assertEquals("agent-1", host.leaderAgentId());
-        assertEquals("http://10.0.0.1:9977", host.leaderUrl());
+        assertEquals("", host.leaderUrl());
         assertEquals(1, host.groupSize());
-        assertEquals(7, host.groupSizeLimit());
+        assertEquals(1, host.groupSizeLimit());
         assertEquals("cmd.group_plan", response.messages().get(0).type());
     }
 
@@ -102,7 +102,7 @@ class CoordinatorServiceTest {
     }
 
     @Test
-    void coordinatorMaintainsDynamicGroupPlansWithLimitSeven() {
+    void coordinatorUsesSqrtLeaderCountAndLocationAwareShards() {
         CoordinatorService service = new CoordinatorService("coordinator-a", clock);
         for (int i = 1; i <= 8; i++) {
             confirmAlive(service, "agent-" + i, "host-" + i, "10.0.0." + i);
@@ -113,12 +113,67 @@ class CoordinatorServiceTest {
         Map<String, Object> payload = followerResponse.messages().get(0).payload();
 
         assertEquals(2, groups.size());
-        assertEquals(7, groups.get(0).size());
-        assertEquals(1, groups.get(1).size());
+        assertEquals(4, groups.get(0).size());
+        assertEquals(4, groups.get(1).size());
         assertEquals("follower", payload.get("group_mode"));
-        assertEquals(7, payload.get("size_limit"));
+        assertEquals(4, payload.get("size_limit"));
         assertEquals("agent-1", payload.get("leader_agent_id"));
         assertEquals("http://10.0.0.1:9977", payload.get("leader_url"));
+    }
+
+    @Test
+    void clusterWithLessThanFiveAgentsStaysDirect() {
+        CoordinatorService service = new CoordinatorService("coordinator-a", clock);
+        for (int i = 1; i <= 4; i++) {
+            confirmAlive(service, "agent-" + i, "host-" + i, "10.0.0." + i);
+        }
+
+        assertEquals(0, service.groups().size());
+        assertEquals("direct", planPayload(service, "agent-1").get("group_mode"));
+    }
+
+    @Test
+    void sixteenAgentsCreateFourGroups() {
+        CoordinatorService service = new CoordinatorService("coordinator-a", clock);
+        for (int i = 1; i <= 16; i++) {
+            confirmAlive(service, "agent-" + i, "host-" + i, "fdbd:dc02:1a:3c::" + i);
+        }
+
+        List<GroupView> groups = service.groups();
+
+        assertEquals(4, groups.size());
+        assertTrue(groups.stream().allMatch(group -> group.size() == 4));
+    }
+
+    @Test
+    void fiftyAgentsCreateSevenGroups() {
+        CoordinatorService service = new CoordinatorService("coordinator-a", clock);
+        for (int i = 1; i <= 50; i++) {
+            confirmAlive(service, "agent-" + i, "host-" + i, "fdbd:dc02:1a:3c::" + i);
+        }
+
+        List<GroupView> groups = service.groups();
+
+        assertEquals(7, groups.size());
+        assertEquals(50, groups.stream().mapToInt(GroupView::size).sum());
+    }
+
+    @Test
+    void multiAreaGroupsAvoidCrossAreaWhenLeaderCountCanCoverAreas() {
+        CoordinatorService service = new CoordinatorService("coordinator-a", clock);
+        for (int i = 1; i <= 10; i++) {
+            confirmAlive(service, "agent-a-" + i, "host-a-" + i, "fdbd:dc02:1a:3c::" + i, "area-a");
+        }
+        for (int i = 1; i <= 6; i++) {
+            confirmAlive(service, "agent-b-" + i, "host-b-" + i, "fdbd:dc05:2:90b::" + i, "area-b");
+        }
+
+        List<GroupView> groups = service.groups();
+
+        assertEquals(4, groups.size());
+        assertTrue(groups.stream().noneMatch(group -> "mixed".equals(group.area())));
+        assertEquals(2, groups.stream().filter(group -> "area-a".equals(group.area())).count());
+        assertEquals(2, groups.stream().filter(group -> "area-b".equals(group.area())).count());
     }
 
     @Test
@@ -149,7 +204,7 @@ class CoordinatorServiceTest {
             confirmAlive(service, "agent-" + i, "host-" + i, "10.0.0." + i);
         }
 
-        assertEquals("cluster-a/area-a/000", planPayload(service, "agent-7").get("group_id"));
+        assertEquals("cluster-a/area-a/001", planPayload(service, "agent-7").get("group_id"));
         assertEquals("cluster-a/area-a/001", planPayload(service, "agent-8").get("group_id"));
 
         mutableClock.advance(Duration.ofMillis(21_000));
@@ -160,7 +215,7 @@ class CoordinatorServiceTest {
                 .findFirst()
                 .orElseThrow();
         assertEquals("warming", warmedMember.status());
-        assertEquals("cluster-a/area-a/000", warmedMember.groupId());
+        assertEquals("cluster-a/area-a/001", warmedMember.groupId());
         assertEquals("follower", warmedMember.groupMode());
         assertEquals("cluster-a/area-a/001", planPayload(service, "agent-8").get("group_id"));
 
@@ -175,7 +230,7 @@ class CoordinatorServiceTest {
                 .findFirst()
                 .orElseThrow();
         assertEquals("expired", expiredMember.status());
-        assertEquals("cluster-a/area-a/000", planPayload(service, "agent-8").get("group_id"));
+        assertEquals("cluster-a/area-a/001", planPayload(service, "agent-8").get("group_id"));
     }
 
     @Test
@@ -405,10 +460,28 @@ class CoordinatorServiceTest {
                 List.of());
     }
 
+    private static HeartbeatRequest singleHeartbeat(String agentId, long epoch, long seq, String host, String ip, String area) {
+        AgentHeartbeat heartbeat = agent(agentId, epoch, seq, host, ip, area);
+        return new HeartbeatRequest(
+                null,
+                heartbeat.agentId(),
+                heartbeat.epoch(),
+                heartbeat.seq(),
+                heartbeat.ttlMs(),
+                heartbeat.messages(),
+                List.of());
+    }
+
     private static void confirmAlive(CoordinatorService service, String agentId, String host, String ip) {
         service.handleHeartbeat(singleHeartbeat(agentId, 1, 1, host, ip));
         service.handleHeartbeat(singleHeartbeat(agentId, 1, 2, host, ip));
         service.handleHeartbeat(singleHeartbeat(agentId, 1, 3, host, ip));
+    }
+
+    private static void confirmAlive(CoordinatorService service, String agentId, String host, String ip, String area) {
+        service.handleHeartbeat(singleHeartbeat(agentId, 1, 1, host, ip, area));
+        service.handleHeartbeat(singleHeartbeat(agentId, 1, 2, host, ip, area));
+        service.handleHeartbeat(singleHeartbeat(agentId, 1, 3, host, ip, area));
     }
 
     private static void confirmAliveFromSeq(CoordinatorService service, String agentId, String host, String ip, long firstSeq) {
@@ -472,6 +545,10 @@ class CoordinatorServiceTest {
     }
 
     private static AgentHeartbeat agent(String agentId, long epoch, long seq, String host, String ip) {
+        return agent(agentId, epoch, seq, host, ip, "area-a");
+    }
+
+    private static AgentHeartbeat agent(String agentId, long epoch, long seq, String host, String ip, String area) {
         return new AgentHeartbeat(
                 agentId,
                 epoch,
@@ -487,7 +564,7 @@ class CoordinatorServiceTest {
                                 "host", host,
                                 "ip", ip,
                                 "cluster", "cluster-a",
-                                "area", "area-a",
+                                "area", area,
                                 "zone", "az-a",
                                 "role", "worker",
                                 "load", "0.42"))));

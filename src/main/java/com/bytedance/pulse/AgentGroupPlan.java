@@ -16,7 +16,7 @@ public record AgentGroupPlan(
         members = members == null ? List.of() : List.copyOf(members);
     }
 
-    public static AgentGroupPlan direct(String agentId, int sizeLimit) {
+    public static AgentGroupPlan direct(String agentId) {
         String safeAgentId = agentId == null || agentId.isBlank() ? "unknown" : agentId;
         return new AgentGroupPlan(
                 safeAgentId,
@@ -27,6 +27,6 @@ public record AgentGroupPlan(
                 List.of(safeAgentId),
                 "unknown",
                 "unknown",
-                sizeLimit);
+                1);
     }
 }
