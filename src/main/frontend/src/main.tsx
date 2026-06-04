@@ -87,6 +87,16 @@ const defaultTaskArgs = '--dry-run';
 
 type ActiveClusterRun = { name: string; hosts: HostView[] };
 
+type BatchSubmitSummary = {
+  kind: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  message: string;
+  errors: string[];
+  updatedAt: number;
+};
+
 function normalizeAddress(value?: string) {
   const raw = String(value || '').replaceAll('[', '').replaceAll(']', '');
   if (!raw || raw.includes('.')) return '-';
@@ -297,6 +307,7 @@ function App() {
   const [activeCluster, setActiveCluster] = useState<ActiveClusterRun | null>(null);
   const [snapshot, setSnapshot] = useState<TaskSnapshot | null>(null);
   const [output, setOutput] = useState('');
+  const [batchSummary, setBatchSummary] = useState<BatchSubmitSummary | null>(null);
   const [taskType, setTaskType] = useState('prepare_disk_layout_dry_run');
   const [collapsedClusters, setCollapsedClusters] = useState<Record<string, boolean>>(() => loadCollapsedClusters());
   const viewport = useRef({ left: 0, top: 0 });
@@ -354,6 +365,7 @@ function App() {
     setActiveCluster(null);
     setSnapshot(null);
     setOutput('');
+    setBatchSummary(null);
   }, []);
   const handleClusterRun = useCallback((cluster: string, clusterHosts: HostView[]) => {
     snapshotVersionRef.current = '';
@@ -361,6 +373,7 @@ function App() {
     setActiveCluster({ name: cluster, hosts: sortHosts(clusterHosts) });
     setSnapshot(null);
     setOutput('');
+    setBatchSummary(null);
   }, []);
   const handleClusterToggle = useCallback((cluster: string) => {
     setCollapsedClusters(prev => {
@@ -449,6 +462,7 @@ function App() {
         open={!!activeTargetHost}
         onClose={() => { setActiveHost(null); setActiveCluster(null); }}
         snapshot={snapshot}
+        batchSummary={batchSummary}
         output={output}
         taskType={taskType}
         setTaskType={setTaskType}
@@ -467,6 +481,15 @@ function App() {
           if (first) setSnapshot(first.value);
           setOutput('');
           const failed = results.filter(result => result.status === 'rejected');
+          setBatchSummary({
+            kind: '预定义任务',
+            total: targets.length,
+            succeeded: targets.length - failed.length,
+            failed: failed.length,
+            message: failed.length ? `任务提交部分失败：${targets.length - failed.length}/${targets.length}` : `任务已提交：${targets.length}/${targets.length}`,
+            errors: failed.map(result => String((result as PromiseRejectedResult).reason)).slice(0, 8),
+            updatedAt: Date.now()
+          });
           if (failed.length) {
             setOutput(`集群下发部分失败: ${failed.length}/${targets.length}\n${failed.map(result => String((result as PromiseRejectedResult).reason)).join('\n')}`);
           }
@@ -479,13 +502,22 @@ function App() {
             return fetchJson<TaskSnapshot>(`/api/agents/${id}/tasks`, {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ operation: 'file_put', file_role: 'generic_file', target_dir: 'files', ...payload })
+              body: JSON.stringify({ operation: 'file_put', file_role: 'generic_file', target_dir: payload.target_dir || 'files', ...payload })
             });
           }));
           const first = results.find((result): result is PromiseFulfilledResult<TaskSnapshot> => result.status === 'fulfilled');
           if (first) setSnapshot(first.value);
           const failed = results.filter(result => result.status === 'rejected');
-          setOutput(failed.length ? `文件上传部分失败: ${failed.length}/${targets.length}` : '文件上传已入队，等待 agent 心跳确认。');
+          setBatchSummary({
+            kind: '文件上传',
+            total: targets.length,
+            succeeded: targets.length - failed.length,
+            failed: failed.length,
+            message: failed.length ? `文件上传提交部分失败：${targets.length - failed.length}/${targets.length}` : `文件上传已提交：${targets.length}/${targets.length}`,
+            errors: failed.map(result => String((result as PromiseRejectedResult).reason)).slice(0, 8),
+            updatedAt: Date.now()
+          });
+          setOutput(failed.length ? `文件上传提交部分失败: ${failed.length}/${targets.length}` : '文件上传已入队，等待 agent 心跳确认。');
         }}
         onShellRun={async (payload, args) => {
           const targets = activeCluster?.hosts || (activeHost ? [activeHost] : []);
@@ -501,7 +533,16 @@ function App() {
           const first = results.find((result): result is PromiseFulfilledResult<TaskSnapshot> => result.status === 'fulfilled');
           if (first) setSnapshot(first.value);
           const failed = results.filter(result => result.status === 'rejected');
-          setOutput(failed.length ? `Shell 下发部分失败: ${failed.length}/${targets.length}` : 'Shell 脚本已入队，等待上传确认和串行执行。');
+          setBatchSummary({
+            kind: 'Shell 执行',
+            total: targets.length,
+            succeeded: targets.length - failed.length,
+            failed: failed.length,
+            message: failed.length ? `Shell 执行提交部分失败：${targets.length - failed.length}/${targets.length}` : `Shell 执行已提交：${targets.length}/${targets.length}`,
+            errors: failed.map(result => String((result as PromiseRejectedResult).reason)).slice(0, 8),
+            updatedAt: Date.now()
+          });
+          setOutput(failed.length ? `Shell 执行提交部分失败: ${failed.length}/${targets.length}` : 'Shell 执行已入队，等待 agent 串行执行。');
         }}
         onPop={async () => {
           if (!activeTargetHost || !snapshot?.completion_queue?.[0]) {
@@ -617,6 +658,7 @@ function TaskModal(props: {
   open: boolean;
   onClose: () => void;
   snapshot: TaskSnapshot | null;
+  batchSummary: BatchSubmitSummary | null;
   output: string;
   taskType: string;
   setTaskType: (value: string) => void;
@@ -643,6 +685,8 @@ function TaskModal(props: {
   const isClusterRun = props.clusterHosts.length > 0;
   const targetTitle = isClusterRun ? props.clusterName : normalizeAddress(props.host?.ip);
   const targetDescription = isClusterRun ? `${props.clusterHosts.length} 台 host，将逐台下发作业` : '单节点作业';
+  const fileTransfers = (props.snapshot?.file_transfers || []).filter((file: any) => file.file_role !== 'shell_script');
+  const shellTransfers = (props.snapshot?.file_transfers || []).filter((file: any) => file.file_role === 'shell_script');
   function handleResultTitleClick() {
     const now = Date.now();
     const next = [...unlockClicks.current.filter(value => now - value <= 5000), now];
@@ -671,6 +715,23 @@ function TaskModal(props: {
             <Typography.Text type="secondary">{targetDescription}</Typography.Text>
           </Space>
         </Card>
+        {isClusterRun ? <>
+        <Card title="批量提交">
+          {props.batchSummary ? <Space direction="vertical" size={8} className="task-state-card">
+            <Typography.Text strong>{props.batchSummary.kind}</Typography.Text>
+            <Progress percent={Math.round(props.batchSummary.succeeded * 100 / Math.max(1, props.batchSummary.total))} status={props.batchSummary.failed ? 'exception' : 'success'} />
+            <Space wrap>
+              <Tag color="blue">目标 {props.batchSummary.total}</Tag>
+              <Tag color="green">提交成功 {props.batchSummary.succeeded}</Tag>
+              <Tag color={props.batchSummary.failed ? 'red' : 'default'}>提交失败 {props.batchSummary.failed}</Tag>
+            </Space>
+            <Typography.Text type="secondary">{props.batchSummary.message}</Typography.Text>
+          </Space> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未提交批量操作" />}
+        </Card>
+        <Card title="查看结果">
+          <Typography.Text type="secondary">集群 Run UI 只展示批量提交统计。每台机器的上传状态、执行输出和 completion，请进入对应 host 的 Run UI 查看。</Typography.Text>
+        </Card>
+        </> : <>
         <Card title="当前任务">
           <Space direction="vertical" size={6} className="task-state-card">
             <Badge status={statusColor(agentTask?.status || executions[0]?.status)} text={statusLabel(agentTask?.status || executions[0]?.status || '空闲')} />
@@ -680,17 +741,29 @@ function TaskModal(props: {
         </Card>
         <Card title="结果队列"><Statistic value={completions.length} /></Card>
         <Card title="文件上传">
-          {(props.snapshot?.file_transfers || []).length > 0 ? <List
-            dataSource={props.snapshot?.file_transfers || []}
+          {fileTransfers.length > 0 ? <List
+            dataSource={fileTransfers}
             renderItem={(file: any) => <List.Item>
               <Space direction="vertical" size={2}>
                 <Space><Typography.Text strong>{file.file_name || '-'}</Typography.Text><Tag color={statusColor(file.status)}>{statusLabel(file.status)}</Tag></Space>
-                <Typography.Text type="secondary">{file.file_role || '-'} · {formatBytes(file.content_bytes)}</Typography.Text>
+                <Typography.Text type="secondary">{file.target_dir || 'files'} · {formatBytes(file.content_bytes)}</Typography.Text>
                 {file.runner_error && <Typography.Text type="danger">{file.runner_error}</Typography.Text>}
               </Space>
             </List.Item>}
           /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无文件上传记录" />}
         </Card>
+        {shellTransfers.length > 0 && <Card title="脚本投递">
+          <List
+            dataSource={shellTransfers}
+            renderItem={(file: any) => <List.Item>
+              <Space direction="vertical" size={2}>
+                <Space><Typography.Text strong>{file.file_name || 'script.sh'}</Typography.Text><Tag color={statusColor(file.status)}>{statusLabel(file.status)}</Tag></Space>
+                <Typography.Text type="secondary">Shell 执行内部投递 · {formatBytes(file.content_bytes)}</Typography.Text>
+                {file.runner_error && <Typography.Text type="danger">{file.runner_error}</Typography.Text>}
+              </Space>
+            </List.Item>}
+          />
+        </Card>}
         <Card title="执行队列">
           {tasks.length > 0 ? <List dataSource={tasks} renderItem={(task: any) => <List.Item><Space direction="vertical" size={2}><Space><Typography.Text strong>agent 执行中</Typography.Text><Tag color="blue">{statusLabel(task.status)}</Tag></Space><Typography.Text type="secondary">{taskLabels[task.task_type] || task.task_type}</Typography.Text><Typography.Text className="task-id-text">task_id: {task.task_id || '-'}</Typography.Text><Progress percent={task.status === 'running' ? 68 : 38} showInfo={false}/></Space></List.Item>} /> : executions.length > 0 ? <List dataSource={executions} renderItem={(task: any) => <List.Item><Space direction="vertical" size={2}><Typography.Text>{statusLabel(task.status)} · {taskLabels[task.task_type] || task.task_type}</Typography.Text><Typography.Text className="task-id-text">task_id: {task.task_id || '-'}</Typography.Text></Space></List.Item>} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有待执行任务。来自 agent 心跳的任务会显示在上方。" />}
         </Card>
@@ -707,6 +780,7 @@ function TaskModal(props: {
             </List.Item>}
           />
         </Card>
+        </>}
       </div>
       <Card
         className="task-workspace"
@@ -714,7 +788,9 @@ function TaskModal(props: {
         variant="outlined"
       >
         <div className="completion-pane">
-          <CompletionViewer value={completionText} meta={outputMeta} />
+          {isClusterRun
+            ? <ClusterRunSummary summary={props.batchSummary} hosts={props.clusterHosts} />
+            : <CompletionViewer value={completionText} meta={outputMeta} />}
         </div>
       </Card>
     </div>
@@ -740,44 +816,72 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
 }) {
   const [taskArgs, setTaskArgs] = useState(defaultTaskArgs);
   const [file, setFile] = useState<File | null>(null);
+  const [fileTargetDir, setFileTargetDir] = useState<'files' | 'workspace'>('files');
   const [scriptText, setScriptText] = useState('#!/usr/bin/env bash\nset -euo pipefail\necho \"pulse shell ok args=$*\"\n');
   const [scriptName, setScriptName] = useState('pulse-shell.sh');
+  const [actionMessage, setActionMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const parsedArgs = useMemo(() => parseTaskArgs(taskArgs || defaultTaskArgs), [taskArgs]);
   async function submitFile() {
     if (!file) return;
     setBusy(true);
+    setActionMessage('正在提交文件上传...');
     try {
-      await onFilePut(await filePayload(file));
+      await onFilePut({ ...(await filePayload(file)), target_dir: fileTargetDir });
+      setActionMessage(`文件上传已提交：${file.name}`);
+    } catch (error) {
+      setActionMessage(`文件上传提交失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setBusy(false);
     }
   }
   async function submitShell() {
     setBusy(true);
+    setActionMessage('正在提交 Shell 执行...');
     try {
       await onShellRun(await textPayload(scriptName, scriptText), parsedArgs);
+      setActionMessage(`Shell 执行已提交：${scriptName}`);
+    } catch (error) {
+      setActionMessage(`Shell 执行提交失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setBusy(false);
     }
   }
   return <>
-    <Flex gap={8} align="center">
+    <div className="run-section">
+      <Typography.Text className="task-args-title">预定义任务</Typography.Text>
+      <Flex gap={8} align="center">
       <Select value={taskType} onChange={setTaskType} className="task-select" options={Object.entries(taskLabels).map(([value, label]) => ({ value, label }))}/>
       <Button type="primary" onClick={() => onRun(parsedArgs)}>执行</Button>
       <Button onClick={onPop} icon={<InboxOutlined />}>弹出结果</Button>
-    </Flex>
+      </Flex>
+    </div>
     <div className="file-shell-panel">
-      <Typography.Text className="task-args-title">文件与脚本</Typography.Text>
+      <Typography.Text className="task-args-title">文件上传</Typography.Text>
       <Space direction="vertical" size={8} className="file-shell-stack">
         <input type="file" onChange={event => setFile(event.target.files?.[0] || null)} />
-        <Button size="small" disabled={!file || busy} onClick={submitFile}>上传到 $agent_work_dir/files</Button>
-        <Input value={scriptName} onChange={event => setScriptName(event.target.value)} placeholder="script.sh" />
-        <Input.TextArea value={scriptText} onChange={event => setScriptText(event.target.value)} autoSize={{ minRows: 5, maxRows: 10 }} />
-        <Button danger type="primary" disabled={!scriptText.trim() || busy} onClick={submitShell}>推送脚本并串行执行</Button>
-        <Typography.Text type="secondary">脚本先经 heartbeat 上传到 $agent_work_dir/workspace，再由 agent 串行执行；结果回到右侧结果区。</Typography.Text>
+        <Select
+          value={fileTargetDir}
+          onChange={setFileTargetDir}
+          options={[
+            { value: 'files', label: '上传到 $agent_work_dir/files' },
+            { value: 'workspace', label: '上传到 $agent_work_dir/workspace/files' }
+          ]}
+        />
+        <Button size="small" disabled={!file || busy} loading={busy && actionMessage.includes('文件上传')} onClick={submitFile}>仅上传文件</Button>
+        <Typography.Text type="secondary">文件上传只负责投递文件，不会执行脚本或触发任务。</Typography.Text>
       </Space>
     </div>
+    <div className="file-shell-panel shell-execute-panel">
+      <Typography.Text className="task-args-title">Shell 执行</Typography.Text>
+      <Space direction="vertical" size={8} className="file-shell-stack">
+        <Input value={scriptName} onChange={event => setScriptName(event.target.value)} placeholder="script.sh" />
+        <Input.TextArea value={scriptText} onChange={event => setScriptText(event.target.value)} autoSize={{ minRows: 5, maxRows: 10 }} />
+        <Button danger type="primary" disabled={!scriptText.trim() || busy} loading={busy && actionMessage.includes('Shell')} onClick={submitShell}>执行 Shell 脚本</Button>
+        <Typography.Text type="secondary">Shell 执行使用这里的脚本内容；它和上面的文件上传是两个独立功能。</Typography.Text>
+      </Space>
+    </div>
+    {actionMessage && <Typography.Text className="action-message" type={actionMessage.includes('失败') ? 'danger' : 'secondary'}>{actionMessage}</Typography.Text>}
     {argsUnlocked && <div className="task-args-panel">
       <Typography.Text className="task-args-title">自定义参数</Typography.Text>
       <Input.TextArea
@@ -789,6 +893,38 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
       <Typography.Text type="secondary">默认参数为 --dry-run。非 dry-run 操作会真实修改线上机器，执行前必须确认目标范围。</Typography.Text>
     </div>}
   </>;
+});
+
+const ClusterRunSummary = memo(function ClusterRunSummary({ summary, hosts }: { summary: BatchSubmitSummary | null; hosts: HostView[] }) {
+  return <div className="cluster-run-summary">
+    <Typography.Title level={4}>集群批量操作</Typography.Title>
+    {summary ? <Space direction="vertical" size={12} className="cluster-run-summary-body">
+      <Space wrap>
+        <Tag color="blue">{summary.kind}</Tag>
+        <Tag color="default">目标 {summary.total}</Tag>
+        <Tag color="green">提交成功 {summary.succeeded}</Tag>
+        <Tag color={summary.failed ? 'red' : 'default'}>提交失败 {summary.failed}</Tag>
+      </Space>
+      <Progress percent={Math.round(summary.succeeded * 100 / Math.max(1, summary.total))} status={summary.failed ? 'exception' : 'success'} />
+      <Typography.Paragraph>{summary.message}</Typography.Paragraph>
+      {summary.errors.length > 0 && <div className="cluster-run-errors">
+        {summary.errors.map((error, index) => <Typography.Text key={`${index}-${error}`} type="danger">{error}</Typography.Text>)}
+      </div>}
+    </Space> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未提交批量操作" />}
+    <Typography.Paragraph type="secondary">这里展示提交统计，不展示单台执行输出。需要查看上传状态、运行日志或 completion 时，请回到集群列表打开对应 host 的 Run UI。</Typography.Paragraph>
+    <List
+      size="small"
+      dataSource={hosts.slice(0, 80)}
+      renderItem={host => <List.Item>
+        <Space>
+          <Badge status={statusColor(host.status)} />
+          <Typography.Text>{normalizeAddress(host.ip)}</Typography.Text>
+          <Typography.Text type="secondary">{host.hostname || host.agent_id || host.agentId || '-'}</Typography.Text>
+        </Space>
+      </List.Item>}
+    />
+    {hosts.length > 80 && <Typography.Text type="secondary">仅展示前 80 台，完整结果请按 host 查看。</Typography.Text>}
+  </div>;
 });
 
 const OutputPanelTitle = memo(function OutputPanelTitle({ meta, notice, value, onUnlock }: { meta?: any; notice: OutputNotice | null; value: string; onUnlock?: () => void }) {

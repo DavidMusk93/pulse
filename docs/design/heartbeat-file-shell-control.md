@@ -345,7 +345,15 @@ group 模式保持“不新增 API，不把权威下沉到 leader”：
 
 ## UI 设计
 
-Run UI 增加一个新的操作区域：`文件与脚本`。
+Run UI 增加两个独立操作区域：`文件上传` 和 `Shell 执行`。
+
+交互原则：
+
+- 文件上传和 Shell 执行是两个独立功能，不共享按钮语义。
+- 文件上传只做文件投递，不触发执行。
+- Shell 执行只表达“执行这段脚本内容”，不要求用户先在文件上传区域选择文件。
+- Shell 执行在实现上可以通过 heartbeat 内部 staging 一个临时脚本文件，但这个 staging 是执行协议细节，不等价于用户发起的文件上传。
+- UI 必须避免使用“推送并执行”这类容易混淆上传和执行的文案。
 
 ### 文件上传区域
 
@@ -355,7 +363,9 @@ Run UI 增加一个新的操作区域：`文件与脚本`。
 - 选择本地文件。
 - 展示文件名、大小、sha256、目标目录。
 - 默认目标目录为 `$agent_work_dir/files`。
-- 点击上传后，UI 将文件内容交给 coordinator，coordinator 入队 `FilePut`。
+- 可选择目标目录：`$agent_work_dir/files` 或 `$agent_work_dir/workspace/files`。
+- 点击“仅上传文件”后，UI 将文件内容交给 coordinator，coordinator 入队 `FilePut`。
+- 文件上传成功只产生 `reply.file_received`，不产生 `reply.task_accepted` 或 `reply.task_result`。
 
 约束：
 
@@ -369,12 +379,14 @@ Run UI 增加一个新的操作区域：`文件与脚本`。
 
 能力：
 
-- 支持粘贴脚本或选择 `.sh` 文件。
+- 支持粘贴脚本内容。
 - 展示脚本 sha256。
 - 默认执行工作目录为 `$agent_work_dir/workspace`。
 - 默认参数为 `--dry-run`。
 - 支持隐藏参数输入沿用现有 Run UI 规则。
-- 点击执行时，coordinator 先入队 `FilePut(shell_script)`，收到 agent `reply.file_received` 后再入队 `ShellExecute`。
+- 点击“执行 Shell 脚本”时，coordinator 创建 shell execution task。
+- 对 agent 的实现细节是：coordinator 先入队内部 `FilePut(shell_script)` 完成脚本 staging，收到 agent `reply.file_received` 后再入队 `ShellExecute`。
+- 内部 `FilePut(shell_script)` 的状态可以作为“脚本投递状态”展示，但不能混入“文件上传”结果列表，避免用户误解为上传了一个普通文件。
 
 风险提示：
 
@@ -389,7 +401,18 @@ Run UI 增加一个新的操作区域：`文件与脚本`。
 - completion 继续进入现有 completion queue。
 - 文件上传本身不是 shell execution completion，但 UI 必须显示 `reply.file_received` 的状态卡，确保用户能看到 `queued/delivering/received/failed` 和失败原因。
 - shell 执行必须在现有 completion viewer 中展示完整 `reply.task_result`；如果任务没有输出，UI 也必须展示完成状态、exit code、耗时和 output bytes，禁止空白。
-- UI 必须能从同一个操作区域关联展示 `FilePut -> file_received -> ShellExecute -> task_result` 的生命周期，避免用户只看到脚本输出而看不到上传是否成功。
+- Shell 执行 UI 必须能展示 `script staging -> ShellExecute -> task_result` 的生命周期，但它属于 Shell 执行详情，不属于文件上传功能。
+
+### Cluster Run UI
+
+cluster Run UI 和 host Run UI 不能完全一致：
+
+- host Run UI 面向单机诊断，展示详细文件状态、执行队列、trace、stream 和 completion。
+- cluster Run UI 面向批量操作，默认展示提交进度和结果统计。
+- cluster Run UI 必须展示目标 host 数、提交成功数、提交失败数、失败摘要。
+- cluster Run UI 不应把第一台 host 的详细执行结果伪装成整个 cluster 的结果。
+- 单台详细结果应通过每个 host 的 Run UI 查看。
+- cluster 执行 Shell 时，UI 必须强调“批量提交已完成/部分失败”，实际完成结果需要按 host 回看或后续增加聚合 completion 统计。
 
 ## 安全边界
 

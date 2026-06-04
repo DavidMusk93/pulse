@@ -399,12 +399,19 @@ body {
   margin-bottom: 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
+.run-section {
+  padding: 4px 0 2px;
+}
 .file-shell-panel {
   margin-top: 12px;
   padding: 12px;
   border: 1px solid #bfdbfe;
   border-radius: 16px;
   background: #eff6ff;
+}
+.shell-execute-panel {
+  border-color: #fecaca;
+  background: #fff1f2;
 }
 .file-shell-stack {
   width: 100%;
@@ -416,6 +423,25 @@ body {
 }
 .file-shell-stack textarea {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.action-message {
+  display: block;
+  margin-top: 10px;
+}
+.cluster-run-summary {
+  padding: 6px 4px;
+}
+.cluster-run-summary-body,
+.cluster-run-errors {
+  width: 100%;
+}
+.cluster-run-errors {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 12px;
+  background: #fef2f2;
 }
 .task-state-card {
   width: 100%;
