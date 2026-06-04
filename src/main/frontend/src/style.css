@@ -507,7 +507,8 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: auto;
+  padding-right: 8px;
 }
 .cluster-run-summary-body,
 .cluster-run-errors {
@@ -521,9 +522,9 @@ body {
   padding: 12px !important;
 }
 .cluster-exec-list {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
+  flex: 0 0 auto;
+  min-height: 360px;
+  overflow: visible;
   padding-right: 4px;
 }
 .cluster-exec-row {
