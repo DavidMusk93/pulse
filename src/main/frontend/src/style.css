@@ -487,6 +487,23 @@ body {
 .cluster-run-errors {
   width: 100%;
 }
+.cluster-exec-stats {
+  width: 100%;
+}
+.cluster-exec-stats .ant-card-body {
+  padding: 12px !important;
+}
+.cluster-exec-list {
+  max-height: 100%;
+  overflow: auto;
+}
+.cluster-exec-row {
+  width: 100%;
+}
+.cluster-exec-row .task-id-text {
+  width: auto;
+  max-width: 320px;
+}
 .cluster-run-errors {
   display: flex;
   flex-direction: column;

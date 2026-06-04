@@ -95,6 +95,30 @@ type BatchSubmitSummary = {
   message: string;
   errors: string[];
   updatedAt: number;
+  snapshots: Record<string, TaskSnapshot>;
+};
+
+type ClusterExecutionSummary = {
+  total: number;
+  submitSucceeded: number;
+  submitFailed: number;
+  executionSucceeded: number;
+  executionFailed: number;
+  running: number;
+  pending: number;
+  rows: ClusterExecutionRow[];
+};
+
+type ClusterExecutionRow = {
+  host: HostView;
+  snapshot?: TaskSnapshot;
+  status: 'success' | 'failed' | 'running' | 'pending';
+  label: string;
+  taskId: string;
+  taskType: string;
+  exitCode: string;
+  outputBytes: number;
+  message: string;
 };
 
 function normalizeAddress(value?: string) {
@@ -199,6 +223,58 @@ function statusColor(status?: string): 'success' | 'processing' | 'warning' | 'e
 function activeHostTasks(host?: HostView) {
   const tasks = host?.state?.async_tasks;
   return Array.isArray(tasks) ? tasks : [];
+}
+
+function snapshotsFromSettledResults(hosts: HostView[], results: PromiseSettledResult<TaskSnapshot>[]) {
+  const snapshots: Record<string, TaskSnapshot> = {};
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled') {
+      snapshots[agentId(hosts[index])] = result.value;
+    }
+  });
+  return snapshots;
+}
+
+function clusterExecutionSummary(hosts: HostView[], summary: BatchSubmitSummary | null, snapshots: Record<string, TaskSnapshot>): ClusterExecutionSummary {
+  const submitFailed = summary?.failed || 0;
+  const mergedSnapshots = { ...(summary?.snapshots || {}), ...snapshots };
+  const rows = hosts.map(host => clusterExecutionRow(host, mergedSnapshots[agentId(host)]));
+  return {
+    total: hosts.length,
+    submitSucceeded: summary?.succeeded || 0,
+    submitFailed,
+    executionSucceeded: rows.filter(row => row.status === 'success').length,
+    executionFailed: rows.filter(row => row.status === 'failed').length + submitFailed,
+    running: rows.filter(row => row.status === 'running').length,
+    pending: rows.filter(row => row.status === 'pending').length,
+    rows
+  };
+}
+
+function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot): ClusterExecutionRow {
+  const completion = snapshot?.completion_queue?.[0];
+  const execution = snapshot?.execution_queue?.[0] || activeHostTasks(host)[0];
+  const file = snapshot?.file_transfers?.[0];
+  const item = completion || execution || file;
+  const rawStatus = String(item?.status || '');
+  const exitCode = completion?.exit_code ?? completion?.exitCode;
+  const hasFailure = ['failed', 'timeout', 'timed_out', 'rejected'].includes(rawStatus)
+    || (exitCode !== undefined && exitCode !== null && Number(exitCode) !== 0)
+    || !!item?.runner_error;
+  const hasSuccess = !!completion && !hasFailure && (rawStatus === 'completed' || exitCode === 0 || exitCode === '0');
+  const hasRunning = !!execution || ['queued', 'delivered', 'accepted', 'running'].includes(rawStatus);
+  const status: ClusterExecutionRow['status'] = hasFailure ? 'failed' : hasSuccess ? 'success' : hasRunning ? 'running' : 'pending';
+  return {
+    host,
+    snapshot,
+    status,
+    label: hasFailure ? '执行失败' : hasSuccess ? '执行成功' : hasRunning ? statusLabel(rawStatus || 'running') : '待回执',
+    taskId: item?.task_id || item?.taskId || '-',
+    taskType: taskLabels[item?.task_type || item?.taskType || ''] || item?.task_type || item?.taskType || '-',
+    exitCode: exitCode === undefined || exitCode === null ? '-' : String(exitCode),
+    outputBytes: Number(item?.output_bytes ?? item?.outputBytes ?? item?.stream_bytes ?? item?.streamBytes ?? 0),
+    message: item?.runner_error || item?.error || item?.file_name || item?.task_type || item?.taskType || '-'
+  };
 }
 
 function groupByCluster(hosts: HostView[]) {
@@ -308,6 +384,7 @@ function App() {
   const [snapshot, setSnapshot] = useState<TaskSnapshot | null>(null);
   const [output, setOutput] = useState('');
   const [batchSummary, setBatchSummary] = useState<BatchSubmitSummary | null>(null);
+  const [clusterSnapshots, setClusterSnapshots] = useState<Record<string, TaskSnapshot>>({});
   const [taskType, setTaskType] = useState('prepare_disk_layout_dry_run');
   const [collapsedClusters, setCollapsedClusters] = useState<Record<string, boolean>>(() => loadCollapsedClusters());
   const viewport = useRef({ left: 0, top: 0 });
@@ -355,6 +432,35 @@ function App() {
     return () => window.clearInterval(timer);
   }, [activeTargetHost?.ip, activeTargetHost?.agent_id, activeTargetHost?.agentId]);
 
+  useEffect(() => {
+    if (!activeCluster || !batchSummary) return;
+    const cluster = activeCluster;
+    let disposed = false;
+    async function refreshClusterSnapshots() {
+      const entries = await Promise.allSettled(cluster.hosts.map(async host => {
+        const id = agentId(host);
+        const data = await fetchJson<TaskSnapshot>(`/api/agents/${encodeURIComponent(id)}/tasks`);
+        return [id, data] as const;
+      }));
+      if (disposed) return;
+      setClusterSnapshots(prev => {
+        const next = { ...prev };
+        entries.forEach(entry => {
+          if (entry.status === 'fulfilled') {
+            next[entry.value[0]] = entry.value[1];
+          }
+        });
+        return next;
+      });
+    }
+    refreshClusterSnapshots().catch(err => setOutput(String(err)));
+    const timer = window.setInterval(() => refreshClusterSnapshots().catch(err => setOutput(String(err))), 3000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [activeCluster?.name, batchSummary?.updatedAt]);
+
   const groups = useMemo(() => groupByCluster(hosts), [hosts]);
   const attentionClusters = useMemo(() => new Set(groups.filter(([, clusterHosts]) => clusterNeedsAttention(clusterHosts)).map(([cluster]) => cluster)), [groups]);
   const alive = hosts.filter(host => host.status === 'alive').length;
@@ -364,6 +470,7 @@ function App() {
     setActiveHost(host);
     setActiveCluster(null);
     setSnapshot(null);
+    setClusterSnapshots({});
     setOutput('');
     setBatchSummary(null);
   }, []);
@@ -372,6 +479,7 @@ function App() {
     setActiveHost(null);
     setActiveCluster({ name: cluster, hosts: sortHosts(clusterHosts) });
     setSnapshot(null);
+    setClusterSnapshots({});
     setOutput('');
     setBatchSummary(null);
   }, []);
@@ -460,9 +568,10 @@ function App() {
         clusterName={activeCluster?.name || ''}
         clusterHosts={activeCluster?.hosts || []}
         open={!!activeTargetHost}
-        onClose={() => { setActiveHost(null); setActiveCluster(null); }}
+        onClose={() => { setActiveHost(null); setActiveCluster(null); setClusterSnapshots({}); }}
         snapshot={snapshot}
         batchSummary={batchSummary}
+        clusterSnapshots={clusterSnapshots}
         output={output}
         taskType={taskType}
         setTaskType={setTaskType}
@@ -479,6 +588,8 @@ function App() {
           }));
           const first = results.find((result): result is PromiseFulfilledResult<TaskSnapshot> => result.status === 'fulfilled');
           if (first) setSnapshot(first.value);
+          const snapshots = snapshotsFromSettledResults(targets, results);
+          setClusterSnapshots(snapshots);
           setOutput('');
           const failed = results.filter(result => result.status === 'rejected');
           setBatchSummary({
@@ -488,7 +599,8 @@ function App() {
             failed: failed.length,
             message: failed.length ? `任务提交部分失败：${targets.length - failed.length}/${targets.length}` : `任务已提交：${targets.length}/${targets.length}`,
             errors: failed.map(result => String((result as PromiseRejectedResult).reason)).slice(0, 8),
-            updatedAt: Date.now()
+            updatedAt: Date.now(),
+            snapshots
           });
           if (failed.length) {
             setOutput(`集群下发部分失败: ${failed.length}/${targets.length}\n${failed.map(result => String((result as PromiseRejectedResult).reason)).join('\n')}`);
@@ -507,6 +619,8 @@ function App() {
           }));
           const first = results.find((result): result is PromiseFulfilledResult<TaskSnapshot> => result.status === 'fulfilled');
           if (first) setSnapshot(first.value);
+          const snapshots = snapshotsFromSettledResults(targets, results);
+          setClusterSnapshots(snapshots);
           const failed = results.filter(result => result.status === 'rejected');
           setBatchSummary({
             kind: '文件上传',
@@ -515,7 +629,8 @@ function App() {
             failed: failed.length,
             message: failed.length ? `文件上传提交部分失败：${targets.length - failed.length}/${targets.length}` : `文件上传已提交：${targets.length}/${targets.length}`,
             errors: failed.map(result => String((result as PromiseRejectedResult).reason)).slice(0, 8),
-            updatedAt: Date.now()
+            updatedAt: Date.now(),
+            snapshots
           });
           setOutput(failed.length ? `文件上传提交部分失败: ${failed.length}/${targets.length}` : '文件上传已入队，等待 agent 心跳确认。');
         }}
@@ -532,6 +647,8 @@ function App() {
           }));
           const first = results.find((result): result is PromiseFulfilledResult<TaskSnapshot> => result.status === 'fulfilled');
           if (first) setSnapshot(first.value);
+          const snapshots = snapshotsFromSettledResults(targets, results);
+          setClusterSnapshots(snapshots);
           const failed = results.filter(result => result.status === 'rejected');
           setBatchSummary({
             kind: 'Shell 执行',
@@ -540,7 +657,8 @@ function App() {
             failed: failed.length,
             message: failed.length ? `Shell 执行提交部分失败：${targets.length - failed.length}/${targets.length}` : `Shell 执行已提交：${targets.length}/${targets.length}`,
             errors: failed.map(result => String((result as PromiseRejectedResult).reason)).slice(0, 8),
-            updatedAt: Date.now()
+            updatedAt: Date.now(),
+            snapshots
           });
           setOutput(failed.length ? `Shell 执行提交部分失败: ${failed.length}/${targets.length}` : 'Shell 执行已入队，等待 agent 串行执行。');
         }}
@@ -659,6 +777,7 @@ function TaskModal(props: {
   onClose: () => void;
   snapshot: TaskSnapshot | null;
   batchSummary: BatchSubmitSummary | null;
+  clusterSnapshots: Record<string, TaskSnapshot>;
   output: string;
   taskType: string;
   setTaskType: (value: string) => void;
@@ -683,6 +802,10 @@ function TaskModal(props: {
   const outputRunning = !latestCompletion && !!asyncTask;
   const outputNotice = outputStatusNotice(completionText, outputMeta, outputRunning);
   const isClusterRun = props.clusterHosts.length > 0;
+  const clusterSummary = useMemo(
+    () => clusterExecutionSummary(props.clusterHosts, props.batchSummary, props.clusterSnapshots),
+    [props.clusterHosts, props.batchSummary, props.clusterSnapshots]
+  );
   const targetTitle = isClusterRun ? props.clusterName : normalizeAddress(props.host?.ip);
   const targetDescription = isClusterRun ? `${props.clusterHosts.length} 台 host，将逐台下发作业` : '单节点作业';
   const fileTransfers = (props.snapshot?.file_transfers || []).filter((file: any) => file.file_role !== 'shell_script');
@@ -729,7 +852,15 @@ function TaskModal(props: {
           </Space> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未提交批量操作" />}
         </Card>
         <Card title="查看结果">
-          <Typography.Text type="secondary">集群 Run UI 只展示批量提交统计。每台机器的上传状态、执行输出和 completion，请进入对应 host 的 Run UI 查看。</Typography.Text>
+          <Space direction="vertical" size={8} className="task-state-card">
+            <Space wrap>
+              <Tag color="green">执行成功 {clusterSummary.executionSucceeded}</Tag>
+              <Tag color={clusterSummary.executionFailed ? 'red' : 'default'}>执行失败 {clusterSummary.executionFailed}</Tag>
+              <Tag color="blue">执行中 {clusterSummary.running}</Tag>
+              <Tag color="default">待回执 {clusterSummary.pending}</Tag>
+            </Space>
+            <Typography.Text type="secondary">右侧汇总所有目标 host 的执行状态、completion 和错误摘要。</Typography.Text>
+          </Space>
         </Card>
         </> : <>
         <Card title="当前任务">
@@ -789,7 +920,7 @@ function TaskModal(props: {
       >
         <div className="completion-pane">
           {isClusterRun
-            ? <ClusterRunSummary summary={props.batchSummary} hosts={props.clusterHosts} />
+            ? <ClusterRunSummary summary={props.batchSummary} hosts={props.clusterHosts} snapshots={props.clusterSnapshots} />
             : <CompletionViewer value={completionText} meta={outputMeta} />}
         </div>
       </Card>
@@ -923,7 +1054,17 @@ const ShellScriptEditor = memo(function ShellScriptEditor({
   </div>;
 });
 
-const ClusterRunSummary = memo(function ClusterRunSummary({ summary, hosts }: { summary: BatchSubmitSummary | null; hosts: HostView[] }) {
+const ClusterRunSummary = memo(function ClusterRunSummary({
+  summary,
+  hosts,
+  snapshots
+}: {
+  summary: BatchSubmitSummary | null;
+  hosts: HostView[];
+  snapshots: Record<string, TaskSnapshot>;
+}) {
+  const execution = useMemo(() => clusterExecutionSummary(hosts, summary, snapshots), [hosts, summary, snapshots]);
+  const completionPercent = Math.round(execution.executionSucceeded * 100 / Math.max(1, execution.total));
   return <div className="cluster-run-summary">
     <Typography.Title level={4}>集群批量操作</Typography.Title>
     {summary ? <Space direction="vertical" size={12} className="cluster-run-summary-body">
@@ -934,24 +1075,36 @@ const ClusterRunSummary = memo(function ClusterRunSummary({ summary, hosts }: { 
         <Tag color={summary.failed ? 'red' : 'default'}>提交失败 {summary.failed}</Tag>
       </Space>
       <Progress percent={Math.round(summary.succeeded * 100 / Math.max(1, summary.total))} status={summary.failed ? 'exception' : 'success'} />
+      <Row gutter={[12, 12]} className="cluster-exec-stats">
+        <Col xs={12} md={6}><Card><Statistic title="执行成功" value={execution.executionSucceeded} suffix={`/ ${execution.total}`} /></Card></Col>
+        <Col xs={12} md={6}><Card><Statistic title="执行失败" value={execution.executionFailed} valueStyle={{ color: execution.executionFailed ? '#dc2626' : undefined }} /></Card></Col>
+        <Col xs={12} md={6}><Card><Statistic title="执行中" value={execution.running} /></Card></Col>
+        <Col xs={12} md={6}><Card><Statistic title="待回执" value={execution.pending} /></Card></Col>
+      </Row>
+      <Progress percent={completionPercent} status={execution.executionFailed ? 'exception' : execution.executionSucceeded === execution.total ? 'success' : 'active'} />
       <Typography.Paragraph>{summary.message}</Typography.Paragraph>
       {summary.errors.length > 0 && <div className="cluster-run-errors">
         {summary.errors.map((error, index) => <Typography.Text key={`${index}-${error}`} type="danger">{error}</Typography.Text>)}
       </div>}
     </Space> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未提交批量操作" />}
-    <Typography.Paragraph type="secondary">这里展示提交统计，不展示单台执行输出。需要查看上传状态、运行日志或 completion 时，请回到集群列表打开对应 host 的 Run UI。</Typography.Paragraph>
+    <Typography.Paragraph type="secondary">这里聚合所有目标 host 的执行状态、completion、exit code 和错误摘要；无需逐台打开 Run UI。</Typography.Paragraph>
     <List
       size="small"
-      dataSource={hosts.slice(0, 80)}
-      renderItem={host => <List.Item>
-        <Space>
-          <Badge status={statusColor(host.status)} />
-          <Typography.Text>{normalizeAddress(host.ip)}</Typography.Text>
-          <Typography.Text type="secondary">{host.hostname || host.agent_id || host.agentId || '-'}</Typography.Text>
+      className="cluster-exec-list"
+      dataSource={execution.rows}
+      renderItem={row => <List.Item>
+        <Space className="cluster-exec-row" size={10} wrap>
+          <Badge status={row.status === 'success' ? 'success' : row.status === 'failed' ? 'error' : row.status === 'running' ? 'processing' : 'default'} text={row.label} />
+          <Typography.Text strong>{normalizeAddress(row.host.ip)}</Typography.Text>
+          <Typography.Text type="secondary">{row.host.hostname || row.host.agent_id || row.host.agentId || '-'}</Typography.Text>
+          <Tag>{row.taskType}</Tag>
+          <Tag>exit {row.exitCode}</Tag>
+          <Typography.Text type="secondary">{formatBytes(row.outputBytes)}</Typography.Text>
+          {row.taskId !== '-' && <Typography.Text className="task-id-text" copyable={{ text: row.taskId }}>task_id: {row.taskId}</Typography.Text>}
+          {row.message !== '-' && <Typography.Text type={row.status === 'failed' ? 'danger' : 'secondary'}>{row.message}</Typography.Text>}
         </Space>
       </List.Item>}
     />
-    {hosts.length > 80 && <Typography.Text type="secondary">仅展示前 80 台，完整结果请按 host 查看。</Typography.Text>}
   </div>;
 });
 
