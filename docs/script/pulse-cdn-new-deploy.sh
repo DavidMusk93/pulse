@@ -29,9 +29,12 @@ run_with_stderr() {
   local rc
   local reason
   err_file=$(mktemp "/tmp/pulse-deploy.${index}.${step}.stderr.XXXXXX")
-  "$@" 2> >(tee "$err_file" >&2)
+  "$@" 2>"$err_file"
   rc=$?
   if [ "$rc" -ne 0 ]; then
+    if [ -s "$err_file" ]; then
+      tail -n 80 "$err_file" >&2
+    fi
     reason=$(last_error_line "$err_file")
     echo "ERROR phase=deploy host=${host} index=${index} step=${step} rc=${rc} reason=${reason}" >&2
   fi
@@ -73,17 +76,17 @@ call() {
 
   echo "EVENT phase=deploy host=${host} index=${index} status=start root=${install_root}"
   run_with_stderr "$host" "$index" stage_remote_tmp ssh "$host" "rm -rf '$remote_tmp' && mkdir -p '$remote_tmp'" || return "$?"
-  run_with_stderr "$host" "$index" upload_jar scp "$jar_path" "${scp_host}:${remote_tmp}/pulse.jar" || return "$?"
+  run_with_stderr "$host" "$index" upload_jar scp -q "$jar_path" "${scp_host}:${remote_tmp}/pulse.jar" || return "$?"
   task_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../task" && pwd)"
   if [ -d "$task_dir" ]; then
     run_with_stderr "$host" "$index" stage_task_dir ssh "$host" "mkdir -p '$remote_tmp/tasks'" || return "$?"
-    run_with_stderr "$host" "$index" upload_tasks scp "$task_dir"/prepare-disk-layout.sh "$task_dir"/analyze-block-layout.py "$task_dir"/repair-corrupt-sqlite3.sh "${scp_host}:${remote_tmp}/tasks/" || return "$?"
+    run_with_stderr "$host" "$index" upload_tasks scp -q "$task_dir"/prepare-disk-layout.sh "$task_dir"/analyze-block-layout.py "$task_dir"/repair-corrupt-sqlite3.sh "${scp_host}:${remote_tmp}/tasks/" || return "$?"
   fi
   if [ -n "$jre_tarball" ] && [ "$jre_tarball" != "-" ]; then
-    run_with_stderr "$host" "$index" upload_jre scp "$jre_tarball" "${scp_host}:${remote_tmp}/pulse-jre.tar.gz" || return "$?"
+    run_with_stderr "$host" "$index" upload_jre scp -q "$jre_tarball" "${scp_host}:${remote_tmp}/pulse-jre.tar.gz" || return "$?"
   fi
   if [ -n "$group_plan_path" ] && [ "$group_plan_path" != "-" ] && [ -f "$group_plan_path" ]; then
-    run_with_stderr "$host" "$index" upload_group_plan scp "$group_plan_path" "${scp_host}:${remote_tmp}/pulse-group-plan.csv" || return "$?"
+    run_with_stderr "$host" "$index" upload_group_plan scp -q "$group_plan_path" "${scp_host}:${remote_tmp}/pulse-group-plan.csv" || return "$?"
   fi
   run_with_stderr "$host" "$index" remote_install ssh "$host" 'bash -s' -- "$host" "$coordinators_csv" "$install_root" "$remote_tmp" "$cluster_fallback" "$expected_jar_sha" <<'REMOTE'
 set -euo pipefail
