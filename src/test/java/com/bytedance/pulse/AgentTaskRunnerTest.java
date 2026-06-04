@@ -2,12 +2,15 @@ package com.bytedance.pulse;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static java.util.Map.entry;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -63,6 +66,26 @@ class AgentTaskRunnerTest {
         assertEquals("REPAIR:--dry-run --port 12345\n", result.payload().get("output"));
     }
 
+    @Test
+    void receivesFileAndRunsStagedShellScript() throws Exception {
+        String script = "printf 'SHELL:%s:%s\\n' \"$PWD\" \"$*\"\n";
+        byte[] bytes = script.getBytes(StandardCharsets.UTF_8);
+        AgentTaskRunner runner = new AgentTaskRunner("agent-1", fixedClock(), taskDir.toString());
+
+        runner.handleMessages(List.of(filePut("file-1", "task-shell", "script.sh", bytes)));
+
+        PulseMessage fileReply = awaitReply(runner, "reply.file_received");
+        assertEquals("received", fileReply.payload().get("status"));
+        assertTrue(Files.exists(Path.of(fileReply.payload().get("local_path").toString())));
+
+        runner.handleMessages(List.of(shellExecute("task-shell", "file-1", TaskOutputCodec.sha256(bytes), List.of("--dry-run"))));
+
+        PulseMessage result = awaitResult(runner);
+        assertEquals("completed", result.payload().get("status"));
+        assertTrue(result.payload().get("output").toString().contains("SHELL:"));
+        assertTrue(result.payload().get("output").toString().contains("--dry-run"));
+    }
+
     private static PulseMessage command(String taskId, String taskType, String scriptPath, List<String> args) {
         return new PulseMessage(
                 "cmd-" + taskId,
@@ -80,16 +103,60 @@ class AgentTaskRunnerTest {
                         "timeout_ms", 60_000));
     }
 
+    private static PulseMessage filePut(String fileId, String taskId, String fileName, byte[] content) {
+        return new PulseMessage(
+                "cmd-file-" + fileId,
+                "cmd.file_put",
+                1,
+                null,
+                null,
+                Map.ofEntries(
+                        entry("task_id", taskId),
+                        entry("file_id", fileId),
+                        entry("agent_id", "agent-1"),
+                        entry("file_name", fileName),
+                        entry("file_role", "shell_script"),
+                        entry("target_dir", "workspace"),
+                        entry("content_encoding", "base64"),
+                        entry("content", Base64.getEncoder().encodeToString(content)),
+                        entry("content_sha256", TaskOutputCodec.sha256(content)),
+                        entry("content_bytes", content.length),
+                        entry("mode", "0700")));
+    }
+
+    private static PulseMessage shellExecute(String taskId, String fileId, String sha256, List<String> args) {
+        return new PulseMessage(
+                "cmd-shell-" + taskId,
+                "cmd.shell_execute",
+                1,
+                null,
+                null,
+                Map.of(
+                        "task_id", taskId,
+                        "trace_id", "trace-" + taskId,
+                        "agent_id", "agent-1",
+                        "task_type", "shell_script",
+                        "script_file_id", fileId,
+                        "script_sha256", sha256,
+                        "work_dir", "workspace",
+                        "args", args,
+                        "timeout_ms", 60_000));
+    }
+
     private static PulseMessage awaitResult(AgentTaskRunner runner) throws InterruptedException {
+        return awaitReply(runner, "reply.task_result");
+    }
+
+    private static PulseMessage awaitReply(AgentTaskRunner runner, String type) throws InterruptedException {
         for (int attempt = 0; attempt < 50; attempt++) {
             for (PulseMessage reply : runner.drainReplies()) {
-                if ("reply.task_result".equals(reply.type())) {
+                if (type.equals(reply.type())) {
                     return reply;
                 }
             }
             Thread.sleep(20);
         }
-        throw new AssertionError("reply.task_result not observed");
+        throw new AssertionError(type + " not observed");
     }
 
     private static Clock fixedClock() {

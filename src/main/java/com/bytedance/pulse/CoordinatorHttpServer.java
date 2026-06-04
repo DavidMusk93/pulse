@@ -91,6 +91,28 @@ public class CoordinatorHttpServer {
                 }
                 if ("POST".equals(method)) {
                     Map<?, ?> body = readJson(exchange, Map.class);
+                    String operation = stringBody(body, "operation");
+                    if ("file_put".equals(operation)) {
+                        writeJson(exchange, 200, service.enqueueFilePut(
+                                agentId,
+                                stringBody(body, "file_name"),
+                                stringBody(body, "content_base64"),
+                                stringBody(body, "content_sha256"),
+                                longBody(body, "content_bytes"),
+                                stringBody(body, "target_dir"),
+                                stringBody(body, "file_role")));
+                        return;
+                    }
+                    if ("shell_script".equals(operation)) {
+                        writeJson(exchange, 200, service.enqueueShellScript(
+                                agentId,
+                                stringBody(body, "file_name"),
+                                stringBody(body, "content_base64"),
+                                stringBody(body, "content_sha256"),
+                                longBody(body, "content_bytes"),
+                                parseArgs(body.get("args"))));
+                        return;
+                    }
                     Object taskType = body.get("task_type");
                     if (taskType == null || taskType.toString().isBlank()) {
                         throw new IllegalArgumentException("task_type is required");
@@ -147,6 +169,23 @@ public class CoordinatorHttpServer {
         return Arrays.stream(value.trim().split("\\s+"))
                 .filter(part -> !part.isBlank())
                 .toList();
+    }
+
+    private static String stringBody(Map<?, ?> body, String key) {
+        Object value = body.get(key);
+        return value == null ? "" : value.toString();
+    }
+
+    private static long longBody(Map<?, ?> body, String key) {
+        Object value = body.get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return value == null || value.toString().isBlank() ? 0 : Long.parseLong(value.toString());
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException(key + " must be a number");
+        }
     }
 
     private void writeJson(HttpExchange exchange, int status, Object body) throws IOException {

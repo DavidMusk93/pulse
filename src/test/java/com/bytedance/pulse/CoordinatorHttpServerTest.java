@@ -19,6 +19,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -247,7 +248,8 @@ class CoordinatorHttpServerTest {
         assertTrue(Files.exists(Path.of("docs/task/repair-corrupt-sqlite3.sh")));
         assertTrue(deploy.contains("analyze-block-layout.py"));
         assertTrue(deploy.contains("repair-corrupt-sqlite3.sh"));
-        assertTrue(!deploy.contains("analyze-block-layout-py35.py"));
+        assertTrue(!deploy.contains("\"$task_dir\"/analyze-block-layout-py35.py"));
+        assertTrue(deploy.contains("rm -f \"$install_root/tasks/analyze-block-layout-py35.py\""));
         assertTrue(deploy.contains("python3_version"));
         assertTrue(deploy.contains("TASK_SCRIPT analyze-block-layout.py variant=standard"));
     }
@@ -285,6 +287,42 @@ class CoordinatorHttpServerTest {
         JsonNode repairJson = mapper.readTree(repair.body());
         assertEquals("repair_corrupt_sqlite3_dry_run", repairJson.get("execution_queue").get(2).get("task_type").asText());
         assertEquals("--port", repairJson.get("execution_queue").get(2).get("args").get(1).asText());
+    }
+
+    @Test
+    void taskApiEnqueuesFilePutAndShellScriptWithoutNewEndpoint() throws Exception {
+        String content = "hello";
+        String encoded = Base64.getEncoder().encodeToString(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String sha = TaskOutputCodec.sha256(content);
+
+        HttpResponse<String> filePut = postJson("/api/agents/agent-1/tasks", """
+                {"operation":"file_put","file_name":"hello.txt","file_role":"generic_file","target_dir":"files","content_base64":"%s","content_sha256":"%s","content_bytes":5}
+                """.formatted(encoded, sha));
+
+        assertEquals(200, filePut.statusCode());
+        JsonNode fileJson = mapper.readTree(filePut.body());
+        assertEquals("queued", fileJson.get("file_transfers").get(0).get("status").asText());
+
+        JsonNode fileCommand = mapper.readTree(postJson("/heartbeat", """
+                {"agent_id":"agent-1","epoch":1,"seq":10,"ttl_ms":15000,"messages":[]}
+                """).body()).get("messages").get(1);
+        assertEquals("cmd.file_put", fileCommand.get("type").asText());
+        assertEquals("hello.txt", fileCommand.get("payload").get("file_name").asText());
+
+        String shell = "echo shell";
+        String shellEncoded = Base64.getEncoder().encodeToString(shell.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String shellSha = TaskOutputCodec.sha256(shell);
+        HttpResponse<String> shellPost = postJson("/api/agents/agent-1/tasks", """
+                {"operation":"shell_script","file_name":"script.sh","content_base64":"%s","content_sha256":"%s","content_bytes":10,"args":["--dry-run"]}
+                """.formatted(shellEncoded, shellSha));
+
+        assertEquals(200, shellPost.statusCode());
+        JsonNode shellJson = mapper.readTree(shellPost.body());
+        boolean hasShellScript = false;
+        for (JsonNode transfer : shellJson.get("file_transfers")) {
+            hasShellScript = hasShellScript || "shell_script".equals(transfer.get("file_role").asText());
+        }
+        assertTrue(hasShellScript);
     }
 
     @Test

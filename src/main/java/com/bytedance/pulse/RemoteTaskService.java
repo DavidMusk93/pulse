@@ -10,15 +10,19 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.UUID;
+import java.util.Base64;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class RemoteTaskService {
     private static final int MAX_COMPLETIONS_PER_AGENT = 50;
     private static final int MAX_TRACES_PER_AGENT = 4;
+    private static final long MAX_INLINE_FILE_BYTES = 256 * 1024;
     private static final long DEFAULT_TASK_TIMEOUT_MS = 600_000;
     private final Clock clock;
     private final Map<String, Queue<RemoteTask>> executionQueues = new ConcurrentHashMap<>();
+    private final Map<String, Queue<ControlCommand>> controlQueues = new ConcurrentHashMap<>();
     private final Map<String, Map<String, RemoteTask>> inFlight = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, FileTransferStatus>> fileTransfers = new ConcurrentHashMap<>();
     private final Map<String, ArrayDeque<TaskResult>> completionQueues = new ConcurrentHashMap<>();
     private final Map<String, List<TaskTraceLogEntry>> traceLogs = new ConcurrentHashMap<>();
     private final Map<String, ResultAssembly> pendingResults = new ConcurrentHashMap<>();
@@ -58,6 +62,9 @@ public class RemoteTaskService {
                         .limit(MAX_TRACES_PER_AGENT)
                         .toList(),
                 List.copyOf(taskDefinitions.keySet()),
+                fileTransfers(agentId).values().stream()
+                        .sorted((left, right) -> Long.compare(right.updatedAtMs(), left.updatedAtMs()))
+                        .toList(),
                 streamLogs.values().stream()
                         .filter(log -> agentId.equals(log.agentId()))
                         .map(TaskStreamLog::snapshot)
@@ -98,6 +105,122 @@ public class RemoteTaskService {
         return snapshot(agentId);
     }
 
+    public synchronized TaskSnapshot enqueueFilePut(
+            String agentId,
+            String fileName,
+            String contentBase64,
+            String contentSha256,
+            long contentBytes,
+            String targetDir,
+            String fileRole) {
+        byte[] content = decodeContent(contentBase64, contentSha256, contentBytes);
+        String safeName = safeFileName(fileName);
+        String normalizedTarget = normalizeTargetDir(targetDir);
+        String normalizedRole = normalizeFileRole(fileRole);
+        long now = clock.millis();
+        String fileId = "file-" + UUID.randomUUID();
+        ControlCommand command = ControlCommand.filePut(
+                "cmd-file-put-" + fileId,
+                fileId,
+                "",
+                safeName,
+                normalizedRole,
+                normalizedTarget,
+                Base64.getEncoder().encodeToString(content),
+                contentSha256,
+                content.length,
+                "shell_script".equals(normalizedRole) ? "0700" : "0644",
+                now + DEFAULT_TASK_TIMEOUT_MS);
+        controlQueue(agentId).add(command);
+        fileTransfers(agentId).put(fileId, new FileTransferStatus(
+                fileId,
+                "",
+                agentId,
+                safeName,
+                normalizedRole,
+                normalizedTarget,
+                "queued",
+                contentSha256,
+                content.length,
+                "",
+                "",
+                now,
+                now));
+        traceFile(agentId, fileId, "", "file.enqueued", Map.of("file_name", safeName, "bytes", content.length, "role", normalizedRole));
+        return snapshot(agentId);
+    }
+
+    public synchronized TaskSnapshot enqueueShellScript(
+            String agentId,
+            String fileName,
+            String contentBase64,
+            String contentSha256,
+            long contentBytes,
+            List<String> requestedArgs) {
+        byte[] content = decodeContent(contentBase64, contentSha256, contentBytes);
+        String safeName = safeFileName(fileName == null || fileName.isBlank() ? "script.sh" : fileName);
+        List<String> args = normalizeArgs(requestedArgs, List.of("--dry-run"));
+        long now = clock.millis();
+        String taskId = "task-" + UUID.randomUUID();
+        String traceId = "trace-" + UUID.randomUUID();
+        String fileId = "file-" + UUID.randomUUID();
+        ControlCommand fileCommand = ControlCommand.filePut(
+                "cmd-file-put-" + fileId,
+                fileId,
+                taskId,
+                safeName,
+                "shell_script",
+                "workspace",
+                Base64.getEncoder().encodeToString(content),
+                contentSha256,
+                content.length,
+                "0700",
+                now + DEFAULT_TASK_TIMEOUT_MS);
+        RemoteTask task = new RemoteTask(
+                taskId,
+                traceId,
+                agentId,
+                "shell_script",
+                "",
+                args,
+                "queued",
+                now,
+                null,
+                null,
+                null,
+                null,
+                now + DEFAULT_TASK_TIMEOUT_MS,
+                "pulse-ui",
+                1);
+        ControlCommand shellCommand = ControlCommand.shellExecute(
+                "cmd-shell-execute-" + taskId,
+                task,
+                fileId,
+                contentSha256,
+                "workspace",
+                DEFAULT_TASK_TIMEOUT_MS);
+        Queue<ControlCommand> queue = controlQueue(agentId);
+        queue.add(fileCommand);
+        queue.add(shellCommand);
+        fileTransfers(agentId).put(fileId, new FileTransferStatus(
+                fileId,
+                taskId,
+                agentId,
+                safeName,
+                "shell_script",
+                "workspace",
+                "queued",
+                contentSha256,
+                content.length,
+                "",
+                "",
+                now,
+                now));
+        trace(task, "shell.enqueued", "ui", "pulse-ui", Map.of("file_id", fileId, "file_name", safeName, "args", args));
+        traceFile(agentId, fileId, taskId, "file.enqueued", Map.of("file_name", safeName, "bytes", content.length, "role", "shell_script"));
+        return snapshot(agentId);
+    }
+
     private static List<String> normalizeArgs(List<String> requestedArgs, List<String> defaultArgs) {
         List<String> args = requestedArgs == null || requestedArgs.isEmpty() ? defaultArgs : requestedArgs;
         if (args.isEmpty()) {
@@ -120,6 +243,24 @@ public class RemoteTaskService {
     }
 
     public synchronized Optional<PulseMessage> nextCommand(String agentId) {
+        Queue<ControlCommand> controlQueue = controlQueue(agentId);
+        ControlCommand control = controlQueue.poll();
+        if (control != null) {
+            if ("file_put".equals(control.kind())) {
+                markFileStatus(agentId, control.fileId(), "delivering", "", "");
+                return Optional.of(control.toFilePutMessage(agentId));
+            }
+            if ("shell_execute".equals(control.kind())) {
+                RemoteTask task = control.task();
+                long now = clock.millis();
+                RemoteTask delivered = task.withStatus("delivered", now, task.acceptedAtMs(), task.startedAtMs(), task.finishedAtMs());
+                inFlight(agentId).put(task.taskId(), delivered);
+                trace(delivered, "shell.dequeued_for_delivery", "coordinator", "coordinator", Map.of(
+                        "script_file_id", control.fileId(),
+                        "work_dir", control.workDir()));
+                return Optional.of(control.toShellExecuteMessage(agentId, delivered));
+            }
+        }
         Queue<RemoteTask> queue = queue(agentId);
         RemoteTask task = queue.poll();
         if (task == null) {
@@ -150,6 +291,10 @@ public class RemoteTaskService {
         for (PulseMessage message : messages) {
             if ("state.heartbeat".equals(message.type()) && message.payload() != null) {
                 syncAsyncTasks(agentId, message.payload());
+            }
+            if ("reply.file_received".equals(message.type())) {
+                acceptFileReceived(agentId, message.payload());
+                continue;
             }
             if (!"reply.task_accepted".equals(message.type())
                     && !"reply.task_result".equals(message.type())
@@ -259,12 +404,46 @@ public class RemoteTaskService {
         return executionQueues.computeIfAbsent(agentId, ignored -> new ArrayDeque<>());
     }
 
+    private Queue<ControlCommand> controlQueue(String agentId) {
+        return controlQueues.computeIfAbsent(agentId, ignored -> new ArrayDeque<>());
+    }
+
     private Map<String, RemoteTask> inFlight(String agentId) {
         return inFlight.computeIfAbsent(agentId, ignored -> new LinkedHashMap<>());
     }
 
+    private Map<String, FileTransferStatus> fileTransfers(String agentId) {
+        return fileTransfers.computeIfAbsent(agentId, ignored -> new LinkedHashMap<>());
+    }
+
     private ArrayDeque<TaskResult> completions(String agentId) {
         return completionQueues.computeIfAbsent(agentId, ignored -> new ArrayDeque<>());
+    }
+
+    private void acceptFileReceived(String agentId, Map<String, Object> payload) {
+        if (payload == null) {
+            return;
+        }
+        String fileId = stringValue(payload, "file_id");
+        String status = stringValue(payload, "status");
+        String localPath = stringValue(payload, "local_path");
+        String error = stringValue(payload, "runner_error");
+        if (fileId.isBlank()) {
+            return;
+        }
+        markFileStatus(agentId, fileId, status.isBlank() ? "unknown" : status, localPath, error);
+        traceFile(agentId, fileId, stringValue(payload, "task_id"), "file.received_by_agent", Map.of(
+                "status", status,
+                "local_path", localPath,
+                "runner_error", error));
+    }
+
+    private void markFileStatus(String agentId, String fileId, String status, String localPath, String error) {
+        FileTransferStatus existing = fileTransfers(agentId).get(fileId);
+        if (existing == null) {
+            return;
+        }
+        fileTransfers(agentId).put(fileId, existing.withStatus(status, localPath, error, clock.millis()));
     }
 
     private void trace(RemoteTask task, String event, String actor, String sourceId, Map<String, Object> detail) {
@@ -289,6 +468,19 @@ public class RemoteTaskService {
                         event,
                         actor,
                         sourceId,
+                        clock.millis(),
+                        detail));
+    }
+
+    private void traceFile(String agentId, String fileId, String taskId, String event, Map<String, Object> detail) {
+        traceLogs.computeIfAbsent("file-" + agentId + "-" + fileId, ignored -> new ArrayList<>())
+                .add(new TaskTraceLogEntry(
+                        "file-" + fileId,
+                        taskId == null ? "" : taskId,
+                        agentId,
+                        event,
+                        "agent".equals(event) ? "agent" : "coordinator",
+                        agentId,
                         clock.millis(),
                         detail));
     }
@@ -404,6 +596,65 @@ public class RemoteTaskService {
                 stringValue(payload, "runner_error"));
     }
 
+    private static byte[] decodeContent(String contentBase64, String contentSha256, long contentBytes) {
+        if (contentBase64 == null || contentBase64.isBlank()) {
+            throw new IllegalArgumentException("content_base64 is required");
+        }
+        byte[] content = Base64.getDecoder().decode(contentBase64);
+        if (content.length == 0 || content.length > MAX_INLINE_FILE_BYTES) {
+            throw new IllegalArgumentException("file size out of range");
+        }
+        if (contentBytes > 0 && content.length != contentBytes) {
+            throw new IllegalArgumentException("file byte size mismatch");
+        }
+        if (contentSha256 == null || contentSha256.isBlank() || !TaskOutputCodec.sha256(content).equals(contentSha256)) {
+            throw new IllegalArgumentException("file sha256 mismatch");
+        }
+        return content;
+    }
+
+    private static String safeFileName(String fileName) {
+        if (fileName == null || fileName.isBlank()) {
+            throw new IllegalArgumentException("file_name is required");
+        }
+        String value = fileName.replace('\\', '/');
+        int lastSlash = value.lastIndexOf('/');
+        if (lastSlash >= 0) {
+            value = value.substring(lastSlash + 1);
+        }
+        if (value.isBlank()
+                || value.equals(".")
+                || value.equals("..")
+                || value.contains("..")
+                || value.indexOf('\0') >= 0
+                || value.indexOf('\n') >= 0
+                || value.indexOf('\r') >= 0
+                || value.length() > 128) {
+            throw new IllegalArgumentException("invalid file_name");
+        }
+        return value;
+    }
+
+    private static String normalizeTargetDir(String targetDir) {
+        if (targetDir == null || targetDir.isBlank()) {
+            return "files";
+        }
+        return switch (targetDir) {
+            case "files", "workspace" -> targetDir;
+            default -> throw new IllegalArgumentException("invalid target_dir");
+        };
+    }
+
+    private static String normalizeFileRole(String fileRole) {
+        if (fileRole == null || fileRole.isBlank()) {
+            return "generic_file";
+        }
+        return switch (fileRole) {
+            case "generic_file", "shell_script" -> fileRole;
+            default -> throw new IllegalArgumentException("invalid file_role");
+        };
+    }
+
     private static String stringValue(Map<String, Object> payload, String key) {
         Object value = payload.get(key);
         return value == null ? "" : value.toString();
@@ -440,6 +691,119 @@ public class RemoteTaskService {
 }
 
 record TaskDefinition(String taskType, String scriptPath, List<String> args) {}
+
+record ControlCommand(
+        String kind,
+        String messageId,
+        String fileId,
+        String taskId,
+        String fileName,
+        String fileRole,
+        String targetDir,
+        String contentBase64,
+        String contentSha256,
+        long contentBytes,
+        String mode,
+        RemoteTask task,
+        String workDir,
+        long timeoutMs,
+        long deadlineMs) {
+    static ControlCommand filePut(
+            String messageId,
+            String fileId,
+            String taskId,
+            String fileName,
+            String fileRole,
+            String targetDir,
+            String contentBase64,
+            String contentSha256,
+            long contentBytes,
+            String mode,
+            long deadlineMs) {
+        return new ControlCommand(
+                "file_put",
+                messageId,
+                fileId,
+                taskId,
+                fileName,
+                fileRole,
+                targetDir,
+                contentBase64,
+                contentSha256,
+                contentBytes,
+                mode,
+                null,
+                "",
+                0,
+                deadlineMs);
+    }
+
+    static ControlCommand shellExecute(
+            String messageId,
+            RemoteTask task,
+            String fileId,
+            String scriptSha256,
+            String workDir,
+            long timeoutMs) {
+        return new ControlCommand(
+                "shell_execute",
+                messageId,
+                fileId,
+                task.taskId(),
+                "",
+                "shell_script",
+                "workspace",
+                "",
+                scriptSha256,
+                0,
+                "0700",
+                task,
+                workDir,
+                timeoutMs,
+                task.deadlineMs());
+    }
+
+    PulseMessage toFilePutMessage(String agentId) {
+        return new PulseMessage(
+                messageId,
+                "cmd.file_put",
+                1,
+                null,
+                deadlineMs,
+                Map.ofEntries(
+                        Map.entry("task_id", taskId == null ? "" : taskId),
+                        Map.entry("file_id", fileId),
+                        Map.entry("agent_id", agentId),
+                        Map.entry("file_name", fileName),
+                        Map.entry("file_role", fileRole),
+                        Map.entry("target_dir", targetDir),
+                        Map.entry("content_encoding", "base64"),
+                        Map.entry("content", contentBase64),
+                        Map.entry("content_sha256", contentSha256),
+                        Map.entry("content_bytes", contentBytes),
+                        Map.entry("mode", mode)));
+    }
+
+    PulseMessage toShellExecuteMessage(String agentId, RemoteTask delivered) {
+        return new PulseMessage(
+                messageId,
+                "cmd.shell_execute",
+                1,
+                null,
+                deadlineMs,
+                Map.of(
+                        "task_id", delivered.taskId(),
+                        "trace_id", delivered.traceId(),
+                        "agent_id", agentId,
+                        "task_type", delivered.taskType(),
+                        "script_file_id", fileId,
+                        "script_sha256", contentSha256,
+                        "work_dir", workDir,
+                        "args", delivered.args(),
+                        "timeout_ms", timeoutMs,
+                        "created_at_ms", delivered.createdAtMs()));
+    }
+}
 
 record RemoteTask(
         String taskId,
@@ -495,6 +859,38 @@ record TaskResult(
         long outputLines,
         String runnerError) {}
 
+record FileTransferStatus(
+        String fileId,
+        String taskId,
+        String agentId,
+        String fileName,
+        String fileRole,
+        String targetDir,
+        String status,
+        String contentSha256,
+        long contentBytes,
+        String localPath,
+        String runnerError,
+        long createdAtMs,
+        long updatedAtMs) {
+    FileTransferStatus withStatus(String nextStatus, String nextLocalPath, String nextError, long now) {
+        return new FileTransferStatus(
+                fileId,
+                taskId,
+                agentId,
+                fileName,
+                fileRole,
+                targetDir,
+                nextStatus,
+                contentSha256,
+                contentBytes,
+                nextLocalPath == null || nextLocalPath.isBlank() ? localPath : nextLocalPath,
+                nextError == null ? "" : nextError,
+                createdAtMs,
+                now);
+    }
+}
+
 final class ResultAssembly {
     Map<String, Object> metadata;
     int chunkCount = -1;
@@ -532,6 +928,7 @@ record TaskSnapshot(
         List<TaskResult> completionQueue,
         List<TaskTraceLogEntry> traces,
         List<String> taskTypes,
+        List<FileTransferStatus> fileTransfers,
         List<TaskStreamSnapshot> outputStreams) {}
 
 final class TaskStreamLog {

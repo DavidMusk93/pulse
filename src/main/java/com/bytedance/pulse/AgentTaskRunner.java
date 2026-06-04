@@ -2,8 +2,10 @@ package com.bytedance.pulse;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Clock;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -25,10 +27,15 @@ public class AgentTaskRunner {
     private final String agentId;
     private final Clock clock;
     private final String taskDir;
+    private final Path workDir;
+    private final Path filesDir;
+    private final Path workspaceDir;
+    private final Path spoolDir;
     private final ExecutorService executor;
     private final ConcurrentLinkedQueue<PendingReply> pendingReplies = new ConcurrentLinkedQueue<>();
     private final Set<String> acceptedTasks = ConcurrentHashMap.newKeySet();
     private final Map<String, RunningTask> runningTasks = new ConcurrentHashMap<>();
+    private final Map<String, ReceivedFile> receivedFiles = new ConcurrentHashMap<>();
 
     public AgentTaskRunner(String agentId, Clock clock) {
         this(
@@ -46,15 +53,32 @@ public class AgentTaskRunner {
         this.agentId = agentId;
         this.clock = clock;
         this.taskDir = taskDir;
+        String defaultWorkDir = Path.of(taskDir).getParent() == null
+                ? "/data24/otf/pulse/agent"
+                : Path.of(taskDir).getParent().resolve("agent").toString();
+        this.workDir = Path.of(System.getenv().getOrDefault("PULSE_AGENT_WORK_DIR", defaultWorkDir));
+        this.filesDir = workDir.resolve("files");
+        this.workspaceDir = workDir.resolve("workspace");
+        this.spoolDir = workDir.resolve("spool");
         this.executor = Executors.newFixedThreadPool(concurrency);
+        try {
+            Files.createDirectories(filesDir);
+            Files.createDirectories(workspaceDir);
+            Files.createDirectories(spoolDir.resolve("incoming"));
+        } catch (Exception exception) {
+            throw new IllegalStateException("failed to initialize agent work dir", exception);
+        }
     }
 
     public void handleMessages(List<PulseMessage> messages) {
         for (PulseMessage message : messages) {
-            if (!"cmd.task_execute".equals(message.type()) || message.payload() == null) {
-                continue;
+            if ("cmd.file_put".equals(message.type()) && message.payload() != null) {
+                handleFilePut(message);
+            } else if ("cmd.shell_execute".equals(message.type()) && message.payload() != null) {
+                handleShellExecute(message);
+            } else if ("cmd.task_execute".equals(message.type()) && message.payload() != null) {
+                handleTask(message);
             }
-            handleTask(message);
         }
     }
 
@@ -80,6 +104,83 @@ public class AgentTaskRunner {
                 .sorted(Comparator.comparingLong(RunningTask::acceptedAtMs))
                 .map(task -> task.toPayload(clock.millis()))
                 .toList();
+    }
+
+    private void handleFilePut(PulseMessage message) {
+        Map<String, Object> payload = message.payload();
+        String fileId = stringValue(payload, "file_id");
+        String taskId = stringValue(payload, "task_id");
+        String fileName = stringValue(payload, "file_name");
+        String fileRole = stringValue(payload, "file_role");
+        String targetDir = stringValue(payload, "target_dir");
+        String expectedSha = stringValue(payload, "content_sha256");
+        long expectedBytes = longValue(payload, "content_bytes", -1);
+        try {
+            if (fileId.isBlank()) {
+                throw new IllegalArgumentException("file_id is required");
+            }
+            String safeName = safeFileName(fileName);
+            byte[] content = Base64.getDecoder().decode(stringValue(payload, "content"));
+            if (expectedBytes >= 0 && content.length != expectedBytes) {
+                throw new IllegalArgumentException("content byte size mismatch");
+            }
+            if (!TaskOutputCodec.sha256(content).equals(expectedSha)) {
+                throw new IllegalArgumentException("content sha256 mismatch");
+            }
+            Path target = targetPath(fileId, taskId, safeName, fileRole, targetDir);
+            Files.createDirectories(target.getParent());
+            Path tmp = spoolDir.resolve("incoming").resolve(fileId + ".tmp");
+            Files.write(tmp, content);
+            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            target.toFile().setReadable(true, true);
+            target.toFile().setWritable(true, true);
+            target.toFile().setExecutable("shell_script".equals(fileRole), true);
+            ReceivedFile received = new ReceivedFile(fileId, taskId, target, expectedSha, content.length, "shell_script".equals(fileRole));
+            receivedFiles.put(fileId, received);
+            enqueueFileReply(message.messageId(), taskId, fileId, safeName, "received", target.toString(), expectedSha, content.length, "");
+        } catch (Exception exception) {
+            enqueueFileReply(message.messageId(), taskId, fileId, fileName, "rejected", "", expectedSha, Math.max(0, expectedBytes), exception.getMessage());
+        }
+    }
+
+    private void handleShellExecute(PulseMessage message) {
+        Map<String, Object> payload = message.payload();
+        String taskId = stringValue(payload, "task_id");
+        String traceId = stringValue(payload, "trace_id");
+        String fileId = stringValue(payload, "script_file_id");
+        String expectedSha = stringValue(payload, "script_sha256");
+        long timeoutMs = longValue(payload, "timeout_ms", DEFAULT_TASK_TIMEOUT_MS);
+        if (taskId.isBlank() || !acceptedTasks.add(taskId)) {
+            return;
+        }
+        ReceivedFile file = receivedFiles.get(fileId);
+        if (file == null || !file.executable() || !file.sha256().equals(expectedSha)) {
+            enqueueResultMessages(resultMessages(message.messageId(), taskId, traceId, "shell_script", "rejected", null, 0, 0, "", "script file is not staged"));
+            return;
+        }
+        List<String> args;
+        try {
+            args = normalizeArgs(argsValue(payload), List.of("--dry-run"));
+        } catch (IllegalArgumentException exception) {
+            enqueueResultMessages(resultMessages(message.messageId(), taskId, traceId, "shell_script", "rejected", null, 0, 0, "", exception.getMessage()));
+            return;
+        }
+        long acceptedAt = clock.millis();
+        runningTasks.put(taskId, new RunningTask(taskId, traceId, "shell_script", "accepted", acceptedAt, null, timeoutMs));
+        pendingReplies.add(new PendingReply(new PulseMessage(
+                "reply-task-accepted-" + agentId + "-" + taskId,
+                "reply.task_accepted",
+                1,
+                message.messageId(),
+                null,
+                Map.of(
+                        "task_id", taskId,
+                        "trace_id", traceId,
+                        "agent_id", agentId,
+                        "task_type", "shell_script",
+                        "status", "accepted",
+                        "accepted_at_ms", acceptedAt)), REPLY_REPLAY_SENDS));
+        executor.submit(() -> executeScript(message.messageId(), taskId, traceId, "shell_script", file.path(), args, timeoutMs, workspaceDir));
     }
 
     private void handleTask(PulseMessage message) {
@@ -123,27 +224,41 @@ public class AgentTaskRunner {
     }
 
     private void execute(String replyTo, String taskId, String traceId, TaskDefinition definition, List<String> args, long timeoutMs) {
+        executeScript(replyTo, taskId, traceId, definition.taskType(), Path.of(definition.scriptPath()), args, timeoutMs, null);
+    }
+
+    private void executeScript(
+            String replyTo,
+            String taskId,
+            String traceId,
+            String taskType,
+            Path scriptPath,
+            List<String> args,
+            long timeoutMs,
+            Path processWorkDir) {
         long started = clock.millis();
         runningTasks.computeIfPresent(taskId, (ignored, task) -> task.withRunning(started));
         Process process = null;
         StringBuilder output = new StringBuilder();
         Thread outputReader = null;
         try {
-            if (!Files.isRegularFile(Path.of(definition.scriptPath()))) {
-                enqueueResultMessages(resultMessages(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", "script not found"));
+            if (!Files.isRegularFile(scriptPath)) {
+                enqueueResultMessages(resultMessages(replyTo, taskId, traceId, taskType, "failed", null, started, clock.millis(), "", "script not found"));
                 return;
             }
             List<String> command = new ArrayList<>();
-            if (definition.scriptPath().endsWith(".py")) {
+            if (scriptPath.toString().endsWith(".py")) {
                 command.add("python3");
             } else {
                 command.add("bash");
             }
-            command.add(definition.scriptPath());
+            command.add(scriptPath.toString());
             command.addAll(args);
-            process = new ProcessBuilder(command)
-                    .redirectErrorStream(true)
-                    .start();
+            ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
+            if (processWorkDir != null) {
+                builder.directory(processWorkDir.toFile());
+            }
+            process = builder.start();
             Process runningProcess = process;
             outputReader = new Thread(() -> readOutput(taskId, runningProcess, output), "pulse-task-output-" + taskId);
             outputReader.setDaemon(true);
@@ -158,7 +273,7 @@ public class AgentTaskRunner {
                         replyTo,
                         taskId,
                         traceId,
-                        definition.taskType(),
+                        taskType,
                         "timed_out",
                         null,
                         started,
@@ -174,7 +289,7 @@ public class AgentTaskRunner {
                     replyTo,
                     taskId,
                     traceId,
-                    definition.taskType(),
+                    taskType,
                     exitCode == 0 ? "completed" : "failed",
                     exitCode,
                     started,
@@ -185,7 +300,7 @@ public class AgentTaskRunner {
             if (process != null) {
                 process.destroyForcibly();
             }
-            enqueueResultMessages(resultMessages(replyTo, taskId, traceId, definition.taskType(), "failed", null, started, clock.millis(), "", exception.getMessage()));
+            enqueueResultMessages(resultMessages(replyTo, taskId, traceId, taskType, "failed", null, started, clock.millis(), "", exception.getMessage()));
         } finally {
             runningTasks.remove(taskId);
         }
@@ -357,6 +472,76 @@ public class AgentTaskRunner {
         return List.of();
     }
 
+    private void enqueueFileReply(
+            String replyTo,
+            String taskId,
+            String fileId,
+            String fileName,
+            String status,
+            String localPath,
+            String contentSha256,
+            long contentBytes,
+            String error) {
+        pendingReplies.add(new PendingReply(new PulseMessage(
+                "reply-file-received-" + agentId + "-" + fileId,
+                "reply.file_received",
+                1,
+                replyTo,
+                null,
+                Map.of(
+                        "task_id", taskId == null ? "" : taskId,
+                        "file_id", fileId == null ? "" : fileId,
+                        "agent_id", agentId,
+                        "status", status,
+                        "file_name", fileName == null ? "" : fileName,
+                        "local_path", localPath == null ? "" : localPath,
+                        "content_sha256", contentSha256 == null ? "" : contentSha256,
+                        "content_bytes", contentBytes,
+                        "received_at_ms", clock.millis(),
+                        "runner_error", error == null ? "" : error)), REPLY_REPLAY_SENDS));
+    }
+
+    private Path targetPath(String fileId, String taskId, String safeName, String fileRole, String targetDir) throws Exception {
+        Path base;
+        if ("shell_script".equals(fileRole)) {
+            String safeTaskId = taskId == null || taskId.isBlank() ? fileId : safeFileName(taskId);
+            base = workspaceDir.resolve("scripts").resolve(safeTaskId);
+            safeName = "script.sh";
+        } else if ("workspace".equals(targetDir)) {
+            base = workspaceDir.resolve("files");
+        } else {
+            base = filesDir;
+        }
+        Path canonicalBase = base.toAbsolutePath().normalize();
+        Path target = canonicalBase.resolve(safeName).normalize();
+        if (!target.startsWith(canonicalBase)) {
+            throw new IllegalArgumentException("target path escapes work dir");
+        }
+        return target;
+    }
+
+    private static String safeFileName(String fileName) {
+        if (fileName == null || fileName.isBlank()) {
+            throw new IllegalArgumentException("file_name is required");
+        }
+        String value = fileName.replace('\\', '/');
+        int lastSlash = value.lastIndexOf('/');
+        if (lastSlash >= 0) {
+            value = value.substring(lastSlash + 1);
+        }
+        if (value.isBlank()
+                || value.equals(".")
+                || value.equals("..")
+                || value.contains("..")
+                || value.indexOf('\0') >= 0
+                || value.indexOf('\n') >= 0
+                || value.indexOf('\r') >= 0
+                || value.length() > 128) {
+            throw new IllegalArgumentException("invalid file_name");
+        }
+        return value;
+    }
+
     private static List<String> normalizeArgs(List<String> requestedArgs, List<String> defaultArgs) {
         List<String> args = requestedArgs == null || requestedArgs.isEmpty() ? defaultArgs : requestedArgs;
         if (args.isEmpty()) {
@@ -425,6 +610,8 @@ public class AgentTaskRunner {
     }
 
     private record PendingReply(PulseMessage message, int remainingSends) {}
+
+    private record ReceivedFile(String fileId, String taskId, Path path, String sha256, long bytes, boolean executable) {}
 
     private static final class RunningTask {
         private final String taskId;

@@ -118,6 +118,27 @@ public class CoordinatorService {
         return taskService.enqueue(agentId, taskType, args);
     }
 
+    public TaskSnapshot enqueueFilePut(
+            String agentId,
+            String fileName,
+            String contentBase64,
+            String contentSha256,
+            long contentBytes,
+            String targetDir,
+            String fileRole) {
+        return taskService.enqueueFilePut(agentId, fileName, contentBase64, contentSha256, contentBytes, targetDir, fileRole);
+    }
+
+    public TaskSnapshot enqueueShellScript(
+            String agentId,
+            String fileName,
+            String contentBase64,
+            String contentSha256,
+            long contentBytes,
+            List<String> args) {
+        return taskService.enqueueShellScript(agentId, fileName, contentBase64, contentSha256, contentBytes, args);
+    }
+
     public TaskSnapshot keepCompletion(String agentId, String taskId) {
         return taskService.keepCompletion(agentId, taskId);
     }
