@@ -120,6 +120,8 @@ type ClusterExecutionRow = {
   outputBytes: number;
   message: string;
   outputPreview: string;
+  outputLineCount: number;
+  outputPreviewLineCount: number;
 };
 
 function normalizeAddress(value?: string) {
@@ -259,6 +261,7 @@ function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot): ClusterEx
   const file = snapshot?.file_transfers?.[0];
   const item = completion || execution || file;
   const outputText = completion ? completionOutput(completion) : stream ? streamOutput(stream) : '';
+  const outputPreview = outputText ? compactOutputPreview(outputText) : { text: '', totalLines: 0, shownLines: 0 };
   const rawStatus = String(item?.status || '');
   const exitCode = completion?.exit_code ?? completion?.exitCode;
   const hasFailure = ['failed', 'timeout', 'timed_out', 'rejected'].includes(rawStatus)
@@ -277,14 +280,22 @@ function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot): ClusterEx
     exitCode: exitCode === undefined || exitCode === null ? '-' : String(exitCode),
     outputBytes: Number(item?.output_bytes ?? item?.outputBytes ?? item?.stream_bytes ?? item?.streamBytes ?? 0),
     message: item?.runner_error || item?.error || item?.file_name || item?.task_type || item?.taskType || '-',
-    outputPreview: outputText ? compactOutputPreview(outputText) : ''
+    outputPreview: outputPreview.text,
+    outputLineCount: outputPreview.totalLines,
+    outputPreviewLineCount: outputPreview.shownLines
   };
 }
 
 function compactOutputPreview(value: string) {
   const lines = value.split('\n').map(line => line.trimEnd()).filter(Boolean);
-  const preview = lines.slice(-8).join('\n');
-  return preview.length > 1200 ? `${preview.slice(0, 1200)}...` : preview;
+  const shownLines = Math.min(lines.length, 12);
+  const preview = lines.slice(-shownLines).join('\n');
+  const text = preview.length > 1800 ? `${preview.slice(0, 1800)}...` : preview;
+  return {
+    text: lines.length > shownLines ? `... 仅显示最后 ${shownLines} / ${lines.length} 行\n${text}` : text,
+    totalLines: lines.length,
+    shownLines
+  };
 }
 
 function groupByCluster(hosts: HostView[]) {
@@ -828,7 +839,7 @@ function TaskModal(props: {
       setArgsUnlocked(true);
     }
   }
-  return <Modal open={props.open} onCancel={props.onClose} footer={null} width="min(1320px, calc(100vw - 44px))" className="task-modal" title={null} closeIcon={<span className="mac-close" />}>
+  return <Modal open={props.open} onCancel={props.onClose} footer={null} width="min(1480px, calc(100vw - 32px))" className={`task-modal ${isClusterRun ? 'cluster-run-modal' : ''}`} title={null} closeIcon={<span className="mac-close" />}>
     <div className="task-shell">
       <div className="task-sidebar">
         <Card className="task-hero" variant="outlined">
@@ -959,10 +970,12 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
   const [file, setFile] = useState<File | null>(null);
   const [fileTargetDir, setFileTargetDir] = useState<'files' | 'workspace'>('files');
   const [scriptText, setScriptText] = useState('#!/usr/bin/env bash\nset -euo pipefail\necho \"pulse shell ok args=$*\"\n');
-  const [scriptName, setScriptName] = useState('pulse-shell.sh');
+  const [scriptTitle, setScriptTitle] = useState('');
   const [actionMessage, setActionMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const parsedArgs = useMemo(() => parseTaskArgs(taskArgs || defaultTaskArgs), [taskArgs]);
+  const scriptLines = useMemo(() => countLines(scriptText), [scriptText]);
+  const scriptFileName = useMemo(() => shellFileName(scriptTitle, scriptText), [scriptTitle, scriptText]);
   async function submitFile() {
     if (!file) return;
     setBusy(true);
@@ -980,8 +993,8 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
     setBusy(true);
     setActionMessage('正在提交 Shell 执行...');
     try {
-      await onShellRun(await textPayload(scriptName, scriptText), parsedArgs);
-      setActionMessage(`Shell 执行已提交：${scriptName}`);
+      await onShellRun(await textPayload(scriptFileName, scriptText), parsedArgs);
+      setActionMessage(`Shell 执行已提交：${scriptTitle.trim() || '临时脚本'} · ${scriptLines} 行`);
     } catch (error) {
       setActionMessage(`Shell 执行提交失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -1016,7 +1029,11 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
     <div className="file-shell-panel shell-execute-panel">
       <Typography.Text className="task-args-title">Shell 执行</Typography.Text>
       <Space direction="vertical" size={8} className="file-shell-stack">
-        <Input value={scriptName} onChange={event => setScriptName(event.target.value)} placeholder="script.sh" />
+        <Input value={scriptTitle} onChange={event => setScriptTitle(event.target.value)} placeholder="运行标题（可选，例如：查看 Tide worker 日志）" />
+        <Flex justify="space-between" align="center" gap={8} wrap>
+          <Typography.Text type="secondary">自动脚本名：{scriptFileName}</Typography.Text>
+          <Tag color="blue">{scriptLines} 行</Tag>
+        </Flex>
         <ShellScriptEditor value={scriptText} onChange={setScriptText} />
         <Button danger type="primary" disabled={!scriptText.trim() || busy} loading={busy && actionMessage.includes('Shell')} onClick={submitShell}>执行 Shell 脚本</Button>
         <Typography.Text type="secondary">Shell 执行使用这里的脚本内容；它和上面的文件上传是两个独立功能。</Typography.Text>
@@ -1044,12 +1061,20 @@ const ShellScriptEditor = memo(function ShellScriptEditor({
   onChange: (value: string) => void;
 }) {
   const highlightRef = useRef<HTMLPreElement | null>(null);
+  const lineRef = useRef<HTMLDivElement | null>(null);
+  const lineCount = useMemo(() => countLines(value), [value]);
   const handleScroll = useCallback((event: React.UIEvent<HTMLTextAreaElement>) => {
     if (!highlightRef.current) return;
     highlightRef.current.scrollTop = event.currentTarget.scrollTop;
     highlightRef.current.scrollLeft = event.currentTarget.scrollLeft;
+    if (lineRef.current) {
+      lineRef.current.scrollTop = event.currentTarget.scrollTop;
+    }
   }, []);
   return <div className="shell-script-editor" data-renderer="shell">
+    <div ref={lineRef} className="shell-script-lines" aria-hidden="true">
+      {Array.from({ length: lineCount }, (_, index) => <span key={index}>{index + 1}</span>)}
+    </div>
     <pre ref={highlightRef} className="shell-script-highlight" aria-hidden="true">
       <code dangerouslySetInnerHTML={{ __html: highlightShell(value) }} />
     </pre>
@@ -1111,7 +1136,10 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
           <Typography.Text type="secondary">{formatBytes(row.outputBytes)}</Typography.Text>
           {row.taskId !== '-' && <Typography.Text className="task-id-text" copyable={{ text: row.taskId }}>task_id: {row.taskId}</Typography.Text>}
           {row.message !== '-' && <Typography.Text type={row.status === 'failed' ? 'danger' : 'secondary'}>{row.message}</Typography.Text>}
-          {row.outputPreview && <pre className="cluster-exec-output">{row.outputPreview}</pre>}
+          {row.outputPreview && <>
+            <Tag color="cyan">展示最后 {row.outputPreviewLineCount} / {row.outputLineCount} 行</Tag>
+            <pre className="cluster-exec-output">{row.outputPreview}</pre>
+          </>}
         </Space>
       </List.Item>}
     />
@@ -1329,6 +1357,23 @@ function streamOutput(stream: any) {
 function countLines(value: string) {
   if (!value) return 0;
   return value.endsWith('\n') ? value.split('\n').length - 1 : value.split('\n').length;
+}
+
+function shellFileName(title: string, content: string) {
+  const base = title.trim() || firstMeaningfulShellLine(content) || 'shell-script';
+  const slug = base
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'shell-script';
+  return `${slug}.sh`;
+}
+
+function firstMeaningfulShellLine(content: string) {
+  return content
+    .split('\n')
+    .map(line => line.trim())
+    .find(line => line && !line.startsWith('#!') && !line.startsWith('#') && !line.startsWith('set ')) || '';
 }
 
 function formatBytes(value: any) {

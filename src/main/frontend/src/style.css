@@ -349,6 +349,10 @@ body {
   gap: 16px;
   min-height: 0;
 }
+.cluster-run-modal .task-shell {
+  height: min(920px, 82vh);
+  grid-template-columns: minmax(280px, .82fr) minmax(0, 2.4fr);
+}
 .task-sidebar,
 .task-workspace {
   min-width: 0;
@@ -433,7 +437,7 @@ body {
 .shell-script-highlight,
 .shell-script-input {
   margin: 0;
-  padding: 14px 16px;
+  padding: 14px 16px 14px 58px;
   width: 100%;
   height: 176px;
   border: 0;
@@ -441,6 +445,23 @@ body {
   white-space: pre;
   tab-size: 2;
   overflow: auto;
+}
+.shell-script-lines {
+  position: absolute;
+  z-index: 2;
+  inset: 0 auto 0 0;
+  width: 42px;
+  padding: 14px 8px 14px 0;
+  overflow: hidden;
+  border-right: 1px solid rgba(244,63,94,.18);
+  color: #94a3b8;
+  font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-align: right;
+  user-select: none;
+}
+.shell-script-lines span {
+  display: block;
+  height: 20.8px;
 }
 .shell-script-highlight {
   pointer-events: none;
@@ -515,7 +536,8 @@ body {
 }
 .cluster-exec-output {
   flex: 0 0 100%;
-  max-height: 160px;
+  min-height: 96px;
+  max-height: 280px;
   margin: 2px 0 0;
   padding: 10px 12px;
   overflow: auto;
