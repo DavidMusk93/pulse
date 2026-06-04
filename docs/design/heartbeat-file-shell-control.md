@@ -36,6 +36,15 @@ workspace_dir  = ${agent_work_dir}/workspace
 spool_dir      = ${agent_work_dir}/spool
 ```
 
+`spool` 的含义：
+
+- `spool` 是 agent 本地磁盘暂存队列，用于保存“已经产生但尚未被下一跳确认接收”的数据。
+- `spool` 不是最终结果存储，也不是 UI 查询源；它只用于心跳失败、group leader 重启、coordinator 暂不可达或本地内存队列满时保证数据不丢。
+- 上传文件的 incoming 临时文件、待重试的 `reply.file_received`、待重试的 task stream chunk、待重试的 `reply.task_result` 都可以进入 `spool`。
+- 一旦下一跳通过 heartbeat 确认接收，agent 才能删除对应 spool 项。
+- `spool` 必须有容量上限和可观测指标，超过上限时 agent 必须拒绝新上传或让任务进入明确的 backpressure/failed 状态，禁止静默丢弃。
+- 前端最终看到的上传结果来自 coordinator 收到的 `reply.file_received`；前端最终看到的 shell 执行结果来自 coordinator completion queue 中的 `reply.task_result`，不能依赖 agent 本地 spool。
+
 默认部署到 `/data24/otf/pulse` 时：
 
 ```text
@@ -378,7 +387,9 @@ Run UI 增加一个新的操作区域：`文件与脚本`。
 - 执行中状态继续展示在现有 task running 区域。
 - 输出继续进入现有 stream viewer。
 - completion 继续进入现有 completion queue。
-- 文件上传本身不是 shell execution completion，但 UI 可以显示 `reply.file_received` 的状态卡。
+- 文件上传本身不是 shell execution completion，但 UI 必须显示 `reply.file_received` 的状态卡，确保用户能看到 `queued/delivering/received/failed` 和失败原因。
+- shell 执行必须在现有 completion viewer 中展示完整 `reply.task_result`；如果任务没有输出，UI 也必须展示完成状态、exit code、耗时和 output bytes，禁止空白。
+- UI 必须能从同一个操作区域关联展示 `FilePut -> file_received -> ShellExecute -> task_result` 的生命周期，避免用户只看到脚本输出而看不到上传是否成功。
 
 ## 安全边界
 
@@ -447,4 +458,3 @@ Run UI 增加一个新的操作区域：`文件与脚本`。
 - agent shell runner 并发度固定为 `1`。
 - 路径必须限制在 `$agent_work_dir/files` 或 `$agent_work_dir/workspace`。
 - UI 只能扩展现有操作区和现有 coordinator API，不得引入新的 agent API。
-
