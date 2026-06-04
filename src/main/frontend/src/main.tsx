@@ -119,6 +119,7 @@ type ClusterExecutionRow = {
   exitCode: string;
   outputBytes: number;
   message: string;
+  outputPreview: string;
 };
 
 function normalizeAddress(value?: string) {
@@ -254,8 +255,10 @@ function clusterExecutionSummary(hosts: HostView[], summary: BatchSubmitSummary 
 function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot): ClusterExecutionRow {
   const completion = snapshot?.completion_queue?.[0];
   const execution = snapshot?.execution_queue?.[0] || activeHostTasks(host)[0];
+  const stream = streamForTask(snapshot || null, completion?.task_id || completion?.taskId || execution?.task_id || execution?.taskId);
   const file = snapshot?.file_transfers?.[0];
   const item = completion || execution || file;
+  const outputText = completion ? completionOutput(completion) : stream ? streamOutput(stream) : '';
   const rawStatus = String(item?.status || '');
   const exitCode = completion?.exit_code ?? completion?.exitCode;
   const hasFailure = ['failed', 'timeout', 'timed_out', 'rejected'].includes(rawStatus)
@@ -273,8 +276,15 @@ function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot): ClusterEx
     taskType: taskLabels[item?.task_type || item?.taskType || ''] || item?.task_type || item?.taskType || '-',
     exitCode: exitCode === undefined || exitCode === null ? '-' : String(exitCode),
     outputBytes: Number(item?.output_bytes ?? item?.outputBytes ?? item?.stream_bytes ?? item?.streamBytes ?? 0),
-    message: item?.runner_error || item?.error || item?.file_name || item?.task_type || item?.taskType || '-'
+    message: item?.runner_error || item?.error || item?.file_name || item?.task_type || item?.taskType || '-',
+    outputPreview: outputText ? compactOutputPreview(outputText) : ''
   };
+}
+
+function compactOutputPreview(value: string) {
+  const lines = value.split('\n').map(line => line.trimEnd()).filter(Boolean);
+  const preview = lines.slice(-8).join('\n');
+  return preview.length > 1200 ? `${preview.slice(0, 1200)}...` : preview;
 }
 
 function groupByCluster(hosts: HostView[]) {
@@ -1096,12 +1106,12 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
         <Space className="cluster-exec-row" size={10} wrap>
           <Badge status={row.status === 'success' ? 'success' : row.status === 'failed' ? 'error' : row.status === 'running' ? 'processing' : 'default'} text={row.label} />
           <Typography.Text strong>{normalizeAddress(row.host.ip)}</Typography.Text>
-          <Typography.Text type="secondary">{row.host.hostname || row.host.agent_id || row.host.agentId || '-'}</Typography.Text>
           <Tag>{row.taskType}</Tag>
           <Tag>exit {row.exitCode}</Tag>
           <Typography.Text type="secondary">{formatBytes(row.outputBytes)}</Typography.Text>
           {row.taskId !== '-' && <Typography.Text className="task-id-text" copyable={{ text: row.taskId }}>task_id: {row.taskId}</Typography.Text>}
           {row.message !== '-' && <Typography.Text type={row.status === 'failed' ? 'danger' : 'secondary'}>{row.message}</Typography.Text>}
+          {row.outputPreview && <pre className="cluster-exec-output">{row.outputPreview}</pre>}
         </Space>
       </List.Item>}
     />

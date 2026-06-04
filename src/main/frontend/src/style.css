@@ -482,9 +482,15 @@ body {
 }
 .cluster-run-summary {
   padding: 6px 4px;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .cluster-run-summary-body,
 .cluster-run-errors {
+  flex: 0 0 auto;
   width: 100%;
 }
 .cluster-exec-stats {
@@ -494,15 +500,32 @@ body {
   padding: 12px !important;
 }
 .cluster-exec-list {
-  max-height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
+  padding-right: 4px;
 }
 .cluster-exec-row {
   width: 100%;
+  align-items: flex-start !important;
 }
 .cluster-exec-row .task-id-text {
   width: auto;
   max-width: 320px;
+}
+.cluster-exec-output {
+  flex: 0 0 100%;
+  max-height: 160px;
+  margin: 2px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid #e4eaf3;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #e5e7eb;
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .cluster-run-errors {
   display: flex;
