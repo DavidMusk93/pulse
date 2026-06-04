@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: grep-tide-worker-occupy.sh [pattern]
+Usage: find-tide-worker-log.sh [pattern]
 
 Find tide_worker processes whose environment contains
 _TIDELET_CONTAINER_IS_VIRTUAL=false, then search their cwd log:
