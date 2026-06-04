@@ -69,6 +69,7 @@ type TaskSnapshot = {
   completion_queue?: any[];
   traces?: any[];
   task_definitions?: string[];
+  file_transfers?: any[];
   output_streams?: any[];
 };
 
@@ -470,6 +471,38 @@ function App() {
             setOutput(`集群下发部分失败: ${failed.length}/${targets.length}\n${failed.map(result => String((result as PromiseRejectedResult).reason)).join('\n')}`);
           }
         }}
+        onFilePut={async payload => {
+          const targets = activeCluster?.hosts || (activeHost ? [activeHost] : []);
+          if (!targets.length) return;
+          const results = await Promise.allSettled(targets.map(async target => {
+            const id = encodeURIComponent(agentId(target));
+            return fetchJson<TaskSnapshot>(`/api/agents/${id}/tasks`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ operation: 'file_put', file_role: 'generic_file', target_dir: 'files', ...payload })
+            });
+          }));
+          const first = results.find((result): result is PromiseFulfilledResult<TaskSnapshot> => result.status === 'fulfilled');
+          if (first) setSnapshot(first.value);
+          const failed = results.filter(result => result.status === 'rejected');
+          setOutput(failed.length ? `文件上传部分失败: ${failed.length}/${targets.length}` : '文件上传已入队，等待 agent 心跳确认。');
+        }}
+        onShellRun={async (payload, args) => {
+          const targets = activeCluster?.hosts || (activeHost ? [activeHost] : []);
+          if (!targets.length) return;
+          const results = await Promise.allSettled(targets.map(async target => {
+            const id = encodeURIComponent(agentId(target));
+            return fetchJson<TaskSnapshot>(`/api/agents/${id}/tasks`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ operation: 'shell_script', args, ...payload })
+            });
+          }));
+          const first = results.find((result): result is PromiseFulfilledResult<TaskSnapshot> => result.status === 'fulfilled');
+          if (first) setSnapshot(first.value);
+          const failed = results.filter(result => result.status === 'rejected');
+          setOutput(failed.length ? `Shell 下发部分失败: ${failed.length}/${targets.length}` : 'Shell 脚本已入队，等待上传确认和串行执行。');
+        }}
         onPop={async () => {
           if (!activeTargetHost || !snapshot?.completion_queue?.[0]) {
             if (activeTargetHost) await refreshSnapshot(activeTargetHost);
@@ -588,6 +621,8 @@ function TaskModal(props: {
   taskType: string;
   setTaskType: (value: string) => void;
   onRun: (args: string[]) => Promise<void>;
+  onFilePut: (payload: any) => Promise<void>;
+  onShellRun: (payload: any, args: string[]) => Promise<void>;
   onPop: () => Promise<void>;
 }) {
   const [argsUnlocked, setArgsUnlocked] = useState(false);
@@ -625,6 +660,8 @@ function TaskModal(props: {
             setTaskType={props.setTaskType}
             argsUnlocked={argsUnlocked}
             onRun={props.onRun}
+            onFilePut={props.onFilePut}
+            onShellRun={props.onShellRun}
             onPop={props.onPop}
           />
         </Card>
@@ -642,6 +679,18 @@ function TaskModal(props: {
           </Space>
         </Card>
         <Card title="结果队列"><Statistic value={completions.length} /></Card>
+        <Card title="文件上传">
+          {(props.snapshot?.file_transfers || []).length > 0 ? <List
+            dataSource={props.snapshot?.file_transfers || []}
+            renderItem={(file: any) => <List.Item>
+              <Space direction="vertical" size={2}>
+                <Space><Typography.Text strong>{file.file_name || '-'}</Typography.Text><Tag color={statusColor(file.status)}>{statusLabel(file.status)}</Tag></Space>
+                <Typography.Text type="secondary">{file.file_role || '-'} · {formatBytes(file.content_bytes)}</Typography.Text>
+                {file.runner_error && <Typography.Text type="danger">{file.runner_error}</Typography.Text>}
+              </Space>
+            </List.Item>}
+          /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无文件上传记录" />}
+        </Card>
         <Card title="执行队列">
           {tasks.length > 0 ? <List dataSource={tasks} renderItem={(task: any) => <List.Item><Space direction="vertical" size={2}><Space><Typography.Text strong>agent 执行中</Typography.Text><Tag color="blue">{statusLabel(task.status)}</Tag></Space><Typography.Text type="secondary">{taskLabels[task.task_type] || task.task_type}</Typography.Text><Typography.Text className="task-id-text">task_id: {task.task_id || '-'}</Typography.Text><Progress percent={task.status === 'running' ? 68 : 38} showInfo={false}/></Space></List.Item>} /> : executions.length > 0 ? <List dataSource={executions} renderItem={(task: any) => <List.Item><Space direction="vertical" size={2}><Typography.Text>{statusLabel(task.status)} · {taskLabels[task.task_type] || task.task_type}</Typography.Text><Typography.Text className="task-id-text">task_id: {task.task_id || '-'}</Typography.Text></Space></List.Item>} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有待执行任务。来自 agent 心跳的任务会显示在上方。" />}
         </Card>
@@ -677,22 +726,58 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
   setTaskType,
   argsUnlocked,
   onRun,
+  onFilePut,
+  onShellRun,
   onPop
 }: {
   taskType: string;
   setTaskType: (value: string) => void;
   argsUnlocked: boolean;
   onRun: (args: string[]) => Promise<void>;
+  onFilePut: (payload: any) => Promise<void>;
+  onShellRun: (payload: any, args: string[]) => Promise<void>;
   onPop: () => Promise<void>;
 }) {
   const [taskArgs, setTaskArgs] = useState(defaultTaskArgs);
+  const [file, setFile] = useState<File | null>(null);
+  const [scriptText, setScriptText] = useState('#!/usr/bin/env bash\nset -euo pipefail\necho \"pulse shell ok args=$*\"\n');
+  const [scriptName, setScriptName] = useState('pulse-shell.sh');
+  const [busy, setBusy] = useState(false);
   const parsedArgs = useMemo(() => parseTaskArgs(taskArgs || defaultTaskArgs), [taskArgs]);
+  async function submitFile() {
+    if (!file) return;
+    setBusy(true);
+    try {
+      await onFilePut(await filePayload(file));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function submitShell() {
+    setBusy(true);
+    try {
+      await onShellRun(await textPayload(scriptName, scriptText), parsedArgs);
+    } finally {
+      setBusy(false);
+    }
+  }
   return <>
     <Flex gap={8} align="center">
       <Select value={taskType} onChange={setTaskType} className="task-select" options={Object.entries(taskLabels).map(([value, label]) => ({ value, label }))}/>
       <Button type="primary" onClick={() => onRun(parsedArgs)}>执行</Button>
       <Button onClick={onPop} icon={<InboxOutlined />}>弹出结果</Button>
     </Flex>
+    <div className="file-shell-panel">
+      <Typography.Text className="task-args-title">文件与脚本</Typography.Text>
+      <Space direction="vertical" size={8} className="file-shell-stack">
+        <input type="file" onChange={event => setFile(event.target.files?.[0] || null)} />
+        <Button size="small" disabled={!file || busy} onClick={submitFile}>上传到 $agent_work_dir/files</Button>
+        <Input value={scriptName} onChange={event => setScriptName(event.target.value)} placeholder="script.sh" />
+        <Input.TextArea value={scriptText} onChange={event => setScriptText(event.target.value)} autoSize={{ minRows: 5, maxRows: 10 }} />
+        <Button danger type="primary" disabled={!scriptText.trim() || busy} onClick={submitShell}>推送脚本并串行执行</Button>
+        <Typography.Text type="secondary">脚本先经 heartbeat 上传到 $agent_work_dir/workspace，再由 agent 串行执行；结果回到右侧结果区。</Typography.Text>
+      </Space>
+    </div>
     {argsUnlocked && <div className="task-args-panel">
       <Typography.Text className="task-args-title">自定义参数</Typography.Text>
       <Input.TextArea
@@ -924,6 +1009,41 @@ function formatBytes(value: any) {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${bytes} B`;
+}
+
+async function filePayload(file: File) {
+  const buffer = await file.arrayBuffer();
+  return {
+    file_name: file.name,
+    content_base64: arrayBufferToBase64(buffer),
+    content_sha256: await sha256Hex(buffer),
+    content_bytes: buffer.byteLength
+  };
+}
+
+async function textPayload(fileName: string, content: string) {
+  const buffer = new TextEncoder().encode(content).buffer;
+  return {
+    file_name: fileName || 'script.sh',
+    content_base64: arrayBufferToBase64(buffer),
+    content_sha256: await sha256Hex(buffer),
+    content_bytes: buffer.byteLength
+  };
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function sha256Hex(buffer: ArrayBuffer) {
+  const digest = await crypto.subtle.digest('SHA-256', buffer);
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function formatDuration(value: any) {

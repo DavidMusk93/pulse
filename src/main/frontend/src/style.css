@@ -399,6 +399,24 @@ body {
   margin-bottom: 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
+.file-shell-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 16px;
+  background: #eff6ff;
+}
+.file-shell-stack {
+  width: 100%;
+}
+.file-shell-stack input[type="file"],
+.file-shell-stack .ant-input,
+.file-shell-stack .ant-input-textarea {
+  width: 100%;
+}
+.file-shell-stack textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
 .task-state-card {
   width: 100%;
 }
