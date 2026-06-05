@@ -385,7 +385,9 @@ function groupByCluster(hosts: HostView[]) {
     const cluster = host.cluster || 'unknown';
     groups.set(cluster, [...(groups.get(cluster) || []), host]);
   });
-  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+  return [...groups.entries()]
+    .map(([cluster, clusterHosts]) => [cluster, sortHosts(clusterHosts)] as const)
+    .sort(([a], [b]) => a.localeCompare(b));
 }
 
 function loadCollapsedClusters() {
@@ -412,7 +414,9 @@ function clusterHue(index: number) {
 }
 
 function sortHosts(hosts: HostView[]) {
-  return [...hosts].sort((left, right) => averageLoad(right) - averageLoad(left) || normalizeAddress(left.ip).localeCompare(normalizeAddress(right.ip)));
+  return [...hosts].sort((left, right) =>
+    normalizeAddress(left.ip).localeCompare(normalizeAddress(right.ip))
+    || agentId(left).localeCompare(agentId(right)));
 }
 
 function taskNeedsAttention(task: any) {
@@ -1194,7 +1198,7 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
       className="cluster-exec-list"
       dataSource={execution.rows}
       renderItem={row => <List.Item>
-        <Space className="cluster-exec-row" size={8} wrap>
+        <div className="cluster-exec-row">
           <Badge status={row.status === 'success' ? 'success' : row.status === 'failed' ? 'error' : row.status === 'running' ? 'processing' : 'default'} text={row.label || undefined} />
           <Typography.Text strong>{normalizeAddress(row.host.ip)}</Typography.Text>
           {row.taskType !== '-' && row.taskType !== 'Shell' && <Tag>{row.taskType}</Tag>}
@@ -1205,7 +1209,7 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
           {row.taskId !== '-' && <Typography.Text className="task-id-text cluster-task-id" copyable={{ text: row.taskId }}>{row.taskId}</Typography.Text>}
           {row.message !== '-' && <Typography.Text type={row.status === 'failed' ? 'danger' : 'secondary'}>{row.message}</Typography.Text>}
           {row.outputPreview && <pre className="cluster-exec-output">{row.outputPreview}</pre>}
-        </Space>
+        </div>
       </List.Item>}
     />
   </div>;
