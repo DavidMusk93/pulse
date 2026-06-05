@@ -975,10 +975,6 @@ function TaskModal(props: {
   const outputRunning = !latestCompletion && !!asyncTask;
   const outputNotice = outputStatusNotice(completionText, outputMeta, outputRunning);
   const isClusterRun = props.clusterHosts.length > 0;
-  const clusterSummary = useMemo(
-    () => clusterExecutionSummary(props.clusterHosts, props.batchSummary, props.clusterSnapshots),
-    [props.clusterHosts, props.batchSummary, props.clusterSnapshots]
-  );
   const targetTitle = isClusterRun ? props.clusterName : normalizeAddress(props.host?.ip);
   const targetDescription = isClusterRun ? `${props.clusterHosts.length} 台 host，将逐台下发作业` : '单节点作业';
   const fileTransfers = (props.snapshot?.file_transfers || []).filter((file: any) => file.file_role !== 'shell_script');
@@ -1011,23 +1007,7 @@ function TaskModal(props: {
             <Typography.Text type="secondary">{targetDescription}</Typography.Text>
           </Space>
         </Card>
-        {isClusterRun ? <>
-        <Card title="批量提交">
-          {props.batchSummary ? <Space direction="vertical" size={8} className="task-state-card">
-            <Typography.Text strong>{props.batchSummary.kind}</Typography.Text>
-            <Space wrap>
-              <Tag color="blue">目标 {props.batchSummary.total}</Tag>
-              <Tag color="green">提交成功 {clusterSummary.submitSucceeded}</Tag>
-              <Tag color={clusterSummary.submitFailed ? 'red' : 'default'}>提交失败 {clusterSummary.submitFailed}</Tag>
-            </Space>
-            <Typography.Text type="secondary">
-              {props.batchSummary.failed && !clusterSummary.submitFailed
-                ? '提交阶段曾出现临时失败，已被后续执行结果确认完成。'
-                : props.batchSummary.message}
-            </Typography.Text>
-          </Space> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未提交批量操作" />}
-        </Card>
-        </> : <>
+        {isClusterRun ? null : <>
         <Card title="当前任务">
           <Space direction="vertical" size={6} className="task-state-card">
             <Badge status={statusColor(agentTask?.status || executions[0]?.status)} text={statusLabel(agentTask?.status || executions[0]?.status || '空闲')} />

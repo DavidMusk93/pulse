@@ -367,7 +367,7 @@ body {
 }
 .cluster-run-modal .task-shell {
   height: min(920px, calc(100vh - 124px));
-  grid-template-columns: minmax(340px, .9fr) minmax(0, 2.4fr);
+  grid-template-columns: minmax(340px, 1fr) minmax(0, 1.618fr);
 }
 .task-sidebar,
 .task-workspace {
