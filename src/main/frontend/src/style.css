@@ -614,7 +614,9 @@ body {
   max-height: 220px;
   margin: 8px 0 0 28px;
   padding: 10px 12px;
-  overflow: hidden;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   contain: content;
   content-visibility: auto;
   contain-intrinsic-size: auto 170px;
