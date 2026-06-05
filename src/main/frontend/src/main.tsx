@@ -109,6 +109,9 @@ type ClusterExecutionSummary = {
   executionFailed: number;
   running: number;
   pending: number;
+  durationCount: number;
+  averageDurationMs: number;
+  maxDurationMs: number;
   rows: ClusterExecutionRow[];
 };
 
@@ -125,6 +128,9 @@ type ClusterExecutionRow = {
   outputPreview: string;
   outputLineCount: number;
   outputPreviewLineCount: number;
+  durationMs: number;
+  durationLabel: string;
+  durationKind: 'elapsed' | 'running' | 'none';
 };
 
 function normalizeAddress(value?: string) {
@@ -270,6 +276,9 @@ function clusterExecutionSummary(hosts: HostView[], summary: BatchSubmitSummary 
     }
   });
   const submitFailed = unresolvedSubmitFailures.size;
+  const completedDurations = rows
+    .filter(row => (row.status === 'success' || row.status === 'failed') && row.durationMs > 0)
+    .map(row => row.durationMs);
   return {
     total: hosts.length,
     submitSucceeded: summary ? summary.total - submitFailed : 0,
@@ -278,6 +287,9 @@ function clusterExecutionSummary(hosts: HostView[], summary: BatchSubmitSummary 
     executionFailed: rows.filter(row => row.status === 'failed').length + submitFailed,
     running: rows.filter(row => row.status === 'running').length,
     pending: rows.filter(row => row.status === 'pending').length,
+    durationCount: completedDurations.length,
+    averageDurationMs: completedDurations.length ? Math.round(completedDurations.reduce((total, value) => total + value, 0) / completedDurations.length) : 0,
+    maxDurationMs: completedDurations.length ? Math.max(...completedDurations) : 0,
     rows
   };
 }
@@ -296,7 +308,10 @@ function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot, expectedTa
       message: '提交请求未成功返回 task_id',
       outputPreview: '',
       outputLineCount: 0,
-      outputPreviewLineCount: 0
+      outputPreviewLineCount: 0,
+      durationMs: 0,
+      durationLabel: '-',
+      durationKind: 'none'
     };
   }
   const taskMatches = (item: any) => expectedTaskId
@@ -320,6 +335,7 @@ function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot, expectedTa
   const hasRunning = !!execution && ['accepted', 'running'].includes(rawStatus || String(execution?.status || ''))
     || (!!stream && !completion);
   const status: ClusterExecutionRow['status'] = hasFailure ? 'failed' : hasSuccess ? 'success' : hasRunning ? 'running' : 'pending';
+  const duration = taskDuration(item, status);
   return {
     host,
     snapshot,
@@ -332,8 +348,32 @@ function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot, expectedTa
     message: item?.runner_error || item?.error || item?.file_name || '-',
     outputPreview: outputPreview.text,
     outputLineCount: outputPreview.totalLines,
-    outputPreviewLineCount: outputPreview.shownLines
+    outputPreviewLineCount: outputPreview.shownLines,
+    durationMs: duration.ms,
+    durationLabel: duration.label,
+    durationKind: duration.kind
   };
+}
+
+function taskDuration(item: any, status: ClusterExecutionRow['status']) {
+  const durationMs = numberField(item, 'duration_ms', 'durationMs');
+  const startedAt = numberField(item, 'started_at_ms', 'startedAtMs');
+  const finishedAt = numberField(item, 'finished_at_ms', 'finishedAtMs');
+  const runtimeMs = numberField(item, 'runtime_ms', 'runtimeMs');
+  const elapsedMs = durationMs > 0 ? durationMs : startedAt > 0 && finishedAt > 0 ? Math.max(0, finishedAt - startedAt) : 0;
+  if ((status === 'success' || status === 'failed') && elapsedMs > 0) {
+    return { ms: elapsedMs, label: formatDuration(elapsedMs), kind: 'elapsed' as const };
+  }
+  const runningMs = runtimeMs > 0 ? runtimeMs : status === 'running' && startedAt > 0 ? Math.max(0, Date.now() - startedAt) : 0;
+  if (status === 'running' && runningMs > 0) {
+    return { ms: runningMs, label: formatDuration(runningMs), kind: 'running' as const };
+  }
+  return { ms: 0, label: '-', kind: 'none' as const };
+}
+
+function numberField(item: any, snakeKey: string, camelKey: string) {
+  const value = Number(item?.[snakeKey] ?? item?.[camelKey] ?? 0);
+  return Number.isFinite(value) ? value : 0;
 }
 
 function compactOutputPreview(value: string) {
@@ -1219,6 +1259,8 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
         <Col xs={12} md={6}><Card><Statistic title="执行失败" value={execution.executionFailed} valueStyle={{ color: execution.executionFailed ? '#dc2626' : undefined }} /></Card></Col>
         <Col xs={12} md={6}><Card><Statistic title="执行中" value={execution.running} /></Card></Col>
         <Col xs={12} md={6}><Card><Statistic title="待回执" value={execution.pending} /></Card></Col>
+        <Col xs={12} md={6}><Card><Statistic title="平均耗时" value={execution.durationCount ? formatDuration(execution.averageDurationMs) : '-'} /></Card></Col>
+        <Col xs={12} md={6}><Card><Statistic title="最长耗时" value={execution.durationCount ? formatDuration(execution.maxDurationMs) : '-'} /></Card></Col>
       </Row>
       <Progress percent={completionPercent} status={execution.executionFailed ? 'exception' : execution.executionSucceeded === execution.total ? 'success' : 'active'} />
       <Typography.Paragraph>{summary.failed && !execution.submitFailed ? '提交阶段曾出现临时失败，已被后续执行结果确认完成。' : summary.message}</Typography.Paragraph>
@@ -1238,6 +1280,7 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
             <Typography.Text strong>{normalizeAddress(row.host.ip)}</Typography.Text>
             {row.taskType !== '-' && row.taskType !== 'Shell' && <Tag>{row.taskType}</Tag>}
             <Tag>exit {row.exitCode}</Tag>
+            {row.durationKind !== 'none' && <Tag color={row.durationKind === 'running' ? 'blue' : 'purple'}>{row.durationKind === 'running' ? '已运行' : '耗时'} {row.durationLabel}</Tag>}
             <Typography.Text type="secondary">
               {row.outputPreview ? `最后 ${row.outputPreviewLineCount}/${row.outputLineCount} 行 · ` : ''}{formatBytes(row.outputBytes)}
             </Typography.Text>
@@ -1640,7 +1683,8 @@ function formatDuration(value: any) {
   const ms = Number(value || 0);
   if (ms <= 0) return '-';
   if (ms >= 60_000) return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
-  return `${Math.floor(ms / 1000)}s`;
+  if (ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)}s`;
+  return `${Math.round(ms)}ms`;
 }
 
 function parseJsonOutput(value: string) {
