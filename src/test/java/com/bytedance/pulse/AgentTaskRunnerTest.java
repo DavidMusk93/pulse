@@ -86,6 +86,22 @@ class AgentTaskRunnerTest {
         assertTrue(result.payload().get("output").toString().contains("--dry-run"));
     }
 
+    @Test
+    void stagedShellScriptDoesNotInjectDryRunWhenArgsAreEmpty() throws Exception {
+        String script = "printf 'ARG_COUNT:%s\\n' \"$#\"\n";
+        byte[] bytes = script.getBytes(StandardCharsets.UTF_8);
+        AgentTaskRunner runner = new AgentTaskRunner("agent-1", fixedClock(), taskDir.toString());
+
+        runner.handleMessages(List.of(filePut("file-1", "task-shell", "script.sh", bytes)));
+        awaitReply(runner, "reply.file_received");
+
+        runner.handleMessages(List.of(shellExecute("task-shell", "file-1", TaskOutputCodec.sha256(bytes), List.of())));
+
+        PulseMessage result = awaitResult(runner);
+        assertEquals("completed", result.payload().get("status"));
+        assertEquals("ARG_COUNT:0\n", result.payload().get("output"));
+    }
+
     private static PulseMessage command(String taskId, String taskType, String scriptPath, List<String> args) {
         return new PulseMessage(
                 "cmd-" + taskId,

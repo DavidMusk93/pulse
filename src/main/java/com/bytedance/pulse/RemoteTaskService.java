@@ -159,7 +159,7 @@ public class RemoteTaskService {
             List<String> requestedArgs) {
         byte[] content = decodeContent(contentBase64, contentSha256, contentBytes);
         String safeName = safeFileName(fileName == null || fileName.isBlank() ? "script.sh" : fileName);
-        List<String> args = normalizeArgs(requestedArgs, List.of("--dry-run"));
+        List<String> args = normalizeArgs(requestedArgs, List.of());
         long now = clock.millis();
         String taskId = "task-" + UUID.randomUUID();
         String traceId = "trace-" + UUID.randomUUID();
@@ -222,10 +222,8 @@ public class RemoteTaskService {
     }
 
     private static List<String> normalizeArgs(List<String> requestedArgs, List<String> defaultArgs) {
-        List<String> args = requestedArgs == null || requestedArgs.isEmpty() ? defaultArgs : requestedArgs;
-        if (args.isEmpty()) {
-            return List.of("--dry-run");
-        }
+        List<String> fallbackArgs = defaultArgs == null ? List.of() : defaultArgs;
+        List<String> args = requestedArgs == null || requestedArgs.isEmpty() ? fallbackArgs : requestedArgs;
         if (args.size() > 32) {
             throw new IllegalArgumentException("too many task args");
         }
@@ -239,7 +237,7 @@ public class RemoteTaskService {
             }
             normalized.add(arg);
         }
-        return normalized.isEmpty() ? List.of("--dry-run") : List.copyOf(normalized);
+        return normalized.isEmpty() ? List.copyOf(fallbackArgs) : List.copyOf(normalized);
     }
 
     public synchronized Optional<PulseMessage> nextCommand(String agentId) {

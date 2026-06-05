@@ -323,6 +323,25 @@ class CoordinatorHttpServerTest {
             hasShellScript = hasShellScript || "shell_script".equals(transfer.get("file_role").asText());
         }
         assertTrue(hasShellScript);
+
+        String noArgsShell = "echo no args";
+        String noArgsEncoded = Base64.getEncoder().encodeToString(noArgsShell.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String noArgsSha = TaskOutputCodec.sha256(noArgsShell);
+        HttpResponse<String> noArgsPost = postJson("/api/agents/agent-1/tasks", """
+                {"operation":"shell_script","file_name":"no-args.sh","content_base64":"%s","content_sha256":"%s","content_bytes":12}
+                """.formatted(noArgsEncoded, noArgsSha));
+
+        assertEquals(200, noArgsPost.statusCode());
+        JsonNode noArgsJson = mapper.readTree(noArgsPost.body());
+        JsonNode shellTrace = null;
+        for (JsonNode trace : noArgsJson.get("traces")) {
+            if ("shell.enqueued".equals(trace.get("event").asText())
+                    && "no-args.sh".equals(trace.get("detail").get("file_name").asText())) {
+                shellTrace = trace;
+            }
+        }
+        assertTrue(shellTrace != null);
+        assertEquals(0, shellTrace.get("detail").get("args").size());
     }
 
     @Test

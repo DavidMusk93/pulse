@@ -160,7 +160,7 @@ public class AgentTaskRunner {
         }
         List<String> args;
         try {
-            args = normalizeArgs(argsValue(payload), List.of("--dry-run"));
+            args = normalizeArgs(argsValue(payload), List.of());
         } catch (IllegalArgumentException exception) {
             enqueueResultMessages(resultMessages(message.messageId(), taskId, traceId, "shell_script", "rejected", null, 0, 0, "", exception.getMessage()));
             return;
@@ -543,10 +543,8 @@ public class AgentTaskRunner {
     }
 
     private static List<String> normalizeArgs(List<String> requestedArgs, List<String> defaultArgs) {
-        List<String> args = requestedArgs == null || requestedArgs.isEmpty() ? defaultArgs : requestedArgs;
-        if (args.isEmpty()) {
-            return List.of("--dry-run");
-        }
+        List<String> fallbackArgs = defaultArgs == null ? List.of() : defaultArgs;
+        List<String> args = requestedArgs == null || requestedArgs.isEmpty() ? fallbackArgs : requestedArgs;
         if (args.size() > 32) {
             throw new IllegalArgumentException("too many task args");
         }
@@ -560,7 +558,7 @@ public class AgentTaskRunner {
             }
             normalized.add(arg);
         }
-        return normalized.isEmpty() ? List.of("--dry-run") : List.copyOf(normalized);
+        return normalized.isEmpty() ? List.copyOf(fallbackArgs) : List.copyOf(normalized);
     }
 
     private static String stringValue(Map<String, Object> payload, String key) {
