@@ -202,7 +202,7 @@ class CoordinatorHttpServerTest {
         assertEquals(200, css.statusCode());
         assertTrue(css.body().contains("aspect-ratio:1"));
         assertTrue(css.body().contains("grid-template-columns:minmax(300px,1fr) minmax(0,1.618fr)"));
-        assertTrue(css.body().contains("height:min(820px,calc(100vh - 108px))"));
+        assertTrue(css.body().contains("height:min(820px,calc(100vh - 124px))"));
         assertTrue(css.body().contains(".task-modal .ant-modal-content"));
         assertTrue(css.body().contains("minmax(210px,1fr)"));
         assertTrue(css.body().contains("white-space:nowrap"));
