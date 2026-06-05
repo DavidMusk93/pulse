@@ -533,14 +533,15 @@ body {
 }
 .cluster-exec-row .task-id-text {
   width: auto;
-  max-width: 320px;
+  max-width: none;
 }
 .cluster-task-id {
-  max-width: 220px !important;
+  max-width: none !important;
   color: #94a3b8;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-all;
 }
 .cluster-exec-output {
   flex: 0 0 100%;

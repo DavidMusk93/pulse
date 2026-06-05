@@ -242,13 +242,18 @@ public class RemoteTaskService {
 
     public synchronized Optional<PulseMessage> nextCommand(String agentId) {
         Queue<ControlCommand> controlQueue = controlQueue(agentId);
-        ControlCommand control = controlQueue.poll();
+        ControlCommand control = controlQueue.peek();
         if (control != null) {
             if ("file_put".equals(control.kind())) {
+                controlQueue.poll();
                 markFileStatus(agentId, control.fileId(), "delivering", "", "");
                 return Optional.of(control.toFilePutMessage(agentId));
             }
             if ("shell_execute".equals(control.kind())) {
+                if (!isFileReady(agentId, control.fileId())) {
+                    return Optional.empty();
+                }
+                controlQueue.poll();
                 RemoteTask task = control.task();
                 long now = clock.millis();
                 RemoteTask delivered = task.withStatus("delivered", now, task.acceptedAtMs(), task.startedAtMs(), task.finishedAtMs());
@@ -264,6 +269,7 @@ public class RemoteTaskService {
         if (task == null) {
             return Optional.empty();
         }
+
         long now = clock.millis();
         RemoteTask delivered = task.withStatus("delivered", now, task.acceptedAtMs(), task.startedAtMs(), task.finishedAtMs());
         inFlight(agentId).put(task.taskId(), delivered);
@@ -283,6 +289,11 @@ public class RemoteTaskService {
                         "args", delivered.args(),
                         "timeout_ms", DEFAULT_TASK_TIMEOUT_MS,
                         "created_at_ms", delivered.createdAtMs())));
+    }
+
+    private boolean isFileReady(String agentId, String fileId) {
+        FileTransferStatus status = fileTransfers(agentId).get(fileId);
+        return status != null && "received".equals(status.status());
     }
 
     public synchronized void handleReplies(String agentId, List<PulseMessage> messages) {

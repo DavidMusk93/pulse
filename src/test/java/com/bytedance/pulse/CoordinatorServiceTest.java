@@ -247,7 +247,7 @@ class CoordinatorServiceTest {
         assertEquals("prepare_disk_layout_dry_run", command.payload().get("task_type"));
         assertEquals(List.of("--dry-run"), command.payload().get("args"));
 
-        service.handleHeartbeat(new HeartbeatRequest(
+        HeartbeatResponse readyResponse = service.handleHeartbeat(new HeartbeatRequest(
                 null,
                 "agent-1",
                 1L,
@@ -284,6 +284,59 @@ class CoordinatorServiceTest {
         assertEquals(1, snapshot.completionQueue().size());
         assertEquals("completed", snapshot.completionQueue().get(0).status());
         assertEquals("ok", snapshot.completionQueue().get(0).output());
+    }
+
+    @Test
+    void shellExecuteWaitsUntilStagedFileIsReceived() {
+        CoordinatorService service = new CoordinatorService("coordinator-a", clock);
+        String script = "echo ok\n";
+        service.enqueueShellScript(
+                "agent-1",
+                "script.sh",
+                java.util.Base64.getEncoder().encodeToString(script.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                TaskOutputCodec.sha256(script),
+                script.getBytes(java.nio.charset.StandardCharsets.UTF_8).length,
+                List.of());
+
+        PulseMessage filePut = service.handleHeartbeat(singleHeartbeat("agent-1", 1, 10, "host-1", "10.0.0.1"))
+                .messages()
+                .stream()
+                .filter(message -> "cmd.file_put".equals(message.type()))
+                .findFirst()
+                .orElseThrow();
+
+        HeartbeatResponse waitingResponse = service.handleHeartbeat(singleHeartbeat("agent-1", 1, 11, "host-1", "10.0.0.1"));
+        assertTrue(waitingResponse.messages().stream().noneMatch(message -> "cmd.shell_execute".equals(message.type())));
+
+        HeartbeatResponse readyResponse = service.handleHeartbeat(new HeartbeatRequest(
+                null,
+                "agent-1",
+                1L,
+                12L,
+                15_000L,
+                List.of(
+                        new PulseMessage("state-agent-1-12", "state.heartbeat", 1, null, null, Map.of("host", "host-1")),
+                        new PulseMessage(
+                                "file-received-agent-1",
+                                "reply.file_received",
+                                1,
+                                filePut.messageId(),
+                                null,
+                                Map.of(
+                                        "file_id", filePut.payload().get("file_id"),
+                                        "task_id", filePut.payload().get("task_id"),
+                                        "status", "received",
+                                        "local_path", "/data24/otf/pulse/agent/workspace/scripts/task/script.sh",
+                                        "runner_error", ""))),
+                List.of()));
+
+        PulseMessage shellExecute = readyResponse
+                .messages()
+                .stream()
+                .filter(message -> "cmd.shell_execute".equals(message.type()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(filePut.payload().get("file_id"), shellExecute.payload().get("script_file_id"));
     }
 
     @Test
