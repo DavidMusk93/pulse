@@ -81,7 +81,8 @@ const clusterCollapseStorageKey = 'pulse.cluster-collapse.v1';
 const taskLabels: Record<string, string> = {
   prepare_disk_layout_dry_run: '磁盘布局',
   analyze_block_layout_dry_run: '块分布',
-  repair_corrupt_sqlite3_dry_run: '修复 SQLite'
+  repair_corrupt_sqlite3_dry_run: '修复 SQLite',
+  shell_script: 'Shell'
 };
 const defaultTaskArgs = '--dry-run';
 
@@ -274,12 +275,12 @@ function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot): ClusterEx
     host,
     snapshot,
     status,
-    label: hasFailure ? '执行失败' : hasSuccess ? '执行成功' : hasRunning ? statusLabel(rawStatus || 'running') : '待回执',
+    label: hasFailure ? '执行失败' : hasSuccess ? '' : hasRunning ? statusLabel(rawStatus || 'running') : '待回执',
     taskId: item?.task_id || item?.taskId || '-',
     taskType: taskLabels[item?.task_type || item?.taskType || ''] || item?.task_type || item?.taskType || '-',
     exitCode: exitCode === undefined || exitCode === null ? '-' : String(exitCode),
     outputBytes: Number(item?.output_bytes ?? item?.outputBytes ?? item?.stream_bytes ?? item?.streamBytes ?? 0),
-    message: item?.runner_error || item?.error || item?.file_name || item?.task_type || item?.taskType || '-',
+    message: item?.runner_error || item?.error || item?.file_name || '-',
     outputPreview: outputPreview.text,
     outputLineCount: outputPreview.totalLines,
     outputPreviewLineCount: outputPreview.shownLines
@@ -292,10 +293,23 @@ function compactOutputPreview(value: string) {
   const preview = lines.slice(-shownLines).join('\n');
   const text = preview.length > 1800 ? `${preview.slice(0, 1800)}...` : preview;
   return {
-    text: lines.length > shownLines ? `... 仅显示最后 ${shownLines} / ${lines.length} 行\n${text}` : text,
+    text,
     totalLines: lines.length,
     shownLines
   };
+}
+
+function friendlyErrorText(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error || '未知错误');
+  if (/failed to fetch/i.test(raw)) {
+    return '请求 coordinator 失败：网络不可达、页面连接断开，或 coordinator 正在重启。请稍后刷新后重试。';
+  }
+  if (/networkerror/i.test(raw)) {
+    return '网络请求失败：请确认 coordinator 服务可访问。';
+  }
+  if (/^5\d\d\b/.test(raw)) return `coordinator 服务异常：${raw}`;
+  if (/^4\d\d\b/.test(raw)) return `请求被 coordinator 拒绝：${raw}`;
+  return raw;
 }
 
 function groupByCluster(hosts: HostView[]) {
@@ -619,12 +633,12 @@ function App() {
             succeeded: targets.length - failed.length,
             failed: failed.length,
             message: failed.length ? `任务提交部分失败：${targets.length - failed.length}/${targets.length}` : `任务已提交：${targets.length}/${targets.length}`,
-            errors: failed.map(result => String((result as PromiseRejectedResult).reason)).slice(0, 8),
+            errors: failed.map(result => friendlyErrorText((result as PromiseRejectedResult).reason)).slice(0, 8),
             updatedAt: Date.now(),
             snapshots
           });
           if (failed.length) {
-            setOutput(`集群下发部分失败: ${failed.length}/${targets.length}\n${failed.map(result => String((result as PromiseRejectedResult).reason)).join('\n')}`);
+            setOutput(`集群下发部分失败: ${failed.length}/${targets.length}\n${failed.map(result => friendlyErrorText((result as PromiseRejectedResult).reason)).join('\n')}`);
           }
         }}
         onFilePut={async payload => {
@@ -649,7 +663,7 @@ function App() {
             succeeded: targets.length - failed.length,
             failed: failed.length,
             message: failed.length ? `文件上传提交部分失败：${targets.length - failed.length}/${targets.length}` : `文件上传已提交：${targets.length}/${targets.length}`,
-            errors: failed.map(result => String((result as PromiseRejectedResult).reason)).slice(0, 8),
+            errors: failed.map(result => friendlyErrorText((result as PromiseRejectedResult).reason)).slice(0, 8),
             updatedAt: Date.now(),
             snapshots
           });
@@ -677,7 +691,7 @@ function App() {
             succeeded: targets.length - failed.length,
             failed: failed.length,
             message: failed.length ? `Shell 执行提交部分失败：${targets.length - failed.length}/${targets.length}` : `Shell 执行已提交：${targets.length}/${targets.length}`,
-            errors: failed.map(result => String((result as PromiseRejectedResult).reason)).slice(0, 8),
+            errors: failed.map(result => friendlyErrorText((result as PromiseRejectedResult).reason)).slice(0, 8),
             updatedAt: Date.now(),
             snapshots
           });
@@ -863,7 +877,6 @@ function TaskModal(props: {
         <Card title="批量提交">
           {props.batchSummary ? <Space direction="vertical" size={8} className="task-state-card">
             <Typography.Text strong>{props.batchSummary.kind}</Typography.Text>
-            <Progress percent={Math.round(props.batchSummary.succeeded * 100 / Math.max(1, props.batchSummary.total))} status={props.batchSummary.failed ? 'exception' : 'success'} />
             <Space wrap>
               <Tag color="blue">目标 {props.batchSummary.total}</Tag>
               <Tag color="green">提交成功 {props.batchSummary.succeeded}</Tag>
@@ -984,7 +997,7 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
       await onFilePut({ ...(await filePayload(file)), target_dir: fileTargetDir });
       setActionMessage(`文件上传已提交：${file.name}`);
     } catch (error) {
-      setActionMessage(`文件上传提交失败：${error instanceof Error ? error.message : String(error)}`);
+      setActionMessage(`文件上传提交失败：${friendlyErrorText(error)}`);
     } finally {
       setBusy(false);
     }
@@ -996,7 +1009,7 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
       await onShellRun(await textPayload(scriptFileName, scriptText), parsedArgs);
       setActionMessage(`Shell 执行已提交：${scriptTitle.trim() || '临时脚本'} · ${scriptLines} 行`);
     } catch (error) {
-      setActionMessage(`Shell 执行提交失败：${error instanceof Error ? error.message : String(error)}`);
+      setActionMessage(`Shell 执行提交失败：${friendlyErrorText(error)}`);
     } finally {
       setBusy(false);
     }
@@ -1100,6 +1113,7 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
 }) {
   const execution = useMemo(() => clusterExecutionSummary(hosts, summary, snapshots), [hosts, summary, snapshots]);
   const completionPercent = Math.round(execution.executionSucceeded * 100 / Math.max(1, execution.total));
+  const visibleErrors = useMemo(() => [...new Set(summary?.errors || [])].slice(0, 5), [summary]);
   return <div className="cluster-run-summary">
     <Typography.Title level={4}>集群批量操作</Typography.Title>
     {summary ? <Space direction="vertical" size={12} className="cluster-run-summary-body">
@@ -1109,7 +1123,6 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
         <Tag color="green">提交成功 {summary.succeeded}</Tag>
         <Tag color={summary.failed ? 'red' : 'default'}>提交失败 {summary.failed}</Tag>
       </Space>
-      <Progress percent={Math.round(summary.succeeded * 100 / Math.max(1, summary.total))} status={summary.failed ? 'exception' : 'success'} />
       <Row gutter={[12, 12]} className="cluster-exec-stats">
         <Col xs={12} md={6}><Card><Statistic title="执行成功" value={execution.executionSucceeded} suffix={`/ ${execution.total}`} /></Card></Col>
         <Col xs={12} md={6}><Card><Statistic title="执行失败" value={execution.executionFailed} valueStyle={{ color: execution.executionFailed ? '#dc2626' : undefined }} /></Card></Col>
@@ -1118,8 +1131,8 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
       </Row>
       <Progress percent={completionPercent} status={execution.executionFailed ? 'exception' : execution.executionSucceeded === execution.total ? 'success' : 'active'} />
       <Typography.Paragraph>{summary.message}</Typography.Paragraph>
-      {summary.errors.length > 0 && <div className="cluster-run-errors">
-        {summary.errors.map((error, index) => <Typography.Text key={`${index}-${error}`} type="danger">{error}</Typography.Text>)}
+      {visibleErrors.length > 0 && <div className="cluster-run-errors">
+        {visibleErrors.map((error, index) => <Typography.Text key={`${index}-${error}`} type="danger">{error}</Typography.Text>)}
       </div>}
     </Space> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未提交批量操作" />}
     <Typography.Paragraph type="secondary">这里聚合所有目标 host 的执行状态、completion、exit code 和错误摘要；无需逐台打开 Run UI。</Typography.Paragraph>
@@ -1128,18 +1141,17 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
       className="cluster-exec-list"
       dataSource={execution.rows}
       renderItem={row => <List.Item>
-        <Space className="cluster-exec-row" size={10} wrap>
-          <Badge status={row.status === 'success' ? 'success' : row.status === 'failed' ? 'error' : row.status === 'running' ? 'processing' : 'default'} text={row.label} />
+        <Space className="cluster-exec-row" size={8} wrap>
+          <Badge status={row.status === 'success' ? 'success' : row.status === 'failed' ? 'error' : row.status === 'running' ? 'processing' : 'default'} text={row.label || undefined} />
           <Typography.Text strong>{normalizeAddress(row.host.ip)}</Typography.Text>
-          <Tag>{row.taskType}</Tag>
+          {row.taskType !== '-' && row.taskType !== 'Shell' && <Tag>{row.taskType}</Tag>}
           <Tag>exit {row.exitCode}</Tag>
-          <Typography.Text type="secondary">{formatBytes(row.outputBytes)}</Typography.Text>
-          {row.taskId !== '-' && <Typography.Text className="task-id-text" copyable={{ text: row.taskId }}>task_id: {row.taskId}</Typography.Text>}
+          <Typography.Text type="secondary">
+            {row.outputPreview ? `最后 ${row.outputPreviewLineCount}/${row.outputLineCount} 行 · ` : ''}{formatBytes(row.outputBytes)}
+          </Typography.Text>
+          {row.taskId !== '-' && <Typography.Text className="task-id-text cluster-task-id" copyable={{ text: row.taskId }}>{row.taskId}</Typography.Text>}
           {row.message !== '-' && <Typography.Text type={row.status === 'failed' ? 'danger' : 'secondary'}>{row.message}</Typography.Text>}
-          {row.outputPreview && <>
-            <Tag color="cyan">展示最后 {row.outputPreviewLineCount} / {row.outputLineCount} 行</Tag>
-            <pre className="cluster-exec-output">{row.outputPreview}</pre>
-          </>}
+          {row.outputPreview && <pre className="cluster-exec-output">{row.outputPreview}</pre>}
         </Space>
       </List.Item>}
     />
