@@ -375,6 +375,8 @@ body {
   min-height: 0;
 }
 .task-workspace {
+  display: flex;
+  flex-direction: column;
   height: 100%;
   overflow: hidden;
 }
@@ -637,7 +639,8 @@ body {
   overflow-wrap: anywhere;
 }
 .task-workspace .ant-card-body {
-  height: calc(100% - 57px);
+  flex: 1 1 auto;
+  height: auto;
   padding: 16px 18px 18px !important;
   display: flex;
   flex-direction: column;
