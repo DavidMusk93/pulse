@@ -3,12 +3,12 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: find-tide-worker-log.sh [pattern]
+Usage: tide-worker-log.sh [pattern]
 
 Find tide_worker processes whose environment contains
-_TIDELET_CONTAINER_IS_VIRTUAL=false, then search their cwd log:
+_TIDELET_CONTAINER_IS_VIRTUAL=false, then search their cwd logs:
 
-  grep -a <pattern> /proc/$pid/cwd/logs/tide_worker.log
+  grep -a <pattern> /proc/$pid/cwd/logs/tide_worker.*log
 
 Default pattern: occupy
 EOF
@@ -34,12 +34,20 @@ is_real_container_worker() {
 grep_worker_log() {
   local pid="$1"
   local pattern="$2"
-  local log_file="/proc/$pid/cwd/logs/tide_worker.log"
+  local log_dir="/proc/$pid/cwd/logs"
+  local log_file
+  local found=0
 
-  [[ -r "$log_file" ]] || return 1
+  [[ -d "$log_dir" ]] || return 1
 
-  printf '===== pid=%s log=%s =====\n' "$pid" "$log_file"
-  grep -a -- "$pattern" "$log_file" || true
+  while IFS= read -r -d '' log_file; do
+    [[ -r "$log_file" ]] || continue
+    found=1
+    printf '===== pid=%s log=%s =====\n' "$pid" "$log_file"
+    grep -a -- "$pattern" "$log_file" || true
+  done < <(find "$log_dir" -maxdepth 1 -type f -name 'tide_worker.*log' -print0 2>/dev/null)
+
+  [[ "$found" -eq 1 ]]
 }
 
 main() {
