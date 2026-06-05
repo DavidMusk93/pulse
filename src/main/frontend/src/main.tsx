@@ -1060,7 +1060,7 @@ function TaskModal(props: {
       </div>
       <Card
         className="task-workspace"
-        title={<OutputPanelTitle meta={outputMeta} notice={outputNotice} value={completionText} onUnlock={handleResultTitleClick} />}
+          title={<OutputPanelTitle meta={outputMeta} notice={outputNotice} value={completionText} onUnlock={handleResultTitleClick} showMeta={!isClusterRun} />}
         variant="outlined"
       >
         <div className="completion-pane">
@@ -1274,19 +1274,31 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
   </div>;
 });
 
-const OutputPanelTitle = memo(function OutputPanelTitle({ meta, notice, value, onUnlock }: { meta?: any; notice: OutputNotice | null; value: string; onUnlock?: () => void }) {
-  const lines = Number(meta?.output_lines ?? meta?.stream_lines ?? countLines(value));
-  const bytes = Number(meta?.output_bytes ?? meta?.stream_bytes ?? new Blob([value]).size);
+const OutputPanelTitle = memo(function OutputPanelTitle({
+  meta,
+  notice,
+  value,
+  onUnlock,
+  showMeta = true
+}: {
+  meta?: any;
+  notice: OutputNotice | null;
+  value: string;
+  onUnlock?: () => void;
+  showMeta?: boolean;
+}) {
+  const lines = showMeta ? Number(meta?.output_lines ?? meta?.stream_lines ?? countLines(value)) : 0;
+  const bytes = showMeta ? Number(meta?.output_bytes ?? meta?.stream_bytes ?? new Blob([value]).size) : 0;
   return <div className="output-panel-title">
     <button type="button" className="output-title-main output-title-trigger" onClick={onUnlock}>结果查看</button>
     <span className="output-title-spacer" />
-    <div className="output-title-status-stack">
+    {showMeta && <div className="output-title-status-stack">
       {notice && <OutputStatusNotice notice={notice} compact />}
       {meta?.status && <span className={`output-title-pill output-title-${statusColor(meta.status)}`}>{statusLabel(meta.status)}</span>}
       {meta?.exit_code !== undefined && meta?.exit_code !== null && <span className="output-title-pill">exit {meta.exit_code}</span>}
       <span className="output-title-pill">{lines} 行</span>
       <span className="output-title-pill">{formatBytes(bytes)}</span>
-    </div>
+    </div>}
   </div>;
 });
 
