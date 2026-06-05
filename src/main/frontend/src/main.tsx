@@ -93,6 +93,7 @@ type BatchSubmitSummary = {
   total: number;
   succeeded: number;
   failed: number;
+  failedAgents: string[];
   message: string;
   errors: string[];
   updatedAt: number;
@@ -240,12 +241,18 @@ function snapshotsFromSettledResults(hosts: HostView[], results: PromiseSettledR
 }
 
 function clusterExecutionSummary(hosts: HostView[], summary: BatchSubmitSummary | null, snapshots: Record<string, TaskSnapshot>): ClusterExecutionSummary {
-  const submitFailed = summary?.failed || 0;
   const mergedSnapshots = { ...(summary?.snapshots || {}), ...snapshots };
   const rows = hosts.map(host => clusterExecutionRow(host, mergedSnapshots[agentId(host)]));
+  const unresolvedSubmitFailures = new Set(summary?.failedAgents || []);
+  rows.forEach(row => {
+    if (row.status !== 'pending') {
+      unresolvedSubmitFailures.delete(agentId(row.host));
+    }
+  });
+  const submitFailed = unresolvedSubmitFailures.size;
   return {
     total: hosts.length,
-    submitSucceeded: summary?.succeeded || 0,
+    submitSucceeded: summary ? summary.total - submitFailed : 0,
     submitFailed,
     executionSucceeded: rows.filter(row => row.status === 'success').length,
     executionFailed: rows.filter(row => row.status === 'failed').length + submitFailed,
@@ -310,6 +317,12 @@ function friendlyErrorText(error: unknown) {
   if (/^5\d\d\b/.test(raw)) return `coordinator 服务异常：${raw}`;
   if (/^4\d\d\b/.test(raw)) return `请求被 coordinator 拒绝：${raw}`;
   return raw;
+}
+
+function failedAgentsFromSettledResults(hosts: HostView[], results: PromiseSettledResult<unknown>[]) {
+  return hosts
+    .filter((_, index) => results[index]?.status === 'rejected')
+    .map(host => agentId(host));
 }
 
 function groupByCluster(hosts: HostView[]) {
@@ -632,6 +645,7 @@ function App() {
             total: targets.length,
             succeeded: targets.length - failed.length,
             failed: failed.length,
+            failedAgents: failedAgentsFromSettledResults(targets, results),
             message: failed.length ? `任务提交部分失败：${targets.length - failed.length}/${targets.length}` : `任务已提交：${targets.length}/${targets.length}`,
             errors: failed.map(result => friendlyErrorText((result as PromiseRejectedResult).reason)).slice(0, 8),
             updatedAt: Date.now(),
@@ -662,6 +676,7 @@ function App() {
             total: targets.length,
             succeeded: targets.length - failed.length,
             failed: failed.length,
+            failedAgents: failedAgentsFromSettledResults(targets, results),
             message: failed.length ? `文件上传提交部分失败：${targets.length - failed.length}/${targets.length}` : `文件上传已提交：${targets.length}/${targets.length}`,
             errors: failed.map(result => friendlyErrorText((result as PromiseRejectedResult).reason)).slice(0, 8),
             updatedAt: Date.now(),
@@ -690,6 +705,7 @@ function App() {
             total: targets.length,
             succeeded: targets.length - failed.length,
             failed: failed.length,
+            failedAgents: failedAgentsFromSettledResults(targets, results),
             message: failed.length ? `Shell 执行提交部分失败：${targets.length - failed.length}/${targets.length}` : `Shell 执行已提交：${targets.length}/${targets.length}`,
             errors: failed.map(result => friendlyErrorText((result as PromiseRejectedResult).reason)).slice(0, 8),
             updatedAt: Date.now(),
@@ -879,10 +895,14 @@ function TaskModal(props: {
             <Typography.Text strong>{props.batchSummary.kind}</Typography.Text>
             <Space wrap>
               <Tag color="blue">目标 {props.batchSummary.total}</Tag>
-              <Tag color="green">提交成功 {props.batchSummary.succeeded}</Tag>
-              <Tag color={props.batchSummary.failed ? 'red' : 'default'}>提交失败 {props.batchSummary.failed}</Tag>
+              <Tag color="green">提交成功 {clusterSummary.submitSucceeded}</Tag>
+              <Tag color={clusterSummary.submitFailed ? 'red' : 'default'}>提交失败 {clusterSummary.submitFailed}</Tag>
             </Space>
-            <Typography.Text type="secondary">{props.batchSummary.message}</Typography.Text>
+            <Typography.Text type="secondary">
+              {props.batchSummary.failed && !clusterSummary.submitFailed
+                ? '提交阶段曾出现临时失败，已被后续执行结果确认完成。'
+                : props.batchSummary.message}
+            </Typography.Text>
           </Space> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未提交批量操作" />}
         </Card>
         <Card title="查看结果">
@@ -1113,15 +1133,15 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
 }) {
   const execution = useMemo(() => clusterExecutionSummary(hosts, summary, snapshots), [hosts, summary, snapshots]);
   const completionPercent = Math.round(execution.executionSucceeded * 100 / Math.max(1, execution.total));
-  const visibleErrors = useMemo(() => [...new Set(summary?.errors || [])].slice(0, 5), [summary]);
+  const visibleErrors = useMemo(() => execution.submitFailed ? [...new Set(summary?.errors || [])].slice(0, 5) : [], [summary, execution.submitFailed]);
   return <div className="cluster-run-summary">
     <Typography.Title level={4}>集群批量操作</Typography.Title>
     {summary ? <Space direction="vertical" size={12} className="cluster-run-summary-body">
       <Space wrap>
         <Tag color="blue">{summary.kind}</Tag>
         <Tag color="default">目标 {summary.total}</Tag>
-        <Tag color="green">提交成功 {summary.succeeded}</Tag>
-        <Tag color={summary.failed ? 'red' : 'default'}>提交失败 {summary.failed}</Tag>
+        <Tag color="green">提交成功 {execution.submitSucceeded}</Tag>
+        <Tag color={execution.submitFailed ? 'red' : 'default'}>提交失败 {execution.submitFailed}</Tag>
       </Space>
       <Row gutter={[12, 12]} className="cluster-exec-stats">
         <Col xs={12} md={6}><Card><Statistic title="执行成功" value={execution.executionSucceeded} suffix={`/ ${execution.total}`} /></Card></Col>
@@ -1130,7 +1150,7 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
         <Col xs={12} md={6}><Card><Statistic title="待回执" value={execution.pending} /></Card></Col>
       </Row>
       <Progress percent={completionPercent} status={execution.executionFailed ? 'exception' : execution.executionSucceeded === execution.total ? 'success' : 'active'} />
-      <Typography.Paragraph>{summary.message}</Typography.Paragraph>
+      <Typography.Paragraph>{summary.failed && !execution.submitFailed ? '提交阶段曾出现临时失败，已被后续执行结果确认完成。' : summary.message}</Typography.Paragraph>
       {visibleErrors.length > 0 && <div className="cluster-run-errors">
         {visibleErrors.map((error, index) => <Typography.Text key={`${index}-${error}`} type="danger">{error}</Typography.Text>)}
       </div>}
@@ -1164,11 +1184,13 @@ const OutputPanelTitle = memo(function OutputPanelTitle({ meta, notice, value, o
   return <div className="output-panel-title">
     <button type="button" className="output-title-main output-title-trigger" onClick={onUnlock}>结果查看</button>
     <span className="output-title-spacer" />
-    {notice && <OutputStatusNotice notice={notice} compact />}
-    {meta?.status && <span className={`output-title-pill output-title-${statusColor(meta.status)}`}>{statusLabel(meta.status)}</span>}
-    {meta?.exit_code !== undefined && meta?.exit_code !== null && <span className="output-title-pill">exit {meta.exit_code}</span>}
-    <span className="output-title-pill">{lines} 行</span>
-    <span className="output-title-pill">{formatBytes(bytes)}</span>
+    <div className="output-title-status-stack">
+      {notice && <OutputStatusNotice notice={notice} compact />}
+      {meta?.status && <span className={`output-title-pill output-title-${statusColor(meta.status)}`}>{statusLabel(meta.status)}</span>}
+      {meta?.exit_code !== undefined && meta?.exit_code !== null && <span className="output-title-pill">exit {meta.exit_code}</span>}
+      <span className="output-title-pill">{lines} 行</span>
+      <span className="output-title-pill">{formatBytes(bytes)}</span>
+    </div>
   </div>;
 });
 
