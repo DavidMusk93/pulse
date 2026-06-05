@@ -307,6 +307,12 @@ class CoordinatorServiceTest {
 
         HeartbeatResponse waitingResponse = service.handleHeartbeat(singleHeartbeat("agent-1", 1, 11, "host-1", "10.0.0.1"));
         assertTrue(waitingResponse.messages().stream().noneMatch(message -> "cmd.shell_execute".equals(message.type())));
+        PulseMessage retryFilePut = waitingResponse.messages()
+                .stream()
+                .filter(message -> "cmd.file_put".equals(message.type()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(filePut.payload().get("file_id"), retryFilePut.payload().get("file_id"));
 
         HeartbeatResponse readyResponse = service.handleHeartbeat(new HeartbeatRequest(
                 null,

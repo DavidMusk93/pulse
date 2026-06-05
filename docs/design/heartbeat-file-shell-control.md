@@ -270,32 +270,77 @@ shell 脚本必须先通过 `cmd.file_put` 成功下发，再执行：
 }
 ```
 
-## 队列与状态机
+## Per-Agent 状态机
 
 ### Coordinator
 
-coordinator 新增 per-agent control queue，但不新增 API：
+coordinator 对每个 agent 维护独立状态机，而不是把 `cmd.file_put` 和
+`cmd.shell_execute` 当成一次性 FIFO 消息。第一性原理约束：
+
+- heartbeat response 是不可靠投递通道：coordinator 只能确认“已写入本次 response”，不能确认 agent 已处理。
+- 只有 agent 后续 heartbeat 中的 `reply.file_received`、`reply.task_accepted`、`reply.task_result` 才是状态迁移依据。
+- `cmd.shell_execute` 依赖本地 staged script，因此必须由 `reply.file_received status=received` 解锁。
+- `cmd.file_put` 在 ack 前必须可重发；重复下发必须依赖 `file_id + sha256` 在 agent 侧幂等。
+- 同一 agent 同一时刻最多推进一个控制动作，禁止跳过前置依赖。
 
 ```text
-AgentControlQueue {
+AgentControlState {
   agent_id
-  pending: deque<ControlItem>
-  in_flight: map<message_id, ControlItem>
-  completed: set<file_id | task_id>
+  control_queue: deque<ControlItem>
+  file_transfers: map<file_id, FileTransfer>
+  in_flight_tasks: map<task_id, RemoteTask>
+  completions: deque<TaskResult>
 }
 
 ControlItem =
   FilePut(file_id, file_name, bytes/spool_ref, target_dir, sha256)
   ShellExecute(task_id, script_file_id, args, timeout_ms)
+
+FileTransfer.status =
+  queued
+  delivering
+  received
+  failed | rejected | timed_out
+
+RemoteTask.status =
+  queued
+  delivered
+  accepted
+  running
+  completed | failed | rejected | timed_out
 ```
 
-调度规则：
+#### Coordinator 调度规则
 
-- coordinator 每次 heartbeat response 最多下发一个大 binary file。
-- 如果下一个 item 是 `FilePut` 且需要二进制传输，response 使用 `application/vnd.pulse.binary`。
-- 如果下一个 item 是 `ShellExecute`，response 使用 JSON `HeartbeatResponse.messages[]`。
-- `ShellExecute` 必须排在对应 `FilePut` 的 `reply.file_received status=received` 之后。
-- 重复 heartbeat 或 coordinator peer 切换时，按 `file_id`、`task_id` 和 hash 幂等处理。
+- 每次 heartbeat response 最多推进一个 control item。
+- `FilePut(queued|delivering)`：返回 `cmd.file_put`，并把状态标记为 `delivering`；ack 前不从队列删除，允许下一轮 heartbeat 重发。
+- `reply.file_received status=received`：把 `file_transfers[file_id]` 标记为 `received`。
+- 队首 `FilePut(received)`：从队列移除，继续检查下一个 item。
+- 队首 `ShellExecute`：只有 `script_file_id` 对应 `FileTransfer.status=received` 时才能出队并返回 `cmd.shell_execute`。
+- `ShellExecute` 出队后进入 `in_flight_tasks`，等待 `reply.task_accepted`、`state.async_tasks` 和 `reply.task_result` 推进状态。
+- `FilePut(failed|rejected|timed_out)`：依赖该文件的 `ShellExecute` 必须变成明确 failed/rejected completion，不能静默 pending。
+- 重复 heartbeat、response 丢失、agent 重启或 group leader 切换时，按 `file_id`、`task_id` 和 hash 幂等处理。
+
+#### Shell 脚本状态机
+
+```text
+UI submit
+  -> FilePut.queued + ShellExecute.blocked
+  -> FilePut.delivering        (heartbeat response contains cmd.file_put)
+  -> FilePut.delivering        (no ack; heartbeat may resend cmd.file_put)
+  -> FilePut.received          (agent reply.file_received status=received)
+  -> ShellExecute.delivered    (heartbeat response contains cmd.shell_execute)
+  -> ShellExecute.accepted     (agent reply.task_accepted)
+  -> ShellExecute.running      (agent state.async_tasks or output append)
+  -> completed/failed/rejected (agent reply.task_result)
+```
+
+必须保持的不变量：
+
+- 没有 `FilePut.received`，就不能出现 `ShellExecute.delivered`。
+- `cmd.file_put` 可以重复出现；`cmd.shell_execute` 对同一 `task_id` 只能投递一次。
+- `script_file_id`、`script_sha256`、`task_id` 是依赖关系的唯一来源，不能靠队列顺序猜测。
+- UI 的“提交成功”只代表 coordinator 接收并建状态机，不代表 agent 已 staged 或执行完成。
 
 ### Agent
 
@@ -382,10 +427,10 @@ Run UI 增加两个独立操作区域：`文件上传` 和 `Shell 执行`。
 - 支持粘贴脚本内容。
 - 展示脚本 sha256。
 - 默认执行工作目录为 `$agent_work_dir/workspace`。
-- 默认参数为 `--dry-run`。
+- 普通 Shell 脚本默认参数为空；只有预置 dry-run 任务才默认携带 `--dry-run`。
 - 支持隐藏参数输入沿用现有 Run UI 规则。
 - 点击“执行 Shell 脚本”时，coordinator 创建 shell execution task。
-- 对 agent 的实现细节是：coordinator 先入队内部 `FilePut(shell_script)` 完成脚本 staging，收到 agent `reply.file_received` 后再入队 `ShellExecute`。
+- 对 agent 的实现细节是：coordinator 为该 agent 建立 `FilePut(shell_script) -> ShellExecute` 状态机；`ShellExecute` 可以预先成为 blocked control item，但必须等 `reply.file_received status=received` 后才能下发。
 - 内部 `FilePut(shell_script)` 的状态可以作为“脚本投递状态”展示，但不能混入“文件上传”结果列表，避免用户误解为上传了一个普通文件。
 
 风险提示：
@@ -436,7 +481,7 @@ cluster Run UI 和 host Run UI 不能完全一致：
 - 禁止直接执行未 staged 的 inline command。
 - shell 脚本只能通过 `bash <local_script_path> <args...>` 执行。
 - 同一 agent 串行执行，避免多个修复脚本并发破坏状态。
-- 默认参数 `--dry-run`。
+- 普通 Shell 脚本默认参数为空；预置 dry-run 任务默认参数为 `--dry-run`。
 - 非 dry-run 必须显式输入和审计。
 - timeout 必填，有默认上限。
 

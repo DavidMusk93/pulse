@@ -242,10 +242,16 @@ public class RemoteTaskService {
 
     public synchronized Optional<PulseMessage> nextCommand(String agentId) {
         Queue<ControlCommand> controlQueue = controlQueue(agentId);
-        ControlCommand control = controlQueue.peek();
-        if (control != null) {
+        while (true) {
+            ControlCommand control = controlQueue.peek();
+            if (control == null) {
+                break;
+            }
             if ("file_put".equals(control.kind())) {
-                controlQueue.poll();
+                if (isFileReady(agentId, control.fileId())) {
+                    controlQueue.poll();
+                    continue;
+                }
                 markFileStatus(agentId, control.fileId(), "delivering", "", "");
                 return Optional.of(control.toFilePutMessage(agentId));
             }
@@ -263,6 +269,7 @@ public class RemoteTaskService {
                         "work_dir", control.workDir()));
                 return Optional.of(control.toShellExecuteMessage(agentId, delivered));
             }
+            controlQueue.poll();
         }
         Queue<RemoteTask> queue = queue(agentId);
         RemoteTask task = queue.poll();
