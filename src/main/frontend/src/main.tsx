@@ -987,17 +987,6 @@ function TaskModal(props: {
             </Typography.Text>
           </Space> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未提交批量操作" />}
         </Card>
-        <Card title="查看结果">
-          <Space direction="vertical" size={8} className="task-state-card">
-            <Space wrap>
-              <Tag color="green">执行成功 {clusterSummary.executionSucceeded}</Tag>
-              <Tag color={clusterSummary.executionFailed ? 'red' : 'default'}>执行失败 {clusterSummary.executionFailed}</Tag>
-              <Tag color="blue">执行中 {clusterSummary.running}</Tag>
-              <Tag color="default">待回执 {clusterSummary.pending}</Tag>
-            </Space>
-            <Typography.Text type="secondary">右侧汇总所有目标 host 的执行状态、completion 和错误摘要。</Typography.Text>
-          </Space>
-        </Card>
         </> : <>
         <Card title="当前任务">
           <Space direction="vertical" size={6} className="task-state-card">
