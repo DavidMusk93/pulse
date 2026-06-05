@@ -351,7 +351,7 @@ body {
 }
 .cluster-run-modal .task-shell {
   height: min(920px, 82vh);
-  grid-template-columns: minmax(280px, .82fr) minmax(0, 2.4fr);
+  grid-template-columns: minmax(340px, .9fr) minmax(0, 2.4fr);
 }
 .task-sidebar,
 .task-workspace {
@@ -362,8 +362,13 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   align-self: stretch;
+}
+.task-sidebar * {
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .task-sidebar > .ant-card {
   flex: 0 0 auto;
@@ -384,7 +389,7 @@ body {
 }
 .task-select {
   flex: 1 1 0;
-  min-width: 180px;
+  min-width: 140px;
 }
 .task-args-panel {
   margin-top: 12px;
@@ -406,6 +411,9 @@ body {
 .run-section {
   padding: 4px 0 2px;
 }
+.run-section .ant-flex {
+  flex-wrap: wrap;
+}
 .file-shell-panel {
   margin-top: 12px;
   padding: 12px;
@@ -419,6 +427,11 @@ body {
 }
 .file-shell-stack {
   width: 100%;
+}
+.file-shell-stack > .ant-space-item,
+.file-shell-stack .ant-flex {
+  width: 100%;
+  min-width: 0;
 }
 .file-shell-stack input[type="file"],
 .file-shell-stack .ant-input,
@@ -439,6 +452,7 @@ body {
   margin: 0;
   padding: 14px 16px 14px 58px;
   width: 100%;
+  max-width: 100%;
   height: 176px;
   border: 0;
   font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
