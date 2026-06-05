@@ -325,6 +325,60 @@ function failedAgentsFromSettledResults(hosts: HostView[], results: PromiseSettl
     .map(host => agentId(host));
 }
 
+function sleep(ms: number) {
+  return new Promise(resolve => window.setTimeout(resolve, ms));
+}
+
+function isRetryableSubmitError(error: unknown) {
+  const text = error instanceof Error ? error.message : String(error || '');
+  return /failed to fetch|networkerror|load failed|timeout|timed out|network/i.test(text);
+}
+
+async function fetchJsonWithRetry<T>(url: string, init: RequestInit, retries = 2): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await fetchJson<T>(url, init);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retries || !isRetryableSubmitError(error)) {
+        throw error;
+      }
+      await sleep(350 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
+async function settleWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T, index: number) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let nextIndex = 0;
+  async function runNext() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      try {
+        results[index] = { status: 'fulfilled', value: await worker(items[index], index) };
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, runNext));
+  return results;
+}
+
+function submitToTargets(targets: HostView[], bodyForTarget: (target: HostView) => any) {
+  return settleWithConcurrency(targets, 6, async target => {
+    const id = encodeURIComponent(agentId(target));
+    return fetchJsonWithRetry<TaskSnapshot>(`/api/agents/${id}/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(bodyForTarget(target))
+    });
+  });
+}
+
 function groupByCluster(hosts: HostView[]) {
   const groups = new Map<string, HostView[]>();
   hosts.forEach(host => {
@@ -626,14 +680,7 @@ function App() {
         onRun={async args => {
           const targets = activeCluster?.hosts || (activeHost ? [activeHost] : []);
           if (!targets.length) return;
-          const results = await Promise.allSettled(targets.map(async target => {
-            const id = encodeURIComponent(agentId(target));
-            return fetchJson<TaskSnapshot>(`/api/agents/${id}/tasks`, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ task_type: taskType, args })
-            });
-          }));
+          const results = await submitToTargets(targets, () => ({ task_type: taskType, args }));
           const first = results.find((result): result is PromiseFulfilledResult<TaskSnapshot> => result.status === 'fulfilled');
           if (first) setSnapshot(first.value);
           const snapshots = snapshotsFromSettledResults(targets, results);
@@ -658,14 +705,7 @@ function App() {
         onFilePut={async payload => {
           const targets = activeCluster?.hosts || (activeHost ? [activeHost] : []);
           if (!targets.length) return;
-          const results = await Promise.allSettled(targets.map(async target => {
-            const id = encodeURIComponent(agentId(target));
-            return fetchJson<TaskSnapshot>(`/api/agents/${id}/tasks`, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ operation: 'file_put', file_role: 'generic_file', target_dir: payload.target_dir || 'files', ...payload })
-            });
-          }));
+          const results = await submitToTargets(targets, () => ({ operation: 'file_put', file_role: 'generic_file', target_dir: payload.target_dir || 'files', ...payload }));
           const first = results.find((result): result is PromiseFulfilledResult<TaskSnapshot> => result.status === 'fulfilled');
           if (first) setSnapshot(first.value);
           const snapshots = snapshotsFromSettledResults(targets, results);
@@ -687,14 +727,7 @@ function App() {
         onShellRun={async (payload, args) => {
           const targets = activeCluster?.hosts || (activeHost ? [activeHost] : []);
           if (!targets.length) return;
-          const results = await Promise.allSettled(targets.map(async target => {
-            const id = encodeURIComponent(agentId(target));
-            return fetchJson<TaskSnapshot>(`/api/agents/${id}/tasks`, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ operation: 'shell_script', args, ...payload })
-            });
-          }));
+          const results = await submitToTargets(targets, () => ({ operation: 'shell_script', args, ...payload }));
           const first = results.find((result): result is PromiseFulfilledResult<TaskSnapshot> => result.status === 'fulfilled');
           if (first) setSnapshot(first.value);
           const snapshots = snapshotsFromSettledResults(targets, results);

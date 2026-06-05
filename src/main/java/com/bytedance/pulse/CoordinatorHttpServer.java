@@ -38,7 +38,7 @@ public class CoordinatorHttpServer {
     CoordinatorHttpServer(CoordinatorService service, String bindHost, int port, PeerForwarder peerForwarder) throws IOException {
         this.service = service;
         this.peerForwarder = peerForwarder;
-        this.server = HttpServer.create(new InetSocketAddress(bindHost, port), 0);
+        this.server = HttpServer.create(new InetSocketAddress(bindHost, port), httpBacklog());
         this.server.createContext("/", this::handle);
         this.server.setExecutor(httpExecutor());
     }
@@ -251,6 +251,10 @@ public class CoordinatorHttpServer {
                 new ThreadPoolExecutor.CallerRunsPolicy());
         executor.allowCoreThreadTimeOut(true);
         return executor;
+    }
+
+    private static int httpBacklog() {
+        return positiveInt("PULSE_HTTP_BACKLOG", 512);
     }
 
     private static int positiveInt(String key, int fallback) {
