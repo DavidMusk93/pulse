@@ -320,10 +320,20 @@ body {
   background: rgba(100, 116, 139, .68) !important;
   color: rgba(255, 255, 255, .84) !important;
 }
+.task-modal {
+  top: 12px !important;
+  padding-bottom: 0 !important;
+}
 .ant-modal-content {
   box-shadow: none !important;
   padding: 0 !important;
   overflow: hidden;
+}
+.task-modal .ant-modal-content {
+  max-height: calc(100vh - 24px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 .ant-modal-close {
   top: 14px !important;
@@ -339,18 +349,22 @@ body {
   border: 1px solid #dc2626;
 }
 .task-modal .ant-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
   padding: 42px 18px 18px;
   background: #f8fafc;
 }
 .task-shell {
-  height: min(820px, 61.8vh);
+  height: min(820px, calc(100vh - 108px));
   display: grid;
   grid-template-columns: minmax(300px, 1fr) minmax(0, 1.618fr);
   gap: 16px;
   min-height: 0;
+  overflow: hidden;
 }
 .cluster-run-modal .task-shell {
-  height: min(920px, 82vh);
+  height: min(920px, calc(100vh - 108px));
   grid-template-columns: minmax(340px, .9fr) minmax(0, 2.4fr);
 }
 .task-sidebar,
@@ -537,8 +551,9 @@ body {
 }
 .cluster-exec-list {
   flex: 0 0 auto;
-  min-height: 360px;
-  overflow: hidden;
+  height: auto;
+  min-height: 0;
+  overflow: visible;
   padding-right: 4px;
 }
 .cluster-exec-list .ant-list-item {
@@ -983,6 +998,7 @@ body {
     grid-template-columns: 1fr;
   }
   .task-shell {
-    height: auto;
+    height: min(820px, calc(100vh - 108px));
+    overflow: auto;
   }
 }
