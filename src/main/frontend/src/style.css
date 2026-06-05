@@ -578,12 +578,13 @@ body {
   word-break: break-all;
 }
 .cluster-exec-output {
-  width: 100%;
-  max-width: 100%;
+  display: block;
+  width: auto;
+  max-width: calc(100% - 28px);
   min-width: 0;
   box-sizing: border-box;
   max-height: 220px;
-  margin: 8px 0 0;
+  margin: 8px 0 0 28px;
   padding: 10px 12px;
   overflow: auto;
   border: 1px solid #e4eaf3;
@@ -593,7 +594,7 @@ body {
   font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  word-break: break-word;
+  word-break: break-all;
 }
 .cluster-run-errors {
   display: flex;

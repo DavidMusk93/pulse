@@ -94,6 +94,7 @@ type BatchSubmitSummary = {
   succeeded: number;
   failed: number;
   failedAgents: string[];
+  taskIds: Record<string, string>;
   message: string;
   errors: string[];
   updatedAt: number;
@@ -114,7 +115,7 @@ type ClusterExecutionSummary = {
 type ClusterExecutionRow = {
   host: HostView;
   snapshot?: TaskSnapshot;
-  status: 'success' | 'failed' | 'running' | 'pending';
+  status: 'success' | 'failed' | 'running' | 'pending' | 'submit_failed';
   label: string;
   taskId: string;
   taskType: string;
@@ -240,12 +241,31 @@ function snapshotsFromSettledResults(hosts: HostView[], results: PromiseSettledR
   return snapshots;
 }
 
+function submittedTaskId(snapshot: TaskSnapshot, events: string[]) {
+  const eventSet = new Set(events);
+  const trace = (snapshot.traces || []).find((entry: any) => eventSet.has(entry.event));
+  return trace?.task_id || trace?.taskId || '';
+}
+
+function taskIdsFromSettledResults(hosts: HostView[], results: PromiseSettledResult<TaskSnapshot>[], events: string[]) {
+  const taskIds: Record<string, string> = {};
+  results.forEach((result, index) => {
+    if (result.status !== 'fulfilled') return;
+    const taskId = submittedTaskId(result.value, events);
+    if (taskId) taskIds[agentId(hosts[index])] = taskId;
+  });
+  return taskIds;
+}
+
 function clusterExecutionSummary(hosts: HostView[], summary: BatchSubmitSummary | null, snapshots: Record<string, TaskSnapshot>): ClusterExecutionSummary {
   const mergedSnapshots = { ...(summary?.snapshots || {}), ...snapshots };
-  const rows = hosts.map(host => clusterExecutionRow(host, mergedSnapshots[agentId(host)]));
   const unresolvedSubmitFailures = new Set(summary?.failedAgents || []);
+  const rows = hosts.map(host => {
+    const id = agentId(host);
+    return clusterExecutionRow(host, mergedSnapshots[id], summary?.taskIds?.[id], !!summary, unresolvedSubmitFailures.has(id));
+  });
   rows.forEach(row => {
-    if (row.status !== 'pending') {
+    if (row.status !== 'pending' && row.status !== 'submit_failed') {
       unresolvedSubmitFailures.delete(agentId(row.host));
     }
   });
@@ -262,12 +282,33 @@ function clusterExecutionSummary(hosts: HostView[], summary: BatchSubmitSummary 
   };
 }
 
-function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot): ClusterExecutionRow {
-  const completion = snapshot?.completion_queue?.[0];
-  const execution = snapshot?.execution_queue?.[0] || activeHostTasks(host)[0];
-  const stream = streamForTask(snapshot || null, completion?.task_id || completion?.taskId || execution?.task_id || execution?.taskId);
-  const file = snapshot?.file_transfers?.[0];
+function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot, expectedTaskId?: string, hasBatch = false, submitFailed = false): ClusterExecutionRow {
+  if (submitFailed && !expectedTaskId) {
+    return {
+      host,
+      snapshot,
+      status: 'submit_failed',
+      label: '提交失败',
+      taskId: '-',
+      taskType: '-',
+      exitCode: '-',
+      outputBytes: 0,
+      message: '提交请求未成功返回 task_id',
+      outputPreview: '',
+      outputLineCount: 0,
+      outputPreviewLineCount: 0
+    };
+  }
+  const taskMatches = (item: any) => expectedTaskId
+    ? item?.task_id === expectedTaskId || item?.taskId === expectedTaskId
+    : !hasBatch;
+  const completion = (snapshot?.completion_queue || []).find(taskMatches);
+  const execution = (snapshot?.execution_queue || []).find(taskMatches)
+    || activeHostTasks(host).find(taskMatches);
+  const file = (snapshot?.file_transfers || []).find((entry: any) => taskMatches(entry));
+  const stream = streamForTask(snapshot || null, expectedTaskId || completion?.task_id || completion?.taskId || execution?.task_id || execution?.taskId);
   const item = completion || execution || file;
+  const outputSource = completion || stream || item;
   const outputText = completion ? completionOutput(completion) : stream ? streamOutput(stream) : '';
   const outputPreview = outputText ? compactOutputPreview(outputText) : { text: '', totalLines: 0, shownLines: 0 };
   const rawStatus = String(item?.status || '');
@@ -276,17 +317,18 @@ function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot): ClusterEx
     || (exitCode !== undefined && exitCode !== null && Number(exitCode) !== 0)
     || !!item?.runner_error;
   const hasSuccess = !!completion && !hasFailure && (rawStatus === 'completed' || exitCode === 0 || exitCode === '0');
-  const hasRunning = !!execution || ['queued', 'delivered', 'accepted', 'running'].includes(rawStatus);
+  const hasRunning = !!execution && ['accepted', 'running'].includes(rawStatus || String(execution?.status || ''))
+    || (!!stream && !completion);
   const status: ClusterExecutionRow['status'] = hasFailure ? 'failed' : hasSuccess ? 'success' : hasRunning ? 'running' : 'pending';
   return {
     host,
     snapshot,
     status,
     label: hasFailure ? '执行失败' : hasSuccess ? '' : hasRunning ? statusLabel(rawStatus || 'running') : '待回执',
-    taskId: item?.task_id || item?.taskId || '-',
-    taskType: taskLabels[item?.task_type || item?.taskType || ''] || item?.task_type || item?.taskType || '-',
+    taskId: item?.task_id || item?.taskId || expectedTaskId || '-',
+    taskType: taskLabels[item?.task_type || item?.taskType || stream?.task_type || stream?.taskType || ''] || item?.task_type || item?.taskType || stream?.task_type || stream?.taskType || '-',
     exitCode: exitCode === undefined || exitCode === null ? '-' : String(exitCode),
-    outputBytes: Number(item?.output_bytes ?? item?.outputBytes ?? item?.stream_bytes ?? item?.streamBytes ?? 0),
+    outputBytes: Number(outputSource?.output_bytes ?? outputSource?.outputBytes ?? outputSource?.stream_bytes ?? outputSource?.streamBytes ?? 0),
     message: item?.runner_error || item?.error || item?.file_name || '-',
     outputPreview: outputPreview.text,
     outputLineCount: outputPreview.totalLines,
@@ -697,6 +739,7 @@ function App() {
             succeeded: targets.length - failed.length,
             failed: failed.length,
             failedAgents: failedAgentsFromSettledResults(targets, results),
+            taskIds: taskIdsFromSettledResults(targets, results, ['task.enqueued']),
             message: failed.length ? `任务提交部分失败：${targets.length - failed.length}/${targets.length}` : `任务已提交：${targets.length}/${targets.length}`,
             errors: failed.map(result => friendlyErrorText((result as PromiseRejectedResult).reason)).slice(0, 8),
             updatedAt: Date.now(),
@@ -721,6 +764,7 @@ function App() {
             succeeded: targets.length - failed.length,
             failed: failed.length,
             failedAgents: failedAgentsFromSettledResults(targets, results),
+            taskIds: {},
             message: failed.length ? `文件上传提交部分失败：${targets.length - failed.length}/${targets.length}` : `文件上传已提交：${targets.length}/${targets.length}`,
             errors: failed.map(result => friendlyErrorText((result as PromiseRejectedResult).reason)).slice(0, 8),
             updatedAt: Date.now(),
@@ -743,6 +787,7 @@ function App() {
             succeeded: targets.length - failed.length,
             failed: failed.length,
             failedAgents: failedAgentsFromSettledResults(targets, results),
+            taskIds: taskIdsFromSettledResults(targets, results, ['shell.enqueued']),
             message: failed.length ? `Shell 执行提交部分失败：${targets.length - failed.length}/${targets.length}` : `Shell 执行已提交：${targets.length}/${targets.length}`,
             errors: failed.map(result => friendlyErrorText((result as PromiseRejectedResult).reason)).slice(0, 8),
             updatedAt: Date.now(),
@@ -1200,7 +1245,7 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
       renderItem={row => <List.Item>
         <div className="cluster-exec-row">
           <div className="cluster-exec-header">
-            <Badge status={row.status === 'success' ? 'success' : row.status === 'failed' ? 'error' : row.status === 'running' ? 'processing' : 'default'} text={row.label || undefined} />
+            <Badge status={row.status === 'success' ? 'success' : row.status === 'failed' || row.status === 'submit_failed' ? 'error' : row.status === 'running' ? 'processing' : 'default'} text={row.label || undefined} />
             <Typography.Text strong>{normalizeAddress(row.host.ip)}</Typography.Text>
             {row.taskType !== '-' && row.taskType !== 'Shell' && <Tag>{row.taskType}</Tag>}
             <Tag>exit {row.exitCode}</Tag>
