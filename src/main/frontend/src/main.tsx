@@ -1199,15 +1199,17 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
       dataSource={execution.rows}
       renderItem={row => <List.Item>
         <div className="cluster-exec-row">
-          <Badge status={row.status === 'success' ? 'success' : row.status === 'failed' ? 'error' : row.status === 'running' ? 'processing' : 'default'} text={row.label || undefined} />
-          <Typography.Text strong>{normalizeAddress(row.host.ip)}</Typography.Text>
-          {row.taskType !== '-' && row.taskType !== 'Shell' && <Tag>{row.taskType}</Tag>}
-          <Tag>exit {row.exitCode}</Tag>
-          <Typography.Text type="secondary">
-            {row.outputPreview ? `最后 ${row.outputPreviewLineCount}/${row.outputLineCount} 行 · ` : ''}{formatBytes(row.outputBytes)}
-          </Typography.Text>
-          {row.taskId !== '-' && <Typography.Text className="task-id-text cluster-task-id" copyable={{ text: row.taskId }}>{row.taskId}</Typography.Text>}
-          {row.message !== '-' && <Typography.Text type={row.status === 'failed' ? 'danger' : 'secondary'}>{row.message}</Typography.Text>}
+          <div className="cluster-exec-header">
+            <Badge status={row.status === 'success' ? 'success' : row.status === 'failed' ? 'error' : row.status === 'running' ? 'processing' : 'default'} text={row.label || undefined} />
+            <Typography.Text strong>{normalizeAddress(row.host.ip)}</Typography.Text>
+            {row.taskType !== '-' && row.taskType !== 'Shell' && <Tag>{row.taskType}</Tag>}
+            <Tag>exit {row.exitCode}</Tag>
+            <Typography.Text type="secondary">
+              {row.outputPreview ? `最后 ${row.outputPreviewLineCount}/${row.outputLineCount} 行 · ` : ''}{formatBytes(row.outputBytes)}
+            </Typography.Text>
+            {row.taskId !== '-' && <Typography.Text className="task-id-text cluster-task-id" copyable={{ text: row.taskId }}>{row.taskId}</Typography.Text>}
+            {row.message !== '-' && <Typography.Text type={row.status === 'failed' ? 'danger' : 'secondary'}>{row.message}</Typography.Text>}
+          </div>
           {row.outputPreview && <pre className="cluster-exec-output">{row.outputPreview}</pre>}
         </div>
       </List.Item>}

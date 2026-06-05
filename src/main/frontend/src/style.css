@@ -528,36 +528,48 @@ body {
   padding-right: 4px;
 }
 .cluster-exec-list .ant-list-item {
+  display: block;
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 .cluster-exec-row {
   width: 100%;
+  max-width: 100%;
   min-width: 0;
-  display: grid !important;
-  grid-template-columns: auto auto auto auto minmax(160px, 1fr);
-  align-items: start !important;
-  column-gap: 8px !important;
-  row-gap: 8px !important;
+  overflow: hidden;
 }
-.cluster-exec-row .task-id-text {
-  width: auto;
-  max-width: none;
+.cluster-exec-header {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  overflow: hidden;
+}
+.cluster-exec-header > * {
+  min-width: 0;
 }
 .cluster-task-id {
-  max-width: none !important;
+  flex: 1 1 260px;
+  min-width: 180px;
+  max-width: 100% !important;
   color: #94a3b8;
   white-space: normal;
-  overflow: visible;
+  overflow: hidden;
   text-overflow: clip;
   word-break: break-all;
 }
 .cluster-exec-output {
-  grid-column: 2 / -1;
   width: 100%;
+  max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
   max-height: 220px;
-  margin: 0;
+  margin: 8px 0 0;
   padding: 10px 12px;
   overflow: auto;
   border: 1px solid #e4eaf3;
