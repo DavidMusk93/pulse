@@ -8,8 +8,7 @@ Usage: tide-worker-log.sh [pattern]
 Find tide_worker processes whose environment contains
 _TIDELET_CONTAINER_IS_VIRTUAL=false, then search their cwd logs:
 
-  grep -a <pattern> /proc/$pid/cwd/logs/tide_worker.log
-  grep -a <pattern> /proc/$pid/cwd/logs/tide_worker.<number>.log
+  grep -a <pattern> /proc/$pid/cwd/logs/tide_worker*.log
 
 Default pattern: occupy
 EOF
@@ -32,12 +31,6 @@ is_real_container_worker() {
   strings "$environ_file" 2>/dev/null | grep -Fxq '_TIDELET_CONTAINER_IS_VIRTUAL=false'
 }
 
-is_tide_worker_log() {
-  local name="$1"
-
-  [[ "$name" == "tide_worker.log" || "$name" =~ ^tide_worker\.[0-9]+\.log$ ]]
-}
-
 grep_worker_log() {
   local pid="$1"
   local pattern="$2"
@@ -49,11 +42,10 @@ grep_worker_log() {
 
   while IFS= read -r -d '' log_file; do
     [[ -r "$log_file" ]] || continue
-    is_tide_worker_log "${log_file##*/}" || continue
     found=1
     printf '===== pid=%s log=%s =====\n' "$pid" "$log_file"
     grep -a -- "$pattern" "$log_file" || true
-  done < <(find "$log_dir" -maxdepth 1 -type f \( -name 'tide_worker.log' -o -name 'tide_worker.[0-9]*.log' \) -print0 2>/dev/null)
+  done < <(find "$log_dir" -maxdepth 1 -type f -name 'tide_worker*.log' -print0 2>/dev/null)
 
   [[ "$found" -eq 1 ]]
 }
