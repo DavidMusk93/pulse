@@ -1063,7 +1063,7 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
     setBusy(true);
     setActionMessage('正在提交 Shell 执行...');
     try {
-      await onShellRun(await textPayload(scriptFileName, scriptText), parsedArgs);
+      await onShellRun(await textPayload(scriptFileName, scriptText), argsUnlocked ? parsedArgs : []);
       setActionMessage(`Shell 执行已提交：${scriptTitle.trim() || '临时脚本'} · ${scriptLines} 行`);
     } catch (error) {
       setActionMessage(`Shell 执行提交失败：${friendlyErrorText(error)}`);
