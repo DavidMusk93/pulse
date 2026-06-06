@@ -21,7 +21,7 @@ import {
   Typography,
   theme
 } from 'antd';
-import { CopyOutlined, InboxOutlined } from '@ant-design/icons';
+import { CopyOutlined, DownloadOutlined, InboxOutlined } from '@ant-design/icons';
 import 'antd/dist/reset.css';
 import './style.css';
 
@@ -125,6 +125,7 @@ type ClusterExecutionRow = {
   exitCode: string;
   outputBytes: number;
   message: string;
+  outputText: string;
   outputPreview: string;
   outputLineCount: number;
   outputPreviewLineCount: number;
@@ -306,6 +307,7 @@ function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot, expectedTa
       exitCode: '-',
       outputBytes: 0,
       message: '提交请求未成功返回 task_id',
+      outputText: '',
       outputPreview: '',
       outputLineCount: 0,
       outputPreviewLineCount: 0,
@@ -346,6 +348,7 @@ function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot, expectedTa
     exitCode: exitCode === undefined || exitCode === null ? '-' : String(exitCode),
     outputBytes: Number(outputSource?.output_bytes ?? outputSource?.outputBytes ?? outputSource?.stream_bytes ?? outputSource?.streamBytes ?? 0),
     message: item?.runner_error || item?.error || item?.file_name || '-',
+    outputText,
     outputPreview: outputPreview.text,
     outputLineCount: outputPreview.totalLines,
     outputPreviewLineCount: outputPreview.shownLines,
@@ -386,6 +389,61 @@ function compactOutputPreview(value: string) {
     totalLines: lines.length,
     shownLines
   };
+}
+
+function downloadFileName(summary: BatchSubmitSummary | null) {
+  const kind = (summary?.kind || 'cluster-run').replace(/[^\w\u4e00-\u9fa5-]+/g, '-');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `pulse-${kind}-${stamp}.txt`;
+}
+
+function clusterExecutionText(execution: ClusterExecutionSummary, summary: BatchSubmitSummary | null) {
+  const lines: string[] = [
+    `Pulse Cluster Run Result`,
+    `Generated: ${new Date().toISOString()}`,
+    `Kind: ${summary?.kind || '-'}`,
+    `Targets: ${execution.total}`,
+    `Submit: success=${execution.submitSucceeded} failed=${execution.submitFailed}`,
+    `Execution: success=${execution.executionSucceeded} failed=${execution.executionFailed} running=${execution.running} pending=${execution.pending}`,
+    ''
+  ];
+  execution.rows.forEach((row, index) => {
+    lines.push(`===== #${index + 1} ${normalizeAddress(row.host.ip)} =====`);
+    lines.push(`status: ${row.label || row.status}`);
+    lines.push(`task_id: ${row.taskId}`);
+    lines.push(`task_type: ${row.taskType}`);
+    lines.push(`exit_code: ${row.exitCode}`);
+    lines.push(`duration: ${row.durationLabel}`);
+    lines.push(`output_bytes: ${row.outputBytes}`);
+    if (row.message !== '-') lines.push(`message: ${row.message}`);
+    lines.push(`----- output -----`);
+    lines.push(row.outputText || '(empty)');
+    lines.push('');
+  });
+  return lines.join('\n');
+}
+
+async function saveTextFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const savePicker = (window as any).showSaveFilePicker;
+  if (typeof savePicker === 'function') {
+    const handle = await savePicker({
+      suggestedName: filename,
+      types: [{ description: 'Text file', accept: { 'text/plain': ['.txt'] } }]
+    });
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return;
+  }
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function friendlyErrorText(error: unknown) {
@@ -1248,8 +1306,14 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
   const execution = useMemo(() => clusterExecutionSummary(hosts, summary, snapshots), [hosts, summary, snapshots]);
   const completionPercent = Math.round(execution.executionSucceeded * 100 / Math.max(1, execution.total));
   const visibleErrors = useMemo(() => execution.submitFailed ? [...new Set(summary?.errors || [])].slice(0, 5) : [], [summary, execution.submitFailed]);
+  const downloadResults = useCallback(() => {
+    void saveTextFile(downloadFileName(summary), clusterExecutionText(execution, summary));
+  }, [execution, summary]);
   return <div className="cluster-run-summary">
-    <Typography.Title level={4}>集群批量操作</Typography.Title>
+    <Flex className="cluster-summary-heading" justify="space-between" align="center" gap={12}>
+      <Typography.Title level={4}>集群批量操作</Typography.Title>
+      <Button icon={<DownloadOutlined />} disabled={!summary} onClick={downloadResults}>下载全部输出</Button>
+    </Flex>
     {summary ? <Space direction="vertical" size={12} className="cluster-run-summary-body">
       <Space wrap>
         <Tag color="blue">{summary.kind}</Tag>
@@ -1276,10 +1340,11 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
       size="small"
       className="cluster-exec-list"
       dataSource={execution.rows}
-      renderItem={row => <List.Item>
+      renderItem={(row, index) => <List.Item>
         <div className="cluster-exec-row">
           <div className="cluster-exec-header">
             <Badge status={row.status === 'success' ? 'success' : row.status === 'failed' || row.status === 'submit_failed' ? 'error' : row.status === 'running' ? 'processing' : 'default'} text={row.label || undefined} />
+            <Typography.Text className="cluster-host-index">#{index + 1}</Typography.Text>
             <Typography.Text strong>{normalizeAddress(row.host.ip)}</Typography.Text>
             {row.taskType !== '-' && row.taskType !== 'Shell' && <Tag>{row.taskType}</Tag>}
             <Tag>exit {row.exitCode}</Tag>

@@ -641,6 +641,17 @@ body {
   flex: 0 0 auto;
   width: 100%;
 }
+.cluster-summary-heading {
+  flex: 0 0 auto;
+  width: 100%;
+}
+.cluster-summary-heading h4.ant-typography {
+  margin: 0;
+}
+.cluster-summary-heading .ant-btn {
+  flex: 0 0 auto;
+  border-radius: 999px;
+}
 .cluster-exec-stats {
   width: 100%;
 }
@@ -682,6 +693,13 @@ body {
 }
 .cluster-exec-header > * {
   min-width: 0;
+}
+.cluster-host-index {
+  flex: 0 0 auto;
+  color: #64748b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
 }
 .cluster-task-id {
   flex: 1 1 260px;
