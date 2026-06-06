@@ -160,7 +160,7 @@ body {
 }
 .tile-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 14px;
 }
 .host-tile {
@@ -180,22 +180,29 @@ body {
 }
 .tile-header {
   flex: 0 0 auto;
-  min-height: 28px;
+  min-height: 48px;
   gap: 8px !important;
+}
+.tile-id-block {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 .seen {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   color: rgba(15, 23, 42, .72);
   font-size: 11px;
-  line-height: 24px;
+  line-height: 1.25;
   font-variant-numeric: tabular-nums;
 }
 .ip-title-row {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin: 0 0 8px;
+  margin: 0;
   min-width: 0;
 }
 .ip-title.ant-typography {
@@ -203,12 +210,12 @@ body {
   min-width: 0;
   color: #fff;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
-  line-height: 1.12;
+  line-height: 1.2;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
   text-shadow: none;
 }
 .ip-copy-button.ant-btn {

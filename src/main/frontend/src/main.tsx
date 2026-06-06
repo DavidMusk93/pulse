@@ -900,23 +900,25 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
   const groupSize = hostDebugValue(host, 'group_size', 'groupSize', '-');
   const groupSizeLimit = hostDebugValue(host, 'group_size_limit', 'groupSizeLimit', '-');
   return <Card className="host-tile" style={{ ['--load-level' as any]: level }} data-agent-key={hostKey(host)} variant="borderless">
-    <Flex className="tile-header" justify="space-between" align="center" gap={10}>
-      <AutoFitText className="seen" title={formatTime(observedAt)} text={formatSeenTime(observedAt)} minFontSize={9} maxFontSize={11} />
+    <Flex className="tile-header" justify="space-between" align="flex-start" gap={10}>
+      <div className="tile-id-block">
+        <div className="ip-title-row">
+          <Typography.Text className="ip-title" data-field="ip_title" title={displayIp}>{displayIp}</Typography.Text>
+          <Button
+            aria-label="复制 IP"
+            className="ip-copy-button"
+            icon={<CopyOutlined />}
+            size="small"
+            title="复制 IP"
+            type="text"
+            onClick={() => displayIp !== '-' && navigator.clipboard?.writeText(displayIp)}
+          />
+        </div>
+        <AutoFitText className="seen" title={formatTime(observedAt)} text={formatSeenTime(observedAt)} minFontSize={9} maxFontSize={11} />
+      </div>
       <Button className="run-button" data-status={statusColor(host.status)} type="primary" size="small" onClick={() => onRun(host)} disabled={confirmations < 3 || host.status !== 'alive'}>任务</Button>
     </Flex>
     <div className="tile-scroll">
-      <div className="ip-title-row">
-        <Typography.Text className="ip-title" data-field="ip_title" title={displayIp}>{displayIp}</Typography.Text>
-        <Button
-          aria-label="复制 IP"
-          className="ip-copy-button"
-          icon={<CopyOutlined />}
-          size="small"
-          title="复制 IP"
-          type="text"
-          onClick={() => displayIp !== '-' && navigator.clipboard?.writeText(displayIp)}
-        />
-      </div>
       <Row gutter={[8, 8]}>
         <Col span={12}><Statistic title="Area" value={host.area || '-'} /></Col>
         <Col span={12}><Statistic title="5min AVG" value={formatLoad(avg)} valueStyle={{ fontSize: 18 }} /></Col>
