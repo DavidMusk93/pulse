@@ -146,7 +146,7 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("块分布"));
         assertTrue(js.body().contains("自定义参数"));
         assertTrue(js.body().contains("默认参数为 --dry-run"));
-        assertTrue(js.body().contains("Run UI"));
+        assertTrue(js.body().contains("批任务"));
         assertTrue(js.body().contains("sampledAtMs"));
         assertTrue(js.body().contains("agent 执行中"));
         assertTrue(js.body().contains("run-button"));

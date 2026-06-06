@@ -933,7 +933,7 @@ const ClusterSection = memo(function ClusterSection({
     style={{ ['--cluster-hue' as any]: hue }}
     title={<Space size={8}><span>{cluster}</span><Tag>{hosts.length} 台</Tag>{needsAttention && <Tag color="warning">需关注</Tag>}</Space>}
     extra={<Space size={6}>
-      <Button size="small" className="cluster-run-button" onClick={() => onClusterRun(cluster, hosts)}>Run UI</Button>
+      <Button size="small" className="cluster-run-button" onClick={() => onClusterRun(cluster, hosts)}>批任务</Button>
       <Button size="small" type="text" className="cluster-toggle-button" onClick={() => onToggle(cluster)} disabled={needsAttention}>{needsAttention ? '异常展开' : (collapsed ? '展开' : '折叠')}</Button>
     </Space>}
     variant="outlined"
@@ -1335,7 +1335,7 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
         {visibleErrors.map((error, index) => <Typography.Text key={`${index}-${error}`} type="danger">{error}</Typography.Text>)}
       </div>}
     </Space> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未提交批量操作" />}
-    <Typography.Paragraph type="secondary">这里聚合所有目标 host 的执行状态、completion、exit code 和错误摘要；无需逐台打开 Run UI。</Typography.Paragraph>
+    <Typography.Paragraph type="secondary">这里聚合所有目标 host 的执行状态、completion、exit code 和错误摘要；无需逐台打开批任务详情。</Typography.Paragraph>
     <List
       size="small"
       className="cluster-exec-list"
