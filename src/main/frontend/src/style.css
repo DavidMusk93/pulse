@@ -10,14 +10,14 @@ body {
 }
 .pulse-page {
   min-height: 100vh;
-  padding: clamp(28px, 4.8vw, 72px) clamp(18px, 4vw, 56px) 42px;
+  padding: clamp(22px, 3.6vw, 48px) clamp(18px, 4vw, 56px) 42px;
 }
 .pulse-hero {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(320px, .92fr);
-  gap: clamp(18px, 3vw, 36px);
+  grid-template-columns: minmax(0, 1.65fr) minmax(300px, .86fr);
+  gap: clamp(14px, 2.2vw, 28px);
   align-items: stretch;
-  margin-bottom: 18px;
+  margin-bottom: 12px;
 }
 .ant-card {
   border-color: #e4eaf3 !important;
@@ -25,12 +25,11 @@ body {
   box-shadow: none !important;
 }
 .hero-main .ant-card-body {
-  height: calc(100% - 57px);
-  min-height: 230px;
+  min-height: 190px;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: clamp(32px, 5vw, 64px) !important;
+  padding: clamp(30px, 4vw, 48px) !important;
 }
 .hero-eyebrow {
   display: block;
@@ -43,16 +42,16 @@ body {
 .hero-main h1.ant-typography {
   margin: 0;
   max-width: 760px;
-  font-size: clamp(42px, 5.2vw, 74px);
+  font-size: clamp(38px, 4.5vw, 60px);
   line-height: 1.08;
   font-weight: 760;
   letter-spacing: -.024em;
 }
 .hero-subtitle {
   max-width: 680px;
-  margin-top: 18px;
+  margin-top: 14px;
   color: #4b5b73;
-  font-size: clamp(17px, 1.5vw, 22px);
+  font-size: clamp(16px, 1.3vw, 20px);
   line-height: 1.55;
 }
 .hero-side {
@@ -66,10 +65,19 @@ body {
   height: 100%;
 }
 .hero-capability-card .ant-card-body {
-  height: calc(100% - 57px);
+  height: 100%;
   min-height: 0;
   display: flex;
-  padding: 18px !important;
+  flex-direction: column;
+  padding: 22px !important;
+}
+.capability-title {
+  display: block;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 760;
+  letter-spacing: -.01em;
+  margin-bottom: 14px;
 }
 .hero-cap-grid {
   flex: 1 1 auto;
@@ -81,7 +89,8 @@ body {
   gap: 12px;
 }
 .cap-card {
-  background: #f7f9fc !important;
+  background: linear-gradient(180deg, #f8fafc 0%, #f3f6fb 100%) !important;
+  border: 1px solid #edf1f7 !important;
 }
 .cap-card .ant-card-body {
   min-height: 0;
@@ -89,11 +98,21 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 6px;
-  padding: 16px !important;
+  gap: 5px;
+  padding: 14px !important;
+}
+.cap-card b {
+  color: #111827;
+  font-size: 13px;
+  letter-spacing: -.01em;
+}
+.cap-card span {
+  color: #52627a;
+  font-size: 12px;
+  line-height: 1.35;
 }
 .metric-row {
-  margin-bottom: 18px;
+  margin-bottom: 16px;
 }
 .metric-row > .ant-col {
   display: flex;
