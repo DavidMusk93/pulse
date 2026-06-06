@@ -661,6 +661,7 @@ function App() {
   const viewport = useRef({ left: 0, top: 0 });
   const snapshotVersionRef = useRef('');
   const activeTargetHost = activeHost || activeCluster?.hosts[0] || null;
+  const clusterAgentKey = useMemo(() => (activeCluster?.hosts || []).map(agentId).join(','), [activeCluster?.name, activeCluster?.hosts]);
 
   function applyTaskSnapshot(data: TaskSnapshot) {
     const version = snapshotVersion(data);
@@ -727,6 +728,7 @@ function App() {
   useEffect(() => {
     if (!activeCluster || !batchSummary) return;
     const cluster = activeCluster;
+    const clusterAgents = new Set(cluster.hosts.map(agentId));
     let disposed = false;
     async function refreshClusterSnapshots() {
       const entries = await Promise.allSettled(cluster.hosts.map(async host => {
@@ -745,13 +747,40 @@ function App() {
         return next;
       });
     }
-    refreshClusterSnapshots().catch(err => setOutput(String(err)));
-    const timer = window.setInterval(() => refreshClusterSnapshots().catch(err => setOutput(String(err))), 3000);
+    if (!('EventSource' in window)) {
+      refreshClusterSnapshots().catch(err => setOutput(String(err)));
+      const timer = window.setInterval(() => refreshClusterSnapshots().catch(err => setOutput(String(err))), 3000);
+      return () => {
+        disposed = true;
+        window.clearInterval(timer);
+      };
+    }
+
+    const agents = cluster.hosts.map(host => encodeURIComponent(agentId(host))).join(',');
+    const events = new EventSource(`/api/tasks/stream?agents=${agents}`);
+    const handleSnapshot = (event: MessageEvent<string>) => {
+      try {
+        const data = JSON.parse(event.data) as TaskSnapshot;
+        const id = data.agent_id || (data as any).agentId || '';
+        if (!id || !clusterAgents.has(id) || disposed) return;
+        setClusterSnapshots(prev => {
+          const version = snapshotVersion(data);
+          if (snapshotVersion(prev[id] || null) === version) return prev;
+          return { ...prev, [id]: data };
+        });
+      } catch (err) {
+        setOutput(String(err));
+      }
+    };
+    events.addEventListener('task.snapshot', handleSnapshot as EventListener);
+    events.onerror = () => {
+      // EventSource reconnects automatically; keep the current cluster result visible.
+    };
     return () => {
       disposed = true;
-      window.clearInterval(timer);
+      events.close();
     };
-  }, [activeCluster?.name, batchSummary?.updatedAt]);
+  }, [activeCluster?.name, clusterAgentKey, batchSummary?.updatedAt]);
 
   const groups = useMemo(() => groupByCluster(hosts), [hosts]);
   const attentionClusters = useMemo(() => new Set(groups.filter(([, clusterHosts]) => clusterNeedsAttention(clusterHosts)).map(([cluster]) => cluster)), [groups]);

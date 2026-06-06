@@ -333,6 +333,46 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
+    void batchTaskStreamEndpointServesSnapshotsForMultipleAgents() throws Exception {
+        postJson("/api/agents/agent-1/tasks", """
+                {"task_type":"analyze_block_layout_dry_run"}
+                """);
+        postJson("/api/agents/agent-2/tasks", """
+                {"task_type":"prepare_disk_layout_dry_run"}
+                """);
+
+        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/api/tasks/stream?agents=agent-1,agent-2"))
+                .timeout(Duration.ofSeconds(2))
+                .GET()
+                .build();
+        HttpResponse<java.io.InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+
+        assertEquals(200, response.statusCode());
+        assertTrue(response.headers().firstValue("content-type").orElse("").contains("text/event-stream"));
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.body()))) {
+            StringBuilder firstLines = new StringBuilder();
+            for (int i = 0; i < 40; i++) {
+                String line = reader.readLine();
+                if (line == null) {
+                    break;
+                }
+                firstLines.append(line).append('\n');
+                String body = firstLines.toString();
+                if (body.contains("\"agent_id\":\"agent-1\"") && body.contains("\"agent_id\":\"agent-2\"")) {
+                    break;
+                }
+            }
+            String body = firstLines.toString();
+            assertTrue(body.contains("event: hello"));
+            assertTrue(body.contains("\"agent_count\":2"));
+            assertTrue(body.contains("\"agent_id\":\"agent-1\""));
+            assertTrue(body.contains("\"agent_id\":\"agent-2\""));
+            assertTrue(body.contains("analyze_block_layout_dry_run"));
+            assertTrue(body.contains("prepare_disk_layout_dry_run"));
+        }
+    }
+
+    @Test
     void taskApiEnqueuesFilePutAndShellScriptWithoutNewEndpoint() throws Exception {
         String content = "hello";
         String encoded = Base64.getEncoder().encodeToString(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));

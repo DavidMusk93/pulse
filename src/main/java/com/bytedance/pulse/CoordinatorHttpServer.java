@@ -8,15 +8,18 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.URLDecoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -81,6 +84,15 @@ public class CoordinatorHttpServer {
             }
             if ("GET".equals(method) && path.startsWith("/assets/")) {
                 writeStaticAsset(exchange, path);
+                return;
+            }
+            if ("GET".equals(method) && "/api/tasks/stream".equals(path)) {
+                List<String> agentIds = queryList(exchange.getRequestURI(), "agents");
+                try {
+                    writeTaskSnapshotStream(exchange, agentIds);
+                } catch (IOException ignored) {
+                    // Client disconnected or proxy closed the SSE stream.
+                }
                 return;
             }
             if ("GET".equals(method) && path.startsWith("/api/agents/") && path.endsWith("/tasks/stream")) {
@@ -157,6 +169,13 @@ public class CoordinatorHttpServer {
     }
 
     private void writeTaskSnapshotStream(HttpExchange exchange, String agentId) throws IOException {
+        writeTaskSnapshotStream(exchange, List.of(agentId));
+    }
+
+    private void writeTaskSnapshotStream(HttpExchange exchange, List<String> agentIds) throws IOException {
+        if (agentIds.isEmpty()) {
+            throw new IllegalArgumentException("agents query is required");
+        }
         exchange.getResponseHeaders().set("content-type", "text/event-stream; charset=utf-8");
         exchange.getResponseHeaders().set("cache-control", "no-cache");
         exchange.getResponseHeaders().set("connection", "keep-alive");
@@ -168,16 +187,23 @@ public class CoordinatorHttpServer {
         long deadline = System.currentTimeMillis() + maxStreamMs;
         int sequence = 0;
         int idleTicks = 0;
-        String lastPayload = "";
+        Map<String, String> lastPayloads = new java.util.HashMap<>();
         try (OutputStream output = exchange.getResponseBody()) {
             writeSse(output, "hello", sequence++, mapper.writeValueAsString(Map.of(
-                    "agent_id", agentId,
+                    "agent_ids", agentIds,
+                    "agent_count", agentIds.size(),
                     "server_time_ms", System.currentTimeMillis())));
             while (!Thread.currentThread().isInterrupted() && System.currentTimeMillis() < deadline) {
-                String payload = mapper.writeValueAsString(service.taskSnapshot(agentId));
-                if (!payload.equals(lastPayload)) {
-                    writeSse(output, "task.snapshot", sequence++, payload);
-                    lastPayload = payload;
+                boolean wroteSnapshot = false;
+                for (String agentId : agentIds) {
+                    String payload = mapper.writeValueAsString(service.taskSnapshot(agentId));
+                    if (!payload.equals(lastPayloads.get(agentId))) {
+                        writeSse(output, "task.snapshot", sequence++, payload);
+                        lastPayloads.put(agentId, payload);
+                        wroteSnapshot = true;
+                    }
+                }
+                if (wroteSnapshot) {
                     idleTicks = 0;
                 } else if (++idleTicks >= 15) {
                     writeSse(output, "ping", sequence++, mapper.writeValueAsString(Map.of(
@@ -200,6 +226,26 @@ public class CoordinatorHttpServer {
                 + "data: " + data.replace("\n", "\\n") + "\n\n";
         output.write(payload.getBytes(StandardCharsets.UTF_8));
         output.flush();
+    }
+
+    private static List<String> queryList(URI uri, String key) {
+        String query = uri.getRawQuery();
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+        Set<String> values = new LinkedHashSet<>();
+        String prefix = key + "=";
+        for (String part : query.split("&")) {
+            if (!part.startsWith(prefix)) {
+                continue;
+            }
+            String decoded = URLDecoder.decode(part.substring(prefix.length()), StandardCharsets.UTF_8);
+            Arrays.stream(decoded.split(","))
+                    .map(String::trim)
+                    .filter(value -> !value.isBlank())
+                    .forEach(values::add);
+        }
+        return List.copyOf(values);
     }
 
     private <T> T readJson(HttpExchange exchange, Class<T> type) throws IOException {
