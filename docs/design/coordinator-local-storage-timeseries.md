@@ -2,13 +2,14 @@
 
 ## 结论
 
-每个 Pulse coordinator 增加本地嵌入式时序存储，用于保存本 coordinator 观察到的 heartbeat 与 agent 运行状态历史数据。第一版使用 SQLite 作为本地数据库，按时间分桶、按 host 索引，并通过 coordinator Web API 向前端提供类似 Grafana 的 range query 数据。
+每个 Pulse coordinator 增加本地嵌入式时序存储，用于保存本 coordinator 观察到的 heartbeat 与 agent 运行状态历史数据。第一版使用 SQLite 作为本地数据库，按时间分桶、按 host 索引，并通过 coordinator Web API 与 SSE 向前端提供类似 Grafana 的 range query 和增量刷新数据。
 
 第一版落地范围：
 
 - 统计每个 host 的 heartbeat 延迟、到达时间、处理耗时、状态和消息大小。
 - 统计每个 host 上 tide_worker 进程的 pid、版本、cpu、rss、线程数、端口、debug 信息和 leader/follower 信息。
-- 前端新增 dashboard/time-series 数据层，支持 range、step、series、downsample、auto-refresh。
+- 统计每个 group leader 的批量上报、成员覆盖、拒绝/回退、收集耗时和 leader 稳定性，用于后续通过本地 DB 评估 group 心跳上报方案。
+- 前端新增 dashboard/time-series 数据层，支持 range、step、series、downsample、SSE 增量刷新和优雅重连。
 - 每个 coordinator 只保存本地观察数据，不在第一版做跨 coordinator 全局聚合。
 
 核心约束：
@@ -16,7 +17,9 @@
 - 不引入外部数据库、Kafka、Prometheus 或远程 TSDB；coordinator 必须单机可运行。
 - 本地存储是 coordinator 的可观测性缓存，不是控制面的强一致状态源。
 - 写入路径不能阻塞 heartbeat 快路径；必须通过异步队列批量落盘。
+- SQLite 写入层必须架构性保证单并发写入：单 writer 线程独占 connection、transaction 和 prepared statement，不允许 handler 或查询线程直接写库。
 - UI 查询不能扫描全表；所有查询必须使用时间范围、agent/cluster/area 过滤和步长下采样。
+- 前端实时更新默认使用 SSE，不再新增 HTTP polling；现有 polling 调用需要迁移到 SSE 事件流。
 - 数据必须有 TTL、容量上限、降级策略和损坏恢复策略。
 
 ## 非目标
@@ -25,7 +28,7 @@
 - 不替代现有 `/api/hosts` 当前态接口。
 - 不把本地库作为任务执行、文件下发或 shell 输出的唯一事实源。
 - 不保存完整 heartbeat 原始 JSON 长期历史；只保存可查询指标和必要事件摘要。
-- 不在第一版引入实时 WebSocket。前端仍使用 HTTP polling，后续可升级 SSE。
+- 不在第一版引入 WebSocket。实时增量通道使用 SSE，避免双向协议复杂度；HTTP 仅保留初始化查询、补偿查询和手动刷新。
 
 ## 数据库选择
 
@@ -54,6 +57,15 @@ PRAGMA foreign_keys = ON;
 - WAL 模式支持一个 writer、多个 reader，适合 coordinator 单进程批量写入 + UI 查询。
 - 对 50 至数百 host、秒级 heartbeat、数天保留的规模足够。
 - 支持普通 SQL、索引、聚合、窗口查询和在线备份。
+
+SQLite 使用约束：
+
+- SQLite 不是高并发写入引擎，不能让多个业务线程共享写 connection 或竞争写事务。
+- 写入层必须显式建模为单 writer ownership：只有 `SqliteMetricWriter` 线程持有 write connection。
+- heartbeat handler、SSE 推送线程、查询线程都不能直接执行 `INSERT`、`UPDATE`、`DELETE`。
+- 所有写入命令必须先转为不可变 `MetricWriteCommand`，经由队列进入 writer 线程。
+- 查询使用只读 connection，设置 `query_only` 语义，不复用 writer 的 prepared statement。
+- TTL 清理、rollup、schema migration 也属于写操作，必须由 writer 线程串行执行或在启动阶段 writer 未运行前执行。
 
 ### 不选择其他方案
 
@@ -87,6 +99,7 @@ Prometheus remote write / VictoriaMetrics / TimescaleDB：
 - `observed_at_ms`：coordinator 收到并开始处理 heartbeat 的本地时间。
 - `agent_sent_at_ms`：agent 生成 heartbeat 的时间，由 heartbeat payload 上报。
 - `collector_sent_at_ms`：group heartbeat 场景中 leader/collector 转发时间，可选。
+- `leader_collected_at_ms`：group leader 完成本轮 follower 收集并准备提交的时间，可选。
 - `stored_at_ms`：写入本地库时间。
 
 heartbeat 延迟定义：
@@ -222,6 +235,74 @@ CREATE INDEX IF NOT EXISTS idx_tide_worker_role_time
 - 高频可画图字段必须结构化，例如 `cpu_pct`、`rss_kb`、`thread_count`。
 - 如果某次 heartbeat 没有 tide_worker，写入一条 host 级状态事件，而不是写入 pid=0 的伪样本。
 
+### 时序表：`group_leader_sample`
+
+保存 group leader 每轮批量上报的观测样本。该表面向后期 SQL 分析，用于评估 group 心跳方案是否真实降低 coordinator 请求压力，并定位 leader/follower 协议抖动。
+
+```sql
+CREATE TABLE IF NOT EXISTS group_leader_sample (
+  bucket_ms                 INTEGER NOT NULL,
+  observed_at_ms            INTEGER NOT NULL,
+  group_id                  TEXT NOT NULL,
+  leader_agent_id           TEXT NOT NULL,
+  leader_ip                 TEXT,
+  cluster                   TEXT NOT NULL DEFAULT 'unknown',
+  area                      TEXT NOT NULL DEFAULT 'unknown',
+  group_generation          INTEGER,
+  member_count              INTEGER NOT NULL,
+  submitted_agent_count     INTEGER NOT NULL,
+  accepted_agent_count      INTEGER NOT NULL,
+  rejected_agent_count      INTEGER NOT NULL DEFAULT 0,
+  stale_member_count        INTEGER NOT NULL DEFAULT 0,
+  missing_member_count      INTEGER NOT NULL DEFAULT 0,
+  direct_fallback_count     INTEGER NOT NULL DEFAULT 0,
+  collector_sent_at_ms      INTEGER,
+  leader_collected_at_ms    INTEGER,
+  leader_collect_ms         INTEGER,
+  group_latency_ms          INTEGER,
+  arrival_gap_ms            INTEGER,
+  coordinator_process_ms    INTEGER,
+  request_bytes             INTEGER,
+  response_bytes            INTEGER,
+  status                    TEXT NOT NULL,
+  error_code                TEXT,
+  debug_json                TEXT,
+  stored_at_ms              INTEGER NOT NULL,
+  PRIMARY KEY (group_id, observed_at_ms)
+);
+
+CREATE INDEX IF NOT EXISTS idx_group_leader_time
+  ON group_leader_sample(bucket_ms, observed_at_ms);
+
+CREATE INDEX IF NOT EXISTS idx_group_leader_cluster_time
+  ON group_leader_sample(cluster, area, bucket_ms);
+
+CREATE INDEX IF NOT EXISTS idx_group_leader_agent_time
+  ON group_leader_sample(leader_agent_id, observed_at_ms);
+```
+
+字段说明：
+
+- `member_count` 来自 coordinator 当前 `GroupView.members`，表示本轮期望成员数。
+- `submitted_agent_count` 是 leader 请求中 `agents[]` 的数量，代表本轮实际 fan-in 覆盖。
+- `accepted_agent_count`、`rejected_agent_count` 用于统计 coordinator 对批量心跳的接收结果。
+- `stale_member_count` 统计请求中不属于当前 group 的 agent，帮助发现旧 plan 或旧 leader 缓存。
+- `missing_member_count = max(member_count - submitted_agent_count, 0)`，用于评估 follower 上报缺口。
+- `direct_fallback_count` 统计本 group 内 follower 因 leader 不可用而回退 direct 的数量；第一版可由 coordinator 当前态或事件近似计算。
+- `leader_collect_ms = collector_sent_at_ms - leader_collected_at_ms`，衡量 leader 本地收集 follower 的耗时。
+- `group_latency_ms = observed_at_ms - collector_sent_at_ms`，衡量 leader 到 coordinator 的传输与排队延迟。
+- `arrival_gap_ms` 按 `group_id` 计算，用于发现 group heartbeat 间隔抖动。
+- `status` 建议取 `ok`、`partial`、`failed`、`stale_plan`、`fallback`。
+- `debug_json` 只保存低频扩展字段，如 leader URL、拒绝原因采样、group plan hash 等。
+
+典型分析问题：
+
+- 实际 coordinator 请求数是否从 `host_count` 收敛到 `group_count`。
+- 每个 group 的 `submitted_agent_count / member_count` 是否长期接近 1。
+- leader 切换后 `stale_member_count`、`missing_member_count` 是否出现尖峰。
+- `leader_collect_ms` 和 `group_latency_ms` 是否抵消了批量上报带来的降压收益。
+- 哪些 cluster/area 更容易出现 `partial` 或 `fallback`。
+
 ### 事件表：`host_event`
 
 保存稀疏事件，避免将异常文本塞进样本表。
@@ -253,6 +334,10 @@ CREATE INDEX IF NOT EXISTS idx_host_event_type_time
 - `tide_worker.disappeared`
 - `tide_worker.pid_changed`
 - `tide_worker.leader_changed`
+- `group.leader_changed`
+- `group.heartbeat_partial`
+- `group.stale_member_rejected`
+- `group.direct_fallback`
 - `storage.write_dropped`
 
 ### 聚合表：`metric_rollup_1m`
@@ -288,21 +373,74 @@ agent heartbeat
   -> CoordinatorHttpServer
   -> Heartbeat handler parses current state
   -> Current in-memory host view update
-  -> LocalMetricSample created
-  -> Bounded write queue
-  -> Batch writer thread
+  -> LocalMetricSample created, immutable
+  -> MetricIngressThread, single producer
+  -> SPSC ring buffer
+  -> SqliteMetricWriter, single consumer
   -> SQLite WAL
   -> Query API
-  -> Frontend chart store
+  -> SSE event stream
   -> Grafana-like panels
 ```
 
 关键原则：
 
 - heartbeat handler 只负责构造轻量 sample 并放入队列。
-- SQLite 写入由单独 writer 线程批量事务完成。
+- SQLite 写入由单独 writer 线程批量事务完成，并且 writer 线程独占 write connection。
 - 查询 API 使用独立 read connection，不与 writer 共用 statement。
 - 当 write queue 满时，丢弃最老或最新样本必须可配置，并写入 `storage.write_dropped` 事件或内存计数。
+- SPSC queue 只用于 `MetricIngressThread -> SqliteMetricWriter` 这一段，不能被多个 heartbeat handler 直接同时写入。
+- 多个 heartbeat handler 产生的样本必须先进入 `MetricIngressThread`，由它成为唯一 producer；否则 SPSC 的单生产者假设会被破坏。
+
+### 写入层数据结构
+
+核心对象：
+
+```java
+final class LocalMetricSample {
+  long observedAtMs;
+  HostDimensionUpdate hostDimension;
+  HeartbeatSample heartbeat;
+  List<TideWorkerSample> tideWorkers;
+  GroupLeaderSample groupLeader;
+  List<HostEvent> events;
+}
+
+sealed interface MetricWriteCommand permits
+    UpsertHostDimension,
+    InsertHeartbeatSample,
+    InsertTideWorkerSample,
+    InsertGroupLeaderSample,
+    InsertHostEvent,
+    DeleteExpiredSamples,
+    CheckpointWal {
+}
+
+final class SpscMetricRingBuffer {
+  MetricWriteCommand[] entries;
+  int mask;
+  volatile long head; // consumer owned
+  volatile long tail; // producer owned
+}
+```
+
+线程与 ownership：
+
+| 组件 | 线程 | 持有资源 | 允许操作 |
+| --- | --- | --- | --- |
+| `HeartbeatHandler` | HTTP executor | 当前请求上下文 | 构造 `LocalMetricSample`，不得访问 SQLite |
+| `MetricIngressThread` | single thread | sample ingress、SPSC producer tail | 将 sample 展开为 `MetricWriteCommand` 并写入 SPSC |
+| `SqliteMetricWriter` | single thread | SQLite write connection、transaction、prepared statements、SPSC consumer head | drain command、批量事务、TTL、checkpoint |
+| `MetricQueryService` | HTTP/SSE read thread | read-only connection pool | range query、catalog query、事件查询 |
+| `SseMetricHub` | SSE dispatcher | client registry、last event id | 推送 storage health、host/group changed、metric invalidation |
+
+数据结构约束：
+
+- `LocalMetricSample` 和 `MetricWriteCommand` 创建后不可变，避免跨线程共享可变状态。
+- SPSC ring buffer 使用固定容量数组，容量为 2 的幂，通过 `mask` 做取模，避免链表分配。
+- `tail` 只由 `MetricIngressThread` 写，`head` 只由 `SqliteMetricWriter` 写；另一方只读，减少锁竞争。
+- command 不携带 JDBC 对象、statement 或 connection，只携带基础类型、字符串和小型 DTO。
+- `debug_json` 在进入队列前完成白名单过滤和大小限制，writer 不做复杂业务解析。
 
 ### 写入队列
 
@@ -316,34 +454,56 @@ PULSE_LOCAL_STORAGE_BATCH_SIZE=500
 PULSE_LOCAL_STORAGE_FLUSH_MS=1000
 PULSE_LOCAL_STORAGE_RETENTION_DAYS=7
 PULSE_LOCAL_STORAGE_MAX_BYTES=10737418240
+PULSE_LOCAL_STORAGE_QUEUE_MODE=spsc
+PULSE_LOCAL_STORAGE_BACKPRESSURE=drop_oldest
 ```
 
 队列策略：
 
-- 默认 `drop_oldest`，保证最新图表可用。
+- 默认 `drop_oldest`，保证最新图表可用；如果需要保留短期异常完整性，可切换为 `drop_newest`。
 - 如果连续丢弃超过阈值，在 UI 上显示 coordinator storage degraded。
-- 单次 batch 写入包含 host dimension upsert、heartbeat sample、tide worker sample 和事件。
+- 单次 batch 写入包含 host dimension upsert、heartbeat sample、tide worker sample、group leader sample 和事件。
+- SPSC 队列满时，`MetricIngressThread` 负责执行背压策略，`SqliteMetricWriter` 不回调业务线程。
+- 丢弃只发生在时序观测层，不影响 coordinator 当前态、任务执行和 heartbeat response。
+- 所有丢弃计数写入内存 `StorageHealth`；当队列恢复后再异步写入 `storage.write_dropped` 事件。
 
 ### 批量写入事务
 
 伪代码：
 
 ```text
+MetricIngressThread:
+  while running:
+    sample = ingress.take(timeout=flush_ms)
+    commands = MetricSampleExtractor.expand(sample)
+    for command in commands:
+      if !spsc.offer(command):
+        apply backpressure policy
+
+SqliteMetricWriter:
 while running:
-  samples = queue.drain(max=batch_size, timeout=flush_ms)
-  begin transaction
-    upsert host_dimension
-    insert heartbeat_sample
-    insert tide_worker_sample
-    insert host_event
-  commit
+  commands = spsc.drain(max=batch_size, timeout=flush_ms)
+  if commands not empty:
+    begin transaction
+      for command in commands:
+        execute prepared statement by command type
+    commit
+    publish MetricStorageChanged event to SseMetricHub
 ```
 
 写入幂等：
 
 - `heartbeat_sample` 以 `(agent_id, observed_at_ms)` 去重。
 - `tide_worker_sample` 以 `(agent_id, observed_at_ms, pid)` 去重。
+- `group_leader_sample` 以 `(group_id, observed_at_ms)` 去重。
 - 如果同一 heartbeat 被重复处理，使用 `INSERT OR IGNORE` 或 `ON CONFLICT DO UPDATE`。
+
+事务边界：
+
+- 每个 batch 最多包含 `PULSE_LOCAL_STORAGE_BATCH_SIZE` 条 command。
+- 单事务目标耗时应小于 `PULSE_LOCAL_STORAGE_FLUSH_MS`，避免 WAL 长时间持有 writer lock。
+- TTL 删除、rollup 和 WAL checkpoint 作为低优先级 command 插入同一 writer 队列，不能由定时线程直接写库。
+- writer 捕获 SQLite busy、disk full、corruption 等异常后进入 degraded 状态，并保持 heartbeat 快路径可用。
 
 ## 保留与清理
 
@@ -354,6 +514,7 @@ while running:
 ```sql
 DELETE FROM heartbeat_sample WHERE observed_at_ms < :cutoff_ms;
 DELETE FROM tide_worker_sample WHERE observed_at_ms < :cutoff_ms;
+DELETE FROM group_leader_sample WHERE observed_at_ms < :cutoff_ms;
 DELETE FROM host_event WHERE observed_at_ms < :cutoff_ms;
 ```
 
@@ -408,6 +569,30 @@ GET /api/metrics/catalog
       "unit": "bytes",
       "type": "gauge",
       "source": "tide_worker_sample"
+    },
+    {
+      "name": "group.submitted_agent_count",
+      "unit": "count",
+      "type": "gauge",
+      "source": "group_leader_sample"
+    },
+    {
+      "name": "group.accepted_agent_count",
+      "unit": "count",
+      "type": "gauge",
+      "source": "group_leader_sample"
+    },
+    {
+      "name": "group.leader_collect_ms",
+      "unit": "ms",
+      "type": "gauge",
+      "source": "group_leader_sample"
+    },
+    {
+      "name": "group.group_latency_ms",
+      "unit": "ms",
+      "type": "gauge",
+      "source": "group_leader_sample"
     }
   ]
 }
@@ -484,6 +669,111 @@ GET /api/metrics/events?from=...&to=...&agent_id=...&severity=warn,error
 
 用于图表 annotation 和异常列表。
 
+### 查询 group leader 时序
+
+```http
+GET /api/metrics/query_range?metric=group.submitted_agent_count&from=...&to=...&step=10000&cluster=cdn_new&group=cdn_new/gl/000
+```
+
+返回 series label 包含 `group_id` 和 `leader_agent_id`：
+
+```json
+{
+  "metric": "group.submitted_agent_count",
+  "unit": "count",
+  "series": [
+    {
+      "group_id": "cdn_new/gl/000",
+      "leader_agent_id": "agent-a",
+      "labels": {
+        "cluster": "cdn_new",
+        "area": "gl",
+        "status": "ok"
+      },
+      "points": [[1710000000000, 7]]
+    }
+  ]
+}
+```
+
+建议支持的 group 指标：
+
+- `group.member_count`：当前 group 期望成员数。
+- `group.submitted_agent_count`：leader 实际批量提交的 agent 数。
+- `group.accepted_agent_count`：coordinator 接受的 agent 数。
+- `group.rejected_agent_count`：被 coordinator 拒绝的 agent 数。
+- `group.missing_member_count`：本轮未被 leader 覆盖的成员数。
+- `group.direct_fallback_count`：回退 direct 的成员数。
+- `group.leader_collect_ms`：leader 本地收集耗时。
+- `group.group_latency_ms`：leader 到 coordinator 的上报延迟。
+- `group.arrival_gap_ms`：group 级 heartbeat 到达间隔。
+
+## SSE 实时通道
+
+### 设计原则
+
+实时体验默认使用 SSE，不再以 HTTP polling 作为刷新机制：
+
+- 首屏使用 `/api/metrics/query_range` 获取指定时间窗的完整快照。
+- 首屏完成后立即建立 `/api/metrics/stream` SSE 连接，接收当前态变更、指标失效通知和 storage health。
+- SSE 只承载轻量增量事件，不直接推送大批量时序点；图表收到 invalidation 后按需补偿查询缺失窗口。
+- 现有 `/api/hosts`、`/api/metrics/query_range`、`/api/metrics/events` 的周期性 polling 需要迁移到 SSE 触发。
+- SSE 断开后由浏览器 `EventSource` 自动重连；服务端支持 `Last-Event-ID`，前端用补偿查询填补断线窗口。
+
+### SSE Endpoint
+
+```http
+GET /api/metrics/stream?cluster=cdn_new&area=gl&group=cdn_new/gl/000
+Accept: text/event-stream
+```
+
+响应头：
+
+```http
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+X-Accel-Buffering: no
+```
+
+事件格式：
+
+```text
+id: 1710000000000-42
+event: metric.invalidate
+data: {"from":1710000000000,"to":1710000005000,"metrics":["heartbeat.latency_ms","group.submitted_agent_count"],"cluster":"cdn_new"}
+
+```
+
+事件类型：
+
+| event | 触发来源 | 用途 |
+| --- | --- | --- |
+| `hello` | SSE 建连 | 返回 coordinator id、server time、建议补偿窗口 |
+| `heartbeat.changed` | current host view 更新 | 更新 host 卡片和触发相关 host 图表补偿查询 |
+| `group.changed` | group view 或 group leader sample 写入 | 更新 group 面板、leader annotation 和 fallback 指标 |
+| `metric.invalidate` | writer batch commit 后发布 | 通知前端某段时间窗有新数据，需要按需 query range |
+| `event.appended` | host_event 写入 | 添加 annotation 或异常列表项 |
+| `storage.health` | storage health 变化 | 展示 degraded、disabled、queue full 等状态 |
+| `ping` | 服务端心跳 | 保持连接、辅助代理层 idle timeout |
+
+### 断线恢复
+
+前端恢复流程：
+
+1. `EventSource` 断线后自动重连，浏览器携带 `Last-Event-ID`。
+2. 如果服务端仍有该 id 之后的短期事件缓存，则补发事件。
+3. 如果事件缓存已经淘汰，服务端发送 `metric.invalidate`，范围为 `lastClientSeenMs..now`。
+4. 前端对当前可见 panel 执行 `/api/metrics/query_range` 补偿查询。
+5. 补偿完成后继续消费 SSE 增量事件。
+
+服务端约束：
+
+- SSE 每个 client 只保存轻量 cursor，不为每个 client 保存完整时序点。
+- SSE hub 使用 bounded client queue，慢 client 只丢弃增量通知，不影响 writer 和 heartbeat 快路径。
+- `metric.invalidate` 可以合并相邻时间窗，降低前端补偿查询次数。
+- 大窗口历史查询仍走 HTTP range query，SSE 只负责“有新数据”和“小事件”通知。
+
 ## 前端展示机制
 
 ### 目标体验
@@ -491,10 +781,11 @@ GET /api/metrics/events?from=...&to=...&agent_id=...&severity=warn,error
 前端采用类似 Grafana 的 state-of-art 面板模型：
 
 - 顶部全局 time range：最近 15m、1h、6h、24h、自定义。
-- 自动刷新：5s、10s、30s、off。
+- 实时模式：SSE live、paused、手动补偿刷新。
 - 面板支持多 series、legend、tooltip、brush zoom、异常 annotation。
 - 支持 host/cluster/area/group 过滤。
 - 支持图表与 host 卡片联动：点击 host 卡片可打开该 host 的 heartbeat latency 和 tide_worker 面板。
+- 支持 group leader 面板，用于观察批量上报覆盖率、leader 切换和 fallback 趋势。
 
 ### 前端状态模型
 
@@ -503,7 +794,8 @@ type TimeRange = {
   from: number;
   to: number;
   mode: 'relative' | 'absolute';
-  refreshMs: number;
+  liveMode: 'sse' | 'paused';
+  lastEventId?: string;
 };
 
 type MetricQuery = {
@@ -531,6 +823,7 @@ type MetricPanelState = {
   loading: boolean;
   error?: string;
   series: MetricSeries[];
+  invalidatedRange?: { from: number; to: number };
   lastUpdatedAt: number;
 };
 ```
@@ -578,7 +871,7 @@ step = round_to_nice_step(step)
 ```text
 Time range bar
   - last 15m / 1h / 6h / 24h
-  - auto refresh
+  - SSE live / paused
   - cluster / area / host filter
 
 Panels
@@ -586,6 +879,9 @@ Panels
   - Heartbeat arrival gap by host
   - Tide worker CPU by pid
   - Tide worker RSS by pid
+  - Group submitted / accepted agents by group
+  - Group leader collect latency
+  - Group missing / rejected / fallback count
   - Event annotations
 ```
 
@@ -601,6 +897,7 @@ Panels
 - latency 超过阈值使用 markArea 高亮。
 - host offline 或 heartbeat gap 事件作为 annotation。
 - tide_worker pid 改变时添加 `tide_worker.pid_changed` annotation。
+- group leader 变化、stale member 拒绝和 follower direct fallback 作为 group 面板 annotation。
 
 ## 数据流架构
 
@@ -619,13 +916,21 @@ Coordinator heartbeat handler
   - update current HostView
   - compute latency/gap
   - extract tide_worker samples
+  - extract group leader samples when request contains group_id + agents[]
   - enqueue LocalMetricSample
     |
     v
-LocalStorageWriter
+MetricIngressThread
+  - expand sample to MetricWriteCommand
+  - offer command to SPSC ring buffer
+    |
+    v
+SqliteMetricWriter
+  - drain SPSC commands
   - batch transaction
   - upsert host_dimension
-  - insert samples/events
+  - insert heartbeat / tide_worker / group samples and events
+  - publish metric.invalidate to SseMetricHub
     |
     v
 SQLite WAL
@@ -641,6 +946,17 @@ React dashboard panel
   -> JSON series
   -> chart store
   -> ECharts render
+```
+
+### 实时刷新流
+
+```text
+SqliteMetricWriter commit
+  -> SseMetricHub publishes metric.invalidate / event.appended / storage.health
+  -> Browser EventSource receives event
+  -> visible panels mark invalidated range
+  -> panel performs targeted /api/metrics/query_range compensation
+  -> chart store merges new points
 ```
 
 ### 降级流
@@ -689,6 +1005,44 @@ GROUP BY agent_id, pid, ts
 ORDER BY ts ASC;
 ```
 
+group 覆盖率与降压收益：
+
+```sql
+SELECT
+  ((observed_at_ms / :step_ms) * :step_ms) AS ts,
+  cluster,
+  area,
+  group_id,
+  AVG(submitted_agent_count * 1.0 / NULLIF(member_count, 0)) AS avg_coverage_ratio,
+  SUM(submitted_agent_count) AS submitted_agents,
+  COUNT(*) AS coordinator_requests,
+  SUM(rejected_agent_count) AS rejected_agents,
+  SUM(missing_member_count) AS missing_agents,
+  SUM(direct_fallback_count) AS fallback_agents
+FROM group_leader_sample
+WHERE observed_at_ms BETWEEN :from_ms AND :to_ms
+  AND cluster = :cluster
+GROUP BY cluster, area, group_id, ts
+ORDER BY ts ASC;
+```
+
+leader 切换和 stale plan 排查：
+
+```sql
+SELECT
+  group_id,
+  COUNT(DISTINCT leader_agent_id) AS leader_count,
+  SUM(stale_member_count) AS stale_members,
+  SUM(rejected_agent_count) AS rejected_agents,
+  MAX(arrival_gap_ms) AS max_arrival_gap_ms,
+  MAX(group_latency_ms) AS max_group_latency_ms
+FROM group_leader_sample
+WHERE observed_at_ms BETWEEN :from_ms AND :to_ms
+GROUP BY group_id
+HAVING leader_count > 1 OR stale_members > 0 OR rejected_agents > 0
+ORDER BY stale_members DESC, rejected_agents DESC, leader_count DESC;
+```
+
 ## 采样与性能估算
 
 假设：
@@ -696,6 +1050,7 @@ ORDER BY ts ASC;
 - 500 hosts。
 - heartbeat 间隔 5s。
 - 每 host 平均 2 个 tide_worker。
+- group heartbeat 开启后平均每 7 个 host 产生 1 条 group leader sample。
 - 保留 7 天。
 
 数据量估算：
@@ -703,6 +1058,7 @@ ORDER BY ts ASC;
 ```text
 heartbeat_sample = 500 * 12/min * 60 * 24 * 7 ~= 6,048,000 rows
 tide_worker_sample = 500 * 2 * 12/min * 60 * 24 * 7 ~= 12,096,000 rows
+group_leader_sample = ceil(500 / 7) * 12/min * 60 * 24 * 7 ~= 870,912 rows
 ```
 
 优化策略：
@@ -774,22 +1130,26 @@ CREATE TABLE IF NOT EXISTS schema_version (
 ### Phase 1：本地库与写入
 
 - 引入 SQLite JDBC。
-- 增加 `LocalMetricStorage`、`LocalMetricWriter`、`MetricSampleExtractor`。
-- 写入 `host_dimension`、`heartbeat_sample`、`tide_worker_sample`。
+- 增加 `LocalMetricStorage`、`MetricIngressThread`、`SpscMetricRingBuffer`、`SqliteMetricWriter`、`MetricSampleExtractor`。
+- 明确 SQLite write connection、transaction、prepared statement 只归 `SqliteMetricWriter` 所有。
+- 写入 `host_dimension`、`heartbeat_sample`、`tide_worker_sample`、`group_leader_sample`。
 - 增加 TTL 清理和 storage health。
 
-### Phase 2：查询 API
+### Phase 2：查询 API 与 SSE
 
 - 增加 `/api/metrics/catalog`。
 - 增加 `/api/metrics/query_range`。
 - 增加 `/api/metrics/events`。
+- 增加 `/api/metrics/stream` SSE endpoint 和 `SseMetricHub`。
+- 将现有 `/api/hosts`、任务状态和指标刷新中的周期性 polling 迁移为 SSE 事件触发 + HTTP 补偿查询。
 - 增加服务端 step 校验和 top N 限制。
 
 ### Phase 3：前端图表
 
 - 引入 ECharts。
 - 增加 time range bar 和 metric panel。
-- 支持 heartbeat latency、arrival gap、tide_worker CPU/RSS。
+- 增加 `EventSource` 客户端、`Last-Event-ID` 恢复、可见 panel invalidation 合并。
+- 支持 heartbeat latency、arrival gap、tide_worker CPU/RSS、group leader coverage/latency/fallback。
 - 支持 host 卡片联动和 annotation。
 
 ### Phase 4：聚合与优化
@@ -802,6 +1162,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 ## 开放问题
 
 - heartbeat payload 中是否已经有可靠的 `agent_sent_at_ms`；如果没有，需要在 agent 侧补充。
+- group leader payload 是否需要显式上报 `collector_sent_at_ms`、`leader_collected_at_ms` 和收集拒绝明细；如果没有，第一版只能由 coordinator 近似推断。
 - tide_worker 进程信息当前是否完全来自 heartbeat，还是需要 agent 侧增加采集插件。
 - 多 coordinator 之间是否需要后续合并视图；如果需要，可设计 coordinator federation 或导出到远端 TSDB。
 - 前端默认展示 top N 异常 host 还是全部 host，需要根据实际 host 数和图表可读性确定。

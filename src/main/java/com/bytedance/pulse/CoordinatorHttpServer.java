@@ -83,6 +83,15 @@ public class CoordinatorHttpServer {
                 writeStaticAsset(exchange, path);
                 return;
             }
+            if ("GET".equals(method) && path.startsWith("/api/agents/") && path.endsWith("/tasks/stream")) {
+                String agentId = path.substring("/api/agents/".length(), path.length() - "/tasks/stream".length());
+                try {
+                    writeTaskSnapshotStream(exchange, agentId);
+                } catch (IOException ignored) {
+                    // Client disconnected or proxy closed the SSE stream.
+                }
+                return;
+            }
             if (path.startsWith("/api/agents/") && path.endsWith("/tasks")) {
                 String agentId = path.substring("/api/agents/".length(), path.length() - "/tasks".length());
                 if ("GET".equals(method)) {
@@ -145,6 +154,52 @@ public class CoordinatorHttpServer {
         } finally {
             exchange.close();
         }
+    }
+
+    private void writeTaskSnapshotStream(HttpExchange exchange, String agentId) throws IOException {
+        exchange.getResponseHeaders().set("content-type", "text/event-stream; charset=utf-8");
+        exchange.getResponseHeaders().set("cache-control", "no-cache");
+        exchange.getResponseHeaders().set("connection", "keep-alive");
+        exchange.getResponseHeaders().set("x-accel-buffering", "no");
+        exchange.sendResponseHeaders(200, 0);
+
+        long intervalMs = positiveLong("PULSE_TASK_SSE_INTERVAL_MS", 1_000);
+        long maxStreamMs = positiveLong("PULSE_TASK_SSE_MAX_MS", 15 * 60_000);
+        long deadline = System.currentTimeMillis() + maxStreamMs;
+        int sequence = 0;
+        int idleTicks = 0;
+        String lastPayload = "";
+        try (OutputStream output = exchange.getResponseBody()) {
+            writeSse(output, "hello", sequence++, mapper.writeValueAsString(Map.of(
+                    "agent_id", agentId,
+                    "server_time_ms", System.currentTimeMillis())));
+            while (!Thread.currentThread().isInterrupted() && System.currentTimeMillis() < deadline) {
+                String payload = mapper.writeValueAsString(service.taskSnapshot(agentId));
+                if (!payload.equals(lastPayload)) {
+                    writeSse(output, "task.snapshot", sequence++, payload);
+                    lastPayload = payload;
+                    idleTicks = 0;
+                } else if (++idleTicks >= 15) {
+                    writeSse(output, "ping", sequence++, mapper.writeValueAsString(Map.of(
+                            "server_time_ms", System.currentTimeMillis())));
+                    idleTicks = 0;
+                }
+                try {
+                    Thread.sleep(intervalMs);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+    }
+
+    private static void writeSse(OutputStream output, String event, int sequence, String data) throws IOException {
+        String payload = "id: " + System.currentTimeMillis() + "-" + sequence + "\n"
+                + "event: " + event + "\n"
+                + "data: " + data.replace("\n", "\\n") + "\n\n";
+        output.write(payload.getBytes(StandardCharsets.UTF_8));
+        output.flush();
     }
 
     private <T> T readJson(HttpExchange exchange, Class<T> type) throws IOException {
@@ -260,6 +315,15 @@ public class CoordinatorHttpServer {
     private static int positiveInt(String key, int fallback) {
         try {
             int value = Integer.parseInt(System.getenv().getOrDefault(key, String.valueOf(fallback)));
+            return value > 0 ? value : fallback;
+        } catch (NumberFormatException exception) {
+            return fallback;
+        }
+    }
+
+    private static long positiveLong(String key, long fallback) {
+        try {
+            long value = Long.parseLong(System.getenv().getOrDefault(key, String.valueOf(fallback)));
             return value > 0 ? value : fallback;
         } catch (NumberFormatException exception) {
             return fallback;

@@ -6,7 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -294,6 +296,40 @@ class CoordinatorHttpServerTest {
         JsonNode repairJson = mapper.readTree(repair.body());
         assertEquals("repair_corrupt_sqlite3_dry_run", repairJson.get("execution_queue").get(2).get("task_type").asText());
         assertEquals("--port", repairJson.get("execution_queue").get(2).get("args").get(1).asText());
+    }
+
+    @Test
+    void taskStreamEndpointServesSseSnapshots() throws Exception {
+        postJson("/api/agents/agent-1/tasks", """
+                {"task_type":"analyze_block_layout_dry_run"}
+                """);
+
+        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/api/agents/agent-1/tasks/stream"))
+                .timeout(Duration.ofSeconds(2))
+                .GET()
+                .build();
+        HttpResponse<java.io.InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+
+        assertEquals(200, response.statusCode());
+        assertTrue(response.headers().firstValue("content-type").orElse("").contains("text/event-stream"));
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.body()))) {
+            StringBuilder firstLines = new StringBuilder();
+            for (int i = 0; i < 20; i++) {
+                String line = reader.readLine();
+                if (line == null) {
+                    break;
+                }
+                firstLines.append(line).append('\n');
+                if (firstLines.toString().contains("analyze_block_layout_dry_run")) {
+                    break;
+                }
+            }
+            String body = firstLines.toString();
+            assertTrue(body.contains("event: hello"));
+            assertTrue(body.contains("event: task.snapshot"));
+            assertTrue(body.contains("\"agent_id\":\"agent-1\""));
+            assertTrue(body.contains("analyze_block_layout_dry_run"));
+        }
     }
 
     @Test

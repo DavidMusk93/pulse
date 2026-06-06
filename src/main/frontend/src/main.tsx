@@ -19,6 +19,7 @@ import {
   Statistic,
   Tag,
   Typography,
+  message,
   theme
 } from 'antd';
 import { CopyOutlined, DownloadOutlined, InboxOutlined } from '@ant-design/icons';
@@ -138,6 +139,30 @@ function normalizeAddress(value?: string) {
   const raw = String(value || '').replaceAll('[', '').replaceAll(']', '');
   if (!raw || raw.includes('.')) return '-';
   return raw;
+}
+
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  textarea.style.pointerEvents = 'none';
+  document.body.appendChild(textarea);
+  textarea.select();
+
+  try {
+    if (!document.execCommand('copy')) {
+      throw new Error('copy failed');
+    }
+  } finally {
+    document.body.removeChild(textarea);
+  }
 }
 
 function normalizeUrlHost(value?: string) {
@@ -637,6 +662,17 @@ function App() {
   const snapshotVersionRef = useRef('');
   const activeTargetHost = activeHost || activeCluster?.hosts[0] || null;
 
+  function applyTaskSnapshot(data: TaskSnapshot) {
+    const version = snapshotVersion(data);
+    if (snapshotVersionRef.current !== version) {
+      snapshotVersionRef.current = version;
+      setSnapshot(data);
+    }
+    const latest = data.completion_queue?.[0];
+    const latestOutput = latest ? completionOutput(latest) : '';
+    setOutput(current => current === latestOutput ? current : latestOutput);
+  }
+
   async function refreshHosts() {
     viewport.current = { left: window.scrollX, top: window.scrollY };
     try {
@@ -655,14 +691,7 @@ function App() {
   async function refreshSnapshot(host: HostView) {
     const id = encodeURIComponent(agentId(host));
     const data = await fetchJson<TaskSnapshot>(`/api/agents/${id}/tasks`);
-    const version = snapshotVersion(data);
-    if (snapshotVersionRef.current !== version) {
-      snapshotVersionRef.current = version;
-      setSnapshot(data);
-    }
-    const latest = data.completion_queue?.[0];
-    const latestOutput = latest ? completionOutput(latest) : '';
-    setOutput(current => current === latestOutput ? current : latestOutput);
+    applyTaskSnapshot(data);
   }
 
   useEffect(() => {
@@ -672,11 +701,28 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!activeTargetHost) return;
-    refreshSnapshot(activeTargetHost).catch(err => setOutput(String(err)));
-    const timer = window.setInterval(() => refreshSnapshot(activeTargetHost).catch(err => setOutput(String(err))), 2000);
-    return () => window.clearInterval(timer);
-  }, [activeTargetHost?.ip, activeTargetHost?.agent_id, activeTargetHost?.agentId]);
+    if (!activeTargetHost || activeCluster) return;
+    if (!('EventSource' in window)) {
+      refreshSnapshot(activeTargetHost).catch(err => setOutput(String(err)));
+      const timer = window.setInterval(() => refreshSnapshot(activeTargetHost).catch(err => setOutput(String(err))), 2000);
+      return () => window.clearInterval(timer);
+    }
+
+    const id = encodeURIComponent(agentId(activeTargetHost));
+    const events = new EventSource(`/api/agents/${id}/tasks/stream`);
+    const handleSnapshot = (event: MessageEvent<string>) => {
+      try {
+        applyTaskSnapshot(JSON.parse(event.data) as TaskSnapshot);
+      } catch (err) {
+        setOutput(String(err));
+      }
+    };
+    events.addEventListener('task.snapshot', handleSnapshot as EventListener);
+    events.onerror = () => {
+      // EventSource reconnects automatically; keep current output visible.
+    };
+    return () => events.close();
+  }, [activeTargetHost?.ip, activeTargetHost?.agent_id, activeTargetHost?.agentId, activeCluster?.name]);
 
   useEffect(() => {
     if (!activeCluster || !batchSummary) return;
@@ -955,6 +1001,18 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
   const leaderUrl = String(hostDebugValue(host, 'leader_url', 'leaderUrl'));
   const groupSize = hostDebugValue(host, 'group_size', 'groupSize', '-');
   const groupSizeLimit = hostDebugValue(host, 'group_size_limit', 'groupSizeLimit', '-');
+  const handleCopyIp = useCallback(async (event: { stopPropagation: () => void }) => {
+    event.stopPropagation();
+    if (displayIp === '-') return;
+
+    try {
+      await copyTextToClipboard(displayIp);
+      message.success({ content: `已复制 ${displayIp}`, key: `copy-ip-${displayIp}`, duration: 1.4 });
+    } catch {
+      message.error({ content: '复制失败，请手动复制', key: `copy-ip-${displayIp}`, duration: 1.8 });
+    }
+  }, [displayIp]);
+
   return <Card className="host-tile" style={{ ['--load-level' as any]: level }} data-agent-key={hostKey(host)} variant="borderless">
     <Flex className="tile-header" justify="space-between" align="flex-start" gap={10}>
       <div className="tile-id-block">
@@ -967,7 +1025,8 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
             size="small"
             title="复制 IP"
             type="text"
-            onClick={() => displayIp !== '-' && navigator.clipboard?.writeText(displayIp)}
+            disabled={displayIp === '-'}
+            onClick={handleCopyIp}
           />
         </div>
         <AutoFitText className="seen" title={formatTime(observedAt)} text={formatSeenTime(observedAt)} minFontSize={9} maxFontSize={11} />
