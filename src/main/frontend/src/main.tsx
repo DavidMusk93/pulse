@@ -772,25 +772,23 @@ function App() {
             <Button shape="round" size="large" href="#capability">能力</Button>
           </Space>
         </Card>
-        <Space direction="vertical" size={16} className="hero-side">
-          <Card id="capability" title="平台能力" variant="outlined">
-            <Row gutter={[12, 12]}>
+        <div className="hero-side">
+          <Card id="capability" className="hero-capability-card" title="平台能力" variant="outlined">
+            <Row gutter={[12, 12]} className="hero-cap-grid">
               {[
                 ['任务', '下发、执行、回执。'], ['集群', '分组、编排、收敛。'],
                 ['资源', '采集、聚合、判断。'], ['告警', '识别、定位、闭环。']
               ].map(([title, text]) => <Col span={12} key={title}><Card className="cap-card" variant="borderless"><b>{title}</b><span>{text}</span></Card></Col>)}
             </Row>
           </Card>
-          <Card title="平台协调" variant="outlined"><Typography.Text type="secondary">心跳不只是存活信号，也是轻量控制面。</Typography.Text><br/><Typography.Text strong>Pulse Coordinator</Typography.Text></Card>
-        </Space>
+        </div>
       </section>
 
       <Row gutter={[14, 14]} className="metric-row">
-        <Col xs={12} md={6} xl={4}><Card><Statistic title="主机" value={hosts.length} suffix="台" loading={loading}/></Card></Col>
-        <Col xs={12} md={6} xl={4}><Card><Statistic title="在线率" value={hosts.length ? Math.round(alive * 100 / hosts.length) : 0} suffix="%"/></Card></Col>
-        <Col xs={12} md={6} xl={4}><Card><Statistic title="5min AVG" value={formatLoad(avgLoad)}/></Card></Col>
-        <Col xs={24} md={12} xl={8}><Card><Statistic title="Coordinator" valueRender={() => <AutoFitText className="metric-fit-value" text={normalizeAddress(window.location.host)} minFontSize={14} maxFontSize={24} />} /></Card></Col>
-        <Col xs={12} md={6} xl={4}><Card><Statistic title="刷新" value="5s"/></Card></Col>
+        <Col xs={12} md={6} xl={6}><Card><Statistic title="主机" value={hosts.length} suffix="台" loading={loading}/></Card></Col>
+        <Col xs={12} md={6} xl={6}><Card><Statistic title="在线率" value={hosts.length ? Math.round(alive * 100 / hosts.length) : 0} suffix="%"/></Card></Col>
+        <Col xs={12} md={6} xl={6}><Card><Statistic title="5min AVG" value={formatLoad(avgLoad)}/></Card></Col>
+        <Col xs={12} md={6} xl={6}><Card><Statistic title="刷新" value="5s"/></Card></Col>
       </Row>
 
       {error && <Card className="error-card"><Typography.Text type="danger">{error}</Typography.Text></Card>}

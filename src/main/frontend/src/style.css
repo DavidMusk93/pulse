@@ -56,16 +56,41 @@ body {
 }
 .hero-side {
   width: 100%;
+  height: 100%;
+  display: flex;
+  min-height: 0;
+}
+.hero-capability-card {
+  width: 100%;
+  height: 100%;
+}
+.hero-capability-card .ant-card-body {
+  height: calc(100% - 57px);
+  min-height: 0;
+  display: flex;
+}
+.hero-cap-grid {
+  flex: 1 1 auto;
+  width: 100%;
+  align-content: stretch;
+}
+.hero-cap-grid > .ant-col {
+  display: flex;
+}
+.hero-cap-grid .cap-card {
+  width: 100%;
 }
 .cap-card {
   background: #f7f9fc !important;
 }
 .cap-card .ant-card-body {
-  min-height: 56px;
+  min-height: 78px;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 14px !important;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px !important;
 }
 .metric-row {
   margin-bottom: 18px;
