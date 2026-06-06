@@ -21,7 +21,7 @@ import {
   Typography,
   theme
 } from 'antd';
-import { InboxOutlined } from '@ant-design/icons';
+import { CopyOutlined, InboxOutlined } from '@ant-design/icons';
 import 'antd/dist/reset.css';
 import './style.css';
 
@@ -890,6 +890,7 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
   const avg = averageLoad(host);
   const level = Math.min(1, avg / 400);
   const confirmations = host.heartbeat_confirmations ?? host.heartbeatConfirmations ?? 0;
+  const displayIp = normalizeAddress(host.ip);
   const workers = Array.isArray(host.state?.workers) ? host.state?.workers : Array.isArray(host.state?.tide_workers) ? host.state?.tide_workers : [];
   const observedAt = host.observed_at_ms || host.observedAtMs;
   const lastObservedAge = hostDebugValue(host, 'last_observed_age_ms', 'lastObservedAgeMs', undefined) as number | undefined;
@@ -904,7 +905,18 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
       <Button className="run-button" data-status={statusColor(host.status)} type="primary" size="small" onClick={() => onRun(host)} disabled={confirmations < 3 || host.status !== 'alive'}>任务</Button>
     </Flex>
     <div className="tile-scroll">
-      <Typography.Title level={4} className="ip-title" data-field="ip_title">{normalizeAddress(host.ip)}</Typography.Title>
+      <div className="ip-title-row">
+        <Typography.Text className="ip-title" data-field="ip_title" title={displayIp}>{displayIp}</Typography.Text>
+        <Button
+          aria-label="复制 IP"
+          className="ip-copy-button"
+          icon={<CopyOutlined />}
+          size="small"
+          title="复制 IP"
+          type="text"
+          onClick={() => displayIp !== '-' && navigator.clipboard?.writeText(displayIp)}
+        />
+      </div>
       <Row gutter={[8, 8]}>
         <Col span={12}><Statistic title="Area" value={host.area || '-'} /></Col>
         <Col span={12}><Statistic title="5min AVG" value={formatLoad(avg)} valueStyle={{ fontSize: 18 }} /></Col>

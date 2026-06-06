@@ -191,13 +191,37 @@ body {
   line-height: 24px;
   font-variant-numeric: tabular-nums;
 }
-.ip-title.ant-typography {
+.ip-title-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   margin: 0 0 8px;
+  min-width: 0;
+}
+.ip-title.ant-typography {
+  flex: 1 1 auto;
+  min-width: 0;
   color: #fff;
-  font-size: 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 700;
   line-height: 1.12;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   text-shadow: none;
+}
+.ip-copy-button.ant-btn {
+  flex: 0 0 auto;
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 !important;
+  color: rgba(255, 255, 255, .9) !important;
+}
+.ip-copy-button.ant-btn:hover {
+  color: #fff !important;
+  background: rgba(255, 255, 255, .18) !important;
 }
 .tile-scroll {
   flex: 1 1 0;
