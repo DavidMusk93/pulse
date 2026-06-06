@@ -760,7 +760,7 @@ function App() {
     persistCollapsedClusters(collapsedClusters);
   }, [collapsedClusters]);
 
-  return <ConfigProvider autoInsertSpaceInButton={false} theme={{ algorithm: theme.defaultAlgorithm, token: { borderRadius: 18, colorPrimary: '#2563eb', fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' } }}>
+  return <ConfigProvider autoInsertSpaceInButton={false} theme={{ algorithm: theme.defaultAlgorithm, token: { borderRadius: 20, colorPrimary: '#2563eb', fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", Inter, "Segoe UI", sans-serif' } }}>
     <main className="pulse-page">
       <section className="pulse-hero">
         <Card className="hero-main" variant="outlined">
