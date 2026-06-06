@@ -919,19 +919,28 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
       <Button className="run-button" data-status={statusColor(host.status)} type="primary" size="small" onClick={() => onRun(host)} disabled={confirmations < 3 || host.status !== 'alive'}>任务</Button>
     </Flex>
     <div className="tile-scroll">
-      <Row gutter={[8, 8]}>
-        <Col span={12}><Statistic title="Area" value={host.area || '-'} /></Col>
-        <Col span={12}><Statistic title="5min AVG" value={formatLoad(avg)} valueStyle={{ fontSize: 18 }} /></Col>
-        <Col span={24}><Statistic title="20s确认" value={confirmations} /></Col>
-      </Row>
+      <div className="tile-metrics">
+        <div className="tile-metric">
+          <span className="metric-label">Area</span>
+          <span className="metric-value">{host.area || '-'}</span>
+        </div>
+        <div className="tile-metric">
+          <span className="metric-label">5min AVG</span>
+          <span className="metric-value metric-value-strong">{formatLoad(avg)}</span>
+        </div>
+        <div className="tile-metric tile-metric-inline">
+          <span className="metric-label">20s确认</span>
+          <span className="metric-value">{confirmations}</span>
+        </div>
+      </div>
       <div className="debug-panel">
         <Typography.Text className="debug-title">调试</Typography.Text>
         <div className="debug-grid">
-          <span>age {formatAge(lastObservedAge)}</span>
-          <span>mode {groupMode}</span>
-          <span>group {groupId}</span>
-          <span>size {groupSize}/{groupSizeLimit}</span>
-          <span>leader {normalizeUrlHost(leaderUrl)}</span>
+          <span><b>age</b><em>{formatAge(lastObservedAge)}</em></span>
+          <span><b>mode</b><em>{groupMode}</em></span>
+          <span><b>group</b><em>{groupId}</em></span>
+          <span><b>size</b><em>{groupSize}/{groupSizeLimit}</em></span>
+          <span><b>leader</b><em>{normalizeUrlHost(leaderUrl)}</em></span>
         </div>
       </div>
       <Progress percent={Math.round(level * 100)} showInfo={false} strokeColor="hsl(var(--cluster-hue) 48% 24%)" trailColor="rgba(15,23,42,.24)" />
@@ -942,13 +951,13 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
             <Typography.Text className="worker-version">{workerValue(worker, 'component_version')}</Typography.Text>
           </Flex>
           <div className="worker-metrics">
-            <span>cpu {workerValue(worker, 'cpu_percent')}</span>
-            <span>usr {workerValue(worker, 'user_cpu_percent')}</span>
-            <span>sys {workerValue(worker, 'sys_cpu_percent')}</span>
-            <span>rss {formatRssMb(worker)}</span>
-            <span>mem {workerValue(worker, 'mem_percent')}</span>
-            <span>thr {workerValue(worker, 'threads')}</span>
-            {worker.port1 && <span>port {workerValue(worker, 'port1')}</span>}
+            <span><b>cpu</b><em>{workerValue(worker, 'cpu_percent')}</em></span>
+            <span><b>usr</b><em>{workerValue(worker, 'user_cpu_percent')}</em></span>
+            <span><b>sys</b><em>{workerValue(worker, 'sys_cpu_percent')}</em></span>
+            <span><b>rss</b><em>{formatRssMb(worker)}</em></span>
+            <span><b>mem</b><em>{workerValue(worker, 'mem_percent')}</em></span>
+            <span><b>thr</b><em>{workerValue(worker, 'threads')}</em></span>
+            {worker.port1 && <span><b>port</b><em>{workerValue(worker, 'port1')}</em></span>}
           </div>
         </div>)}
       </div>}
