@@ -68,23 +68,22 @@ body {
   height: calc(100% - 57px);
   min-height: 0;
   display: flex;
+  padding: 18px !important;
 }
 .hero-cap-grid {
   flex: 1 1 auto;
   width: 100%;
-  align-content: stretch;
-}
-.hero-cap-grid > .ant-col {
-  display: flex;
-}
-.hero-cap-grid .cap-card {
-  width: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 .cap-card {
   background: #f7f9fc !important;
 }
 .cap-card .ant-card-body {
-  min-height: 78px;
+  min-height: 0;
   height: 100%;
   display: flex;
   flex-direction: column;

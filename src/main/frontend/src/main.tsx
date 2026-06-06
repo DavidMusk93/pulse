@@ -774,12 +774,12 @@ function App() {
         </Card>
         <div className="hero-side">
           <Card id="capability" className="hero-capability-card" title="平台能力" variant="outlined">
-            <Row gutter={[12, 12]} className="hero-cap-grid">
+            <div className="hero-cap-grid">
               {[
                 ['任务', '下发、执行、回执。'], ['集群', '分组、编排、收敛。'],
                 ['资源', '采集、聚合、判断。'], ['告警', '识别、定位、闭环。']
-              ].map(([title, text]) => <Col span={12} key={title}><Card className="cap-card" variant="borderless"><b>{title}</b><span>{text}</span></Card></Col>)}
-            </Row>
+              ].map(([title, text]) => <Card className="cap-card" variant="borderless" key={title}><b>{title}</b><span>{text}</span></Card>)}
+            </div>
           </Card>
         </div>
       </section>
