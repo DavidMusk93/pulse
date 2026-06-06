@@ -763,7 +763,7 @@ function App() {
   return <ConfigProvider autoInsertSpaceInButton={false} theme={{ algorithm: theme.defaultAlgorithm, token: { borderRadius: 18, colorPrimary: '#2563eb', fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' } }}>
     <main className="pulse-page">
       <section className="pulse-hero">
-        <Card className="hero-main" variant="outlined">
+        <Card className="hero-main" title="平台介绍" variant="outlined">
           <Typography.Text className="hero-eyebrow">Pulse 心跳平台</Typography.Text>
           <Typography.Title level={1}>心跳平台，连接运维现场</Typography.Title>
           <Typography.Paragraph className="hero-subtitle">任务、资源、监控与告警，沿一条消息链自然流动。</Typography.Paragraph>
