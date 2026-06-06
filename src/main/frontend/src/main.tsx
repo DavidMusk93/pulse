@@ -783,14 +783,13 @@ function App() {
             </div>
           </Card>
         </div>
+        <div className="hero-metrics">
+          <Card><Statistic title="主机" value={hosts.length} suffix="台" loading={loading}/></Card>
+          <Card><Statistic title="在线率" value={hosts.length ? Math.round(alive * 100 / hosts.length) : 0} suffix="%"/></Card>
+          <Card><Statistic title="5min AVG" value={formatLoad(avgLoad)}/></Card>
+          <Card><Statistic title="刷新" value="5s"/></Card>
+        </div>
       </section>
-
-      <Row gutter={[14, 14]} className="metric-row">
-        <Col xs={12} md={6} xl={6}><Card><Statistic title="主机" value={hosts.length} suffix="台" loading={loading}/></Card></Col>
-        <Col xs={12} md={6} xl={6}><Card><Statistic title="在线率" value={hosts.length ? Math.round(alive * 100 / hosts.length) : 0} suffix="%"/></Card></Col>
-        <Col xs={12} md={6} xl={6}><Card><Statistic title="5min AVG" value={formatLoad(avgLoad)}/></Card></Col>
-        <Col xs={12} md={6} xl={6}><Card><Statistic title="刷新" value="5s"/></Card></Col>
-      </Row>
 
       {error && <Card className="error-card"><Typography.Text type="danger">{error}</Typography.Text></Card>}
 

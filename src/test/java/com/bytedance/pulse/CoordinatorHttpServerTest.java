@@ -215,9 +215,9 @@ class CoordinatorHttpServerTest {
         assertTrue(css.body().contains(".ip-copy-button"));
         assertTrue(css.body().contains(".auto-fit"));
         assertTrue(css.body().contains(".metric-fit-value"));
-        assertTrue(css.body().contains(".metric-row>.ant-col"));
-        assertTrue(css.body().contains(".metric-row>.ant-col>.ant-card"));
-        assertTrue(css.body().contains(".metric-row .ant-statistic"));
+        assertTrue(css.body().contains(".hero-metrics"));
+        assertTrue(css.body().contains(".hero-metrics>.ant-card"));
+        assertTrue(css.body().contains(".hero-metrics .ant-statistic"));
         assertTrue(css.body().contains(".cluster-toggle-button"));
         assertTrue(css.body().contains(".cluster-run-button"));
         assertTrue(css.body().contains(".cluster-section.cluster-section-collapsed"));
