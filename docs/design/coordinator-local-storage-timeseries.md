@@ -373,6 +373,8 @@ CREATE INDEX IF NOT EXISTS idx_group_leader_agent_time
 | `group.missing_member_count` | leader batch 缺失 follower 数 | 反映 follower 覆盖率和 group heartbeat 完整性 |
 | `group.stale_member_count` | batch 中旧 plan 成员数 | 反映 plan 收敛和 leader 切换抖动 |
 | `group.direct_fallback_count` | follower direct fallback 数 | 反映 group 机制是否退化成 direct heartbeat |
+| `group.plan_generation` | coordinator 当前期望 plan generation | 反映 group plan 是否发生切换 |
+| `group.plan_lag` | expected generation 与 leader 上报 generation 的差值 | 直接定位 `stale_plan` 是否来自 plan 收敛滞后 |
 | `heartbeat.agent_collect_ms` | agent 本地采集耗时 | 反映采集数据实效性和 agent 热路径负担 |
 | `heartbeat.agent_encode_ms` | heartbeat payload 编码耗时 | 反映协议编码成本 |
 | `heartbeat.agent_send_ms` | heartbeat HTTP 发送耗时 | 反映 agent 到 coordinator 链路新鲜度 |
@@ -1059,6 +1061,7 @@ Ant Design 在这些原则中的角色：
 | Preset | 默认指标 | 查询策略 | 需要回答的问题 |
 | --- | --- | --- | --- |
 | 架构健康 | `group.status_unhealthy` | 全局 TopN + aggregate，15m | group fan-in 是否退化 |
+| 计划收敛 | `group.plan_lag` | 全局 TopN + aggregate，15m | `stale_plan` 是否来自 generation 滞后 |
 | 采集实效 | `heartbeat.agent_collect_ms` | 全局 TopN + aggregate，15m | agent 采集是否足够新鲜 |
 | 发送链路 | `heartbeat.agent_send_ms` | 全局 TopN + aggregate，15m | agent 到 coordinator 发送是否轻量 |
 

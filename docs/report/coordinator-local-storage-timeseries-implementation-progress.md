@@ -3,11 +3,11 @@
 ## 状态
 
 - 时间：2026-06-08
-- 最新已部署提交：`8835ea1 Add heartbeat health metric presets`
-- 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection、aggregate series、frontend visibility/range pause、frontend render metrics、heartbeat timing instrumentation、heartbeat health presets
+- 最新已部署提交：`04a2720 Add group plan convergence metrics`
+- 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection、aggregate series、frontend visibility/range pause、frontend render metrics、heartbeat timing instrumentation、heartbeat health presets、group plan convergence metrics
 - 部署范围：`cdn_new` 50 台 agent 与 3 台 coordinator/group leader 已完成最新版本全量 rollout
-- JAR SHA：`809a9d2a1b3059101bcd7d4f872a6d818c86ed2eae460a53f549d94ee4b511f5`
-- 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览；Metrics Panel 已能通过 health presets 反馈心跳架构健壮性和 agent 采集数据实效性。
+- JAR SHA：`81575896e47a39b94153699ab715d6127bbf2a11f825ce27f760a8b8ab1de68d`
+- 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览；Metrics Panel 已能通过 health presets 反馈心跳架构健壮性、plan 收敛状态和 agent 采集数据实效性。
 
 ## 已完成
 
@@ -28,6 +28,7 @@
   - heartbeat payload 中的 `tide_workers` 抽取到 `tide_worker_sample`。
   - batch heartbeat 写入 `group_leader_sample`，包含 member/submitted/accepted/missing/stale/arrival/status。
   - agent outbound 已写入上一轮真实 `agent_encode_ms` / `agent_send_ms`；group leader 已写入 `leader_collect_ms` 并由 coordinator 计算 `group_latency_ms`。
+  - coordinator 已下发稳定 `plan_generation`，agent 已回传 `agent_plan_generation`，group metrics 已暴露 `group.plan_lag`。
   - host 维度写入 `host_dimension`。
 
 - 查询 API：
@@ -70,7 +71,7 @@
   - 已实现 `metric.invalidate` 合并、range cache、500ms debounce 补偿查询和 `SeriesStore.merge` 点去重。
   - 已实现页面不可见时暂停补偿查询，以及“暂停窗口/跟随最新”的固定时间窗口查看模式。
   - 已在面板中暴露 `query_ms` 和 `render_ms`，辅助判断查询与渲染是否流畅。
-  - 已新增“架构健康 / 采集实效 / 发送链路” preset，默认执行全局 TopN + aggregate 查询并用 Tag 给出健康判定。
+  - 已新增“架构健康 / 计划收敛 / 采集实效 / 发送链路” preset，默认执行全局 TopN + aggregate 查询并用 Tag 给出健康判定。
 
 - SSE 重连补偿：
   - `/api/metrics/stream` 已读取 `Last-Event-ID`。
@@ -99,6 +100,7 @@
   - `LocalMetricStorageTest#queryRangeReturnsTopNSeriesByLargestObservedValue` 已覆盖 storage 层 Top N series 选择、aggregate series 追加与 `series_count` metadata。
   - `CoordinatorHttpServerTest#metricsRangeQueryAcceptsTopNSeriesSelection` 已覆盖 HTTP `top_n` 参数和 aggregate series numeric value。
   - `LocalMetricStorageTest#storesAndQueriesGroupLeaderSamples` 已覆盖 `group.stale_member_count`、`group.direct_fallback_count`、`group.status_unhealthy`。
+  - `LocalMetricStorageTest#storesAndQueriesGroupLeaderSamples` 已覆盖 `group.plan_generation` 和 `group.plan_lag`。
   - `CoordinatorHttpServerTest#hostsPageRendersFlatSquareChineseHeartbeatConsole` 已断言 Metrics Panel 静态资源、live pause、fixed range、frontend metrics 和 heartbeat health preset markers。
 
 ## 线上验证
@@ -125,14 +127,16 @@ full cdn_new latest verify: total=50 ok=50 failed=0 elapsed=2s
 heartbeat timing instrumentation rollout: total=50 ok=50 failed=0 elapsed=187s
 heartbeat timing instrumentation verify: total=50 ok=50 failed=0 elapsed=2s
 heartbeat health metric presets coordinator deploy: total=3 ok=3 failed=0 elapsed=16s
+group plan convergence metrics rollout: total=50 ok=50 failed=0 elapsed=179s
+group plan convergence metrics verify: total=50 ok=50 failed=0 elapsed=1s
 ```
 
 最新 heartbeat health metrics 验证：
 
 ```text
-COORD fdbd:dc05:11:634::45 missing_catalog=[] missing_asset=[] metrics=[group.status_unhealthy series=13 points=193, group.stale_member_count series=13 points=208, group.direct_fallback_count series=13 points=208, heartbeat.agent_collect_ms series=13 points=208, heartbeat.agent_send_ms series=13 points=208]
-COORD fdbd:dc05:13:10c::40 missing_catalog=[] missing_asset=[] metrics=[group.status_unhealthy series=13 points=208, group.stale_member_count series=13 points=208, group.direct_fallback_count series=13 points=208, heartbeat.agent_collect_ms series=13 points=207, heartbeat.agent_send_ms series=13 points=207]
-COORD fdbd:dc07:0:810::44 missing_catalog=[] missing_asset=[] metrics=[group.status_unhealthy series=13 points=207, group.stale_member_count series=13 points=206, group.direct_fallback_count series=13 points=203, heartbeat.agent_collect_ms series=13 points=206, heartbeat.agent_send_ms series=13 points=204]
+COORD fdbd:dc05:11:634::45 missing_catalog=[] missing_asset=[] metrics=[group.status_unhealthy series=13 points=206, group.stale_member_count series=13 points=207, group.direct_fallback_count series=13 points=205, group.plan_lag series=13 points=165, heartbeat.agent_collect_ms series=13 points=208, heartbeat.agent_send_ms series=13 points=208]
+COORD fdbd:dc05:13:10c::40 missing_catalog=[] missing_asset=[] metrics=[group.status_unhealthy series=13 points=208, group.stale_member_count series=13 points=208, group.direct_fallback_count series=13 points=208, group.plan_lag series=13 points=193, heartbeat.agent_collect_ms series=13 points=208, heartbeat.agent_send_ms series=13 points=208]
+COORD fdbd:dc07:0:810::44 missing_catalog=[] missing_asset=[] metrics=[group.status_unhealthy series=13 points=208, group.stale_member_count series=13 points=208, group.direct_fallback_count series=13 points=208, group.plan_lag series=13 points=208, heartbeat.agent_collect_ms series=13 points=208, heartbeat.agent_send_ms series=13 points=208]
 ```
 
 最新 SQLite 心跳链路分析：
