@@ -24,7 +24,7 @@ public class CoordinatorService {
     private final Map<String, GroupView> groupViews = new ConcurrentHashMap<>();
     private final int groupLeaderPort;
     private final RemoteTaskService taskService;
-    private final LocalMetricStorage metricStorage;
+    private final MetricStorage metricStorage;
     private final long hostSnapshotTtlMs;
     private final long groupRecomputeIntervalMs;
     private final Object hostSnapshotLock = new Object();
@@ -38,7 +38,7 @@ public class CoordinatorService {
         this(coordinatorId, clock, null);
     }
 
-    CoordinatorService(String coordinatorId, Clock clock, LocalMetricStorage metricStorage) {
+    CoordinatorService(String coordinatorId, Clock clock, MetricStorage metricStorage) {
         this.coordinatorId = coordinatorId;
         this.clock = clock;
         this.groupLeaderPort = Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_PORT", "9977"));

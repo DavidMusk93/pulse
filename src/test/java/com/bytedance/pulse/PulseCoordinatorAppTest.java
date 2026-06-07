@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -18,7 +19,7 @@ class PulseCoordinatorAppTest {
     void opensMetricStorageWhenDatabasePathIsConfigured() throws Exception {
         Path db = tempDir.resolve("coordinator/metrics.db");
 
-        try (LocalMetricStorage storage = PulseCoordinatorApp.metricStorageFromEnv(Map.of("PULSE_METRICS_DB", db.toString()))) {
+        try (MetricStorage storage = PulseCoordinatorApp.metricStorageFromEnv(Map.of("PULSE_METRICS_DB", db.toString()))) {
             assertNotNull(storage);
             storage.writeHeartbeat(new HeartbeatMetricSample(
                     1_710_000_000_000L,
@@ -39,6 +40,7 @@ class PulseCoordinatorAppTest {
                     9,
                     42_000,
                     Map.of()));
+            assertEquals(true, ((AsyncLocalMetricStorage) storage).awaitIdle(Duration.ofSeconds(2)));
             MetricQueryResult result = storage.queryRange(new MetricQuery(
                     "agent.thread_count",
                     List.of("agent-1"),

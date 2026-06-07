@@ -15,7 +15,16 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-final class LocalMetricStorage implements AutoCloseable {
+interface MetricStorage extends AutoCloseable {
+    void writeHeartbeat(HeartbeatMetricSample sample) throws Exception;
+
+    MetricQueryResult queryRange(MetricQuery query) throws Exception;
+
+    @Override
+    void close() throws Exception;
+}
+
+final class LocalMetricStorage implements MetricStorage {
     private static final String HEARTBEAT_TABLE = "heartbeat_sample";
     private static final ObjectMapper MAPPER = JsonSupport.objectMapper();
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
@@ -47,7 +56,8 @@ final class LocalMetricStorage implements AutoCloseable {
                 new MetricCatalogItem("agent.rss_kb", "Agent RSS", "KiB"));
     }
 
-    void writeHeartbeat(HeartbeatMetricSample sample) throws Exception {
+    @Override
+    public void writeHeartbeat(HeartbeatMetricSample sample) throws Exception {
         String sql = """
                 INSERT INTO heartbeat_sample (
                     observed_at_ms, agent_id, host, cluster, area, heartbeat_path, group_mode,
@@ -78,7 +88,8 @@ final class LocalMetricStorage implements AutoCloseable {
         }
     }
 
-    MetricQueryResult queryRange(MetricQuery query) throws Exception {
+    @Override
+    public MetricQueryResult queryRange(MetricQuery query) throws Exception {
         MetricColumn metric = MetricColumn.fromName(query.metric());
         int pointLimit = Math.max(1, query.pointLimit());
         StringBuilder sql = new StringBuilder("""
