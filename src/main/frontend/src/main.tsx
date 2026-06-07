@@ -1010,6 +1010,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const [invalidatedRange, setInvalidatedRange] = useState<MetricInvalidation | null>(null);
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState !== 'hidden');
   const [fixedRangeEndMs, setFixedRangeEndMs] = useState<number | null>(null);
+  const [frontendMetrics, setFrontendMetrics] = useState({ queryMs: 0, renderMs: 0 });
   const queryController = useMemo(() => new MetricQueryController(fetchJson), []);
   const renderScheduler = useMemo(() => new RenderScheduler(), []);
   const agentOptions = useMemo(() => sortHosts(hosts)
@@ -1030,11 +1031,20 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const livePaused = rangePaused || !pageVisible;
 
   async function loadMetrics(nextMetric = metric, nextAgents = visibleAgents, nextRangeMinutes = rangeMinutes, nextNowMs = fixedRangeEndMs ?? undefined) {
+    const queryStart = performance.now();
     setLoading(true);
     setError('');
     try {
       const data = await queryController.queryRange({ metric: nextMetric, agents: nextAgents, rangeMinutes: nextRangeMinutes, nowMs: nextNowMs });
-      renderScheduler.schedule(() => setResult(data));
+      const queryMs = Math.round(performance.now() - queryStart);
+      const renderStart = performance.now();
+      renderScheduler.schedule(() => {
+        setResult(data);
+        setFrontendMetrics({
+          queryMs,
+          renderMs: Math.round(performance.now() - renderStart)
+        });
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1190,6 +1200,8 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
             <Tag>{activeMetric?.unit || result?.unit || '-'}</Tag>
             <Tag>{seriesCount} series</Tag>
             <Tag>{pointCount} points</Tag>
+            <Tag>query_ms {frontendMetrics.queryMs}</Tag>
+            <Tag>render_ms {frontendMetrics.renderMs}</Tag>
             {result?.truncated && <Tag color="warning">已截断，建议 step {result.suggested_step_ms ?? result.suggestedStepMs}ms</Tag>}
             {invalidatedRange && <Tag color="gold">补偿中 {formatSeenTime(invalidatedRange.to)}</Tag>}
             {lastInvalidateAt && <Tag color="blue">live {formatSeenTime(lastInvalidateAt)}</Tag>}

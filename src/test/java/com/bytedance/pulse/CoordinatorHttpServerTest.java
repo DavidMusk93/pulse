@@ -371,6 +371,8 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("跟随最新"));
         assertTrue(js.body().contains("paused-hidden"));
         assertTrue(js.body().contains("live paused"));
+        assertTrue(js.body().contains("query_ms"));
+        assertTrue(js.body().contains("render_ms"));
         assertTrue(js.body().contains("stale"));
         assertTrue(js.body().contains("run-button"));
         assertTrue(js.body().contains("data-status"));

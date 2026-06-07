@@ -4,7 +4,7 @@
 
 - 时间：2026-06-07
 - 最新已部署提交：`35e6276 Add metrics panel live pause controls`
-- 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection、aggregate series、frontend visibility/range pause
+- 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection、aggregate series、frontend visibility/range pause、frontend render metrics
 - 部署范围：`cdn_new` 50 台 agent 已完成 query budget rollout；3 台 coordinator 已完成 frontend Metrics Panel rollout
 - JAR SHA：`5afd802d638d88e9fe80b5c5808ef553f71c179099032e6c3d007912287c44b4`
 - 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览。
@@ -68,6 +68,7 @@
   - 已新增 `src/main/frontend/src/metrics.ts`，拆出 `MetricQueryController`、`SeriesStore`、`RenderScheduler`、`SvgChartAdapter` 的第一版骨架。
   - 已实现 `metric.invalidate` 合并、range cache、500ms debounce 补偿查询和 `SeriesStore.merge` 点去重。
   - 已实现页面不可见时暂停补偿查询，以及“暂停窗口/跟随最新”的固定时间窗口查看模式。
+  - 已在面板中暴露 `query_ms` 和 `render_ms`，辅助判断查询与渲染是否流畅。
 
 - SSE 重连补偿：
   - `/api/metrics/stream` 已读取 `Last-Event-ID`。
@@ -95,7 +96,7 @@
   - `CoordinatorHttpServerTest#metricsStreamProducesBoundedPeriodicInvalidations` 已覆盖 bounded long-running stream。
   - `LocalMetricStorageTest#queryRangeReturnsTopNSeriesByLargestObservedValue` 已覆盖 storage 层 Top N series 选择、aggregate series 追加与 `series_count` metadata。
   - `CoordinatorHttpServerTest#metricsRangeQueryAcceptsTopNSeriesSelection` 已覆盖 HTTP `top_n` 参数和 aggregate series numeric value。
-  - `CoordinatorHttpServerTest#hostsPageRendersFlatSquareChineseHeartbeatConsole` 已断言 Metrics Panel 静态资源、live pause 和 fixed range markers。
+  - `CoordinatorHttpServerTest#hostsPageRendersFlatSquareChineseHeartbeatConsole` 已断言 Metrics Panel 静态资源、live pause、fixed range 和 frontend metrics markers。
 
 ## 线上验证
 
@@ -232,7 +233,8 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
   - 已有 QueryController、SeriesStore、RenderScheduler、ChartAdapter 骨架。
   - 已有 live invalidation merge、range cache 和补偿查询第一版。
   - 已有可见性暂停和 fixed range pause。
-  - 仍需把断线全窗口补偿和前端 render metrics 补齐。
+  - 已有 `query_ms` / `render_ms` 前端性能指标。
+  - 仍需把断线全窗口补偿补齐。
   - 尚未接入 ECharts/uPlot 高密度图表。
 
 - SSE 仍是轻量第一版：
@@ -259,6 +261,6 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
 
 ## 下一步
 
-1. 为 Metrics Panel 增加断线全窗口补偿和前端 render metrics。
+1. 为 Metrics Panel 增加断线全窗口补偿。
 2. 为 SSE 增加多订阅者独立 bounded outbound queue。
 3. 上线前端后继续用线上 SQLite 分析 group heartbeat 是否达到设计目标。
