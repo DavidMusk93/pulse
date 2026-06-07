@@ -3,10 +3,10 @@
 ## 状态
 
 - 时间：2026-06-07
-- 最新已部署提交：`5ee4520 Add aggregate metric series`
+- 最新已部署提交：`35e6276 Add metrics panel live pause controls`
 - 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection、aggregate series、frontend visibility/range pause
 - 部署范围：`cdn_new` 50 台 agent 已完成 query budget rollout；3 台 coordinator 已完成 frontend Metrics Panel rollout
-- JAR SHA：`cf145a2d10563cc7c74a1be539c66604a5535b3e22968dbeccdc39a9f46251d0`
+- JAR SHA：`5afd802d638d88e9fe80b5c5808ef553f71c179099032e6c3d007912287c44b4`
 - 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览。
 
 ## 已完成
@@ -114,6 +114,7 @@ SSE event replay cache deploy: total=3 ok=3 failed=0 elapsed=17s
 bounded periodic metrics stream deploy: total=3 ok=3 failed=0 elapsed=15s
 topN series selection deploy: total=3 ok=3 failed=0 elapsed=15s
 aggregate metric series deploy: total=3 ok=3 failed=0 elapsed=19s
+metrics panel live pause deploy: total=3 ok=3 failed=0 elapsed=20s
 ```
 
 最新 query budget 和 storage health 验证：
@@ -136,19 +137,19 @@ QUERY query_id=q-0-1-1086903931 metric=agent.thread_count from=0 to=1 unit=threa
 
 ```text
 COORD fdbd:dc05:11:634::45
-ASSET /assets/pulse-hosts.js bytes=836794 missing=[]
+ASSET /assets/pulse-hosts.js bytes=837441 missing=[]
 ASSET /assets/pulse-hosts.css bytes=23316 missing=[]
-STORAGE bytes=226 status_ok=True
+STORAGE bytes=230 status_ok=True
 
 COORD fdbd:dc05:13:10c::40
-ASSET /assets/pulse-hosts.js bytes=836794 missing=[]
+ASSET /assets/pulse-hosts.js bytes=837441 missing=[]
 ASSET /assets/pulse-hosts.css bytes=23316 missing=[]
-STORAGE bytes=229 status_ok=True
+STORAGE bytes=230 status_ok=True
 
 COORD fdbd:dc07:0:810::44
-ASSET /assets/pulse-hosts.js bytes=836794 missing=[]
+ASSET /assets/pulse-hosts.js bytes=837441 missing=[]
 ASSET /assets/pulse-hosts.css bytes=23316 missing=[]
-STORAGE bytes=227 status_ok=True
+STORAGE bytes=230 status_ok=True
 ```
 
 最新 tide/group 聚合验证：
