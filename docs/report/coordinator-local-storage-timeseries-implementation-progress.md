@@ -3,10 +3,10 @@
 ## 状态
 
 - 时间：2026-06-08
-- 最新已部署提交：`04a2720 Add group plan convergence metrics`
-- 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection、aggregate series、frontend visibility/range pause、frontend render metrics、heartbeat timing instrumentation、heartbeat health presets、group plan convergence metrics
+- 最新已部署提交：`fc8c7e4 Count group direct fallback metrics`
+- 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection、aggregate series、frontend visibility/range pause、frontend render metrics、heartbeat timing instrumentation、heartbeat health presets、group plan convergence metrics、direct fallback metrics
 - 部署范围：`cdn_new` 50 台 agent 与 3 台 coordinator/group leader 已完成最新版本全量 rollout
-- JAR SHA：`81575896e47a39b94153699ab715d6127bbf2a11f825ce27f760a8b8ab1de68d`
+- JAR SHA：`35d5d9fa66ca6b2eece9d8dc4b8c616d385dbe798114971a604c2de5fa055e84`
 - 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览；Metrics Panel 已能通过 health presets 反馈心跳架构健壮性、plan 收敛状态和 agent 采集数据实效性。
 
 ## 已完成
@@ -29,6 +29,7 @@
   - batch heartbeat 写入 `group_leader_sample`，包含 member/submitted/accepted/missing/stale/arrival/status。
   - agent outbound 已写入上一轮真实 `agent_encode_ms` / `agent_send_ms`；group leader 已写入 `leader_collect_ms` 并由 coordinator 计算 `group_latency_ms`。
   - coordinator 已下发稳定 `plan_generation`，agent 已回传 `agent_plan_generation`，group metrics 已暴露 `group.plan_lag`。
+  - `group.direct_fallback_count` 已按 group 期望成员的最新 direct source 真实计数，不再恒为 0。
   - host 维度写入 `host_dimension`。
 
 - 查询 API：
@@ -129,14 +130,15 @@ heartbeat timing instrumentation verify: total=50 ok=50 failed=0 elapsed=2s
 heartbeat health metric presets coordinator deploy: total=3 ok=3 failed=0 elapsed=16s
 group plan convergence metrics rollout: total=50 ok=50 failed=0 elapsed=179s
 group plan convergence metrics verify: total=50 ok=50 failed=0 elapsed=1s
+direct fallback metrics coordinator deploy: total=3 ok=3 failed=0 elapsed=16s
 ```
 
 最新 heartbeat health metrics 验证：
 
 ```text
-COORD fdbd:dc05:11:634::45 missing_catalog=[] missing_asset=[] metrics=[group.status_unhealthy series=13 points=206, group.stale_member_count series=13 points=207, group.direct_fallback_count series=13 points=205, group.plan_lag series=13 points=165, heartbeat.agent_collect_ms series=13 points=208, heartbeat.agent_send_ms series=13 points=208]
-COORD fdbd:dc05:13:10c::40 missing_catalog=[] missing_asset=[] metrics=[group.status_unhealthy series=13 points=208, group.stale_member_count series=13 points=208, group.direct_fallback_count series=13 points=208, group.plan_lag series=13 points=193, heartbeat.agent_collect_ms series=13 points=208, heartbeat.agent_send_ms series=13 points=208]
-COORD fdbd:dc07:0:810::44 missing_catalog=[] missing_asset=[] metrics=[group.status_unhealthy series=13 points=208, group.stale_member_count series=13 points=208, group.direct_fallback_count series=13 points=208, group.plan_lag series=13 points=208, heartbeat.agent_collect_ms series=13 points=208, heartbeat.agent_send_ms series=13 points=208]
+COORD fdbd:dc05:11:634::45 missing_catalog=[] missing_asset=[] metrics=[group.status_unhealthy series=13 points=195, group.stale_member_count series=13 points=195, group.direct_fallback_count series=13 points=195, group.plan_lag series=13 points=155, heartbeat.agent_collect_ms series=13 points=196, heartbeat.agent_send_ms series=13 points=196]
+COORD fdbd:dc05:13:10c::40 missing_catalog=[] missing_asset=[] metrics=[group.status_unhealthy series=13 points=195, group.stale_member_count series=13 points=195, group.direct_fallback_count series=13 points=195, group.plan_lag series=13 points=181, heartbeat.agent_collect_ms series=13 points=200, heartbeat.agent_send_ms series=13 points=206]
+COORD fdbd:dc07:0:810::44 missing_catalog=[] missing_asset=[] metrics=[group.status_unhealthy series=13 points=195, group.stale_member_count series=13 points=195, group.direct_fallback_count series=13 points=195, group.plan_lag series=13 points=195, heartbeat.agent_collect_ms series=13 points=198, heartbeat.agent_send_ms series=13 points=202]
 ```
 
 最新 SQLite 心跳链路分析：
