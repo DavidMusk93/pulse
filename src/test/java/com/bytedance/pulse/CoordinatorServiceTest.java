@@ -158,6 +158,16 @@ class CoordinatorServiceTest {
             }
             GroupView group = service.groups().get(0);
             mutableClock.advance(Duration.ofSeconds(10));
+            String fallbackAgent = group.members().stream()
+                    .filter(agentId -> !agentId.equals(group.leaderAgentId()))
+                    .findFirst()
+                    .orElseThrow();
+            service.handleHeartbeat(singleHeartbeat(
+                    fallbackAgent,
+                    1,
+                    21,
+                    "host-" + fallbackAgent,
+                    "10.0.0." + fallbackAgent.replace("agent-", "")));
 
             service.handleHeartbeat(new HeartbeatRequest(
                     group.groupId(),
@@ -206,6 +216,14 @@ class CoordinatorServiceTest {
                     10));
             assertEquals(7.0, collect.series().get(0).points().get(0).value());
             assertEquals(8.0, latency.series().get(0).points().get(0).value());
+            MetricQueryResult directFallback = storage.queryRange(new MetricQuery(
+                    "group.direct_fallback_count",
+                    List.of(),
+                    1_710_000_010_000L,
+                    1_710_000_010_000L,
+                    1_000,
+                    10));
+            assertEquals(1.0, directFallback.series().get(0).points().get(0).value());
         }
     }
 

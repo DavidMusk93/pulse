@@ -310,6 +310,7 @@ public class CoordinatorService {
         long expectedGeneration = groupPlans.getOrDefault(leaderAgentId, AgentGroupPlan.direct(leaderAgentId)).generation();
         long agentPlanGeneration = longState(leaderState, "agent_plan_generation");
         long planLag = Math.max(0, expectedGeneration - agentPlanGeneration);
+        long directFallbackCount = directFallbackCount(expectedMembers, leaderAgentId);
         String status = staleMembers > 0 ? "stale_plan" : missingMembers > 0 ? "partial" : "ok";
         try {
             metricStorage.writeGroupLeader(new GroupLeaderMetricSample(
@@ -326,7 +327,7 @@ public class CoordinatorService {
                     0,
                     staleMembers,
                     missingMembers,
-                    0,
+                    directFallbackCount,
                     longState(leaderState, "leader_collect_ms"),
                     groupLatencyMs,
                     arrivalGapMs,
@@ -339,6 +340,17 @@ public class CoordinatorService {
         } catch (Exception exception) {
             System.err.printf("metric_group_write status=failed group_id=%s error=%s%n", groupId, exception.getMessage());
         }
+    }
+
+    private long directFallbackCount(List<String> expectedMembers, String leaderAgentId) {
+        if (expectedMembers.isEmpty()) {
+            return 0;
+        }
+        return expectedMembers.stream()
+                .filter(agentId -> !agentId.equals(leaderAgentId))
+                .map(states::get)
+                .filter(state -> state != null && "direct".equals(state.source))
+                .count();
     }
 
     private static String stringState(Map<String, Object> state, String key, String fallback) {
