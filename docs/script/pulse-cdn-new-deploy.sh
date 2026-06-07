@@ -268,6 +268,7 @@ PULSE_GROUP_PORT=9977
 PULSE_COORDINATOR_PEERS=${coordinator_peer_urls}
 PULSE_PEER_TIMEOUT_MS=1000
 PULSE_TASK_DIR=${install_root}/tasks
+PULSE_METRICS_DB=${install_root}/data/pulse-metrics.db
 ENV
 
 install_system_unit() {
