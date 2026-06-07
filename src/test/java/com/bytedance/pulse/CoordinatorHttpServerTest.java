@@ -367,6 +367,10 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("point_limit"));
         assertTrue(js.body().contains("metric.invalidate"));
         assertTrue(js.body().contains("补偿中"));
+        assertTrue(js.body().contains("暂停窗口"));
+        assertTrue(js.body().contains("跟随最新"));
+        assertTrue(js.body().contains("paused-hidden"));
+        assertTrue(js.body().contains("live paused"));
         assertTrue(js.body().contains("stale"));
         assertTrue(js.body().contains("run-button"));
         assertTrue(js.body().contains("data-status"));

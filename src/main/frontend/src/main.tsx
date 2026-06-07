@@ -1008,6 +1008,8 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const [liveStatus, setLiveStatus] = useState('connecting');
   const [lastInvalidateAt, setLastInvalidateAt] = useState<number | null>(null);
   const [invalidatedRange, setInvalidatedRange] = useState<MetricInvalidation | null>(null);
+  const [pageVisible, setPageVisible] = useState(() => document.visibilityState !== 'hidden');
+  const [fixedRangeEndMs, setFixedRangeEndMs] = useState<number | null>(null);
   const queryController = useMemo(() => new MetricQueryController(fetchJson), []);
   const renderScheduler = useMemo(() => new RenderScheduler(), []);
   const agentOptions = useMemo(() => sortHosts(hosts)
@@ -1024,12 +1026,14 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   })), [catalog]);
   const activeMetric = catalog.find(item => item.metric === metric);
   const visibleAgents = selectedAgents.length ? selectedAgents : agentOptions.slice(0, 3).map(option => option.value);
+  const rangePaused = fixedRangeEndMs !== null;
+  const livePaused = rangePaused || !pageVisible;
 
-  async function loadMetrics(nextMetric = metric, nextAgents = visibleAgents, nextRangeMinutes = rangeMinutes) {
+  async function loadMetrics(nextMetric = metric, nextAgents = visibleAgents, nextRangeMinutes = rangeMinutes, nextNowMs = fixedRangeEndMs ?? undefined) {
     setLoading(true);
     setError('');
     try {
-      const data = await queryController.queryRange({ metric: nextMetric, agents: nextAgents, rangeMinutes: nextRangeMinutes });
+      const data = await queryController.queryRange({ metric: nextMetric, agents: nextAgents, rangeMinutes: nextRangeMinutes, nowMs: nextNowMs });
       renderScheduler.schedule(() => setResult(data));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -1055,8 +1059,18 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
 
   useEffect(() => {
     if (!metric) return;
-    loadMetrics(metric, visibleAgents, rangeMinutes);
-  }, [metric, selectedAgents.join(','), rangeMinutes]);
+    if (!pageVisible) {
+      setLiveStatus('paused-hidden');
+      return;
+    }
+    loadMetrics(metric, visibleAgents, rangeMinutes, fixedRangeEndMs ?? undefined);
+  }, [metric, selectedAgents.join(','), rangeMinutes, pageVisible, fixedRangeEndMs]);
+
+  useEffect(() => {
+    const onVisibilityChange = () => setPageVisible(document.visibilityState !== 'hidden');
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, []);
 
   useEffect(() => {
     if (!('EventSource' in window)) {
@@ -1078,17 +1092,22 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
       if (!invalidation || (invalidation.metrics.length && !invalidation.metrics.includes(metric))) {
         return;
       }
+      if (rangePaused) {
+        setLiveStatus('paused-range');
+        return;
+      }
       queryController.invalidate();
       setInvalidatedRange(current => mergeInvalidation(current, invalidation));
     });
     events.onerror = () => setLiveStatus('reconnecting');
     return () => events.close();
-  }, [metric, queryController]);
+  }, [metric, queryController, rangePaused]);
 
   useEffect(() => () => renderScheduler.cancel(), [renderScheduler]);
 
   useEffect(() => {
     if (!invalidatedRange || !metric) return;
+    if (livePaused) return;
     const timer = window.setTimeout(async () => {
       const now = Date.now();
       const visibleFrom = now - rangeMinutes * 60_000;
@@ -1113,7 +1132,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
       }
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [invalidatedRange, metric, selectedAgents.join(','), rangeMinutes]);
+  }, [invalidatedRange, metric, selectedAgents.join(','), rangeMinutes, livePaused]);
 
   const seriesStore = useMemo(() => new SeriesStore(result), [result]);
   const seriesCount = seriesStore.seriesCount();
@@ -1121,7 +1140,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const storageStatus = storage?.status || 'unknown';
   const storageTone = storageStatus === 'ok' ? 'success' : storageStatus === 'disabled' ? 'default' : 'warning';
 
-  return <Card id="metrics" className="metrics-panel" variant="outlined" title={<Space size={8}><span>时序洞察</span><Tag color={storageTone}>{storageStatus}</Tag><Tag>{liveStatus}</Tag></Space>}>
+  return <Card id="metrics" className="metrics-panel" variant="outlined" title={<Space size={8}><span>时序洞察</span><Tag color={storageTone}>{storageStatus}</Tag><Tag>{liveStatus}</Tag>{livePaused && <Tag color="gold">live paused</Tag>}</Space>}>
     <div className="metrics-layout">
       <div className="metrics-control-grid">
         <Select
@@ -1150,7 +1169,12 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
           ]}
           onChange={value => setRangeMinutes(Number(value))}
         />
-        <Button type="primary" loading={loading} onClick={() => loadMetrics()}>刷新时序</Button>
+        <Space.Compact>
+          <Button onClick={() => setFixedRangeEndMs(current => current === null ? Date.now() : null)}>
+            {rangePaused ? '跟随最新' : '暂停窗口'}
+          </Button>
+          <Button type="primary" loading={loading} onClick={() => loadMetrics()}>刷新时序</Button>
+        </Space.Compact>
       </div>
       <div className="metrics-health-grid">
         <Statistic title="写入队列" value={storage?.queue_depth ?? 0} />
@@ -1169,6 +1193,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
             {result?.truncated && <Tag color="warning">已截断，建议 step {result.suggested_step_ms ?? result.suggestedStepMs}ms</Tag>}
             {invalidatedRange && <Tag color="gold">补偿中 {formatSeenTime(invalidatedRange.to)}</Tag>}
             {lastInvalidateAt && <Tag color="blue">live {formatSeenTime(lastInvalidateAt)}</Tag>}
+            {rangePaused && <Tag color="purple">窗口固定 {formatSeenTime(fixedRangeEndMs ?? undefined)}</Tag>}
           </Space>
           <Typography.Text type="secondary">{result?.query_id || result?.queryId || '尚未查询'}</Typography.Text>
         </div>
