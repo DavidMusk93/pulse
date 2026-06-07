@@ -3,10 +3,10 @@
 ## 状态
 
 - 时间：2026-06-07
-- 最新已部署提交：`42d052e Add bounded periodic metrics stream`
+- 最新已部署提交：`fa22b9d Add metrics topN series selection`
 - 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection
 - 部署范围：`cdn_new` 50 台 agent 已完成 query budget rollout；3 台 coordinator 已完成 frontend Metrics Panel rollout
-- JAR SHA：`3961cfc7f4bd7e787f2caca012a091389fef2a55c37dd4a1b234712a5f8ca28d`
+- JAR SHA：`92f89b65252a6d5c724e51e1afa94c808a93a59545598fb21995ae27ec6c1581`
 - 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览。
 
 ## 已完成
@@ -110,6 +110,7 @@ tide/group aggregation deploy: total=3 ok=3 failed=0 elapsed=18s
 SSE resume metadata deploy: total=3 ok=3 failed=0 elapsed=18s
 SSE event replay cache deploy: total=3 ok=3 failed=0 elapsed=17s
 bounded periodic metrics stream deploy: total=3 ok=3 failed=0 elapsed=15s
+topN series selection deploy: total=3 ok=3 failed=0 elapsed=15s
 ```
 
 最新 query budget 和 storage health 验证：
@@ -177,6 +178,14 @@ COORD fdbd:dc07:0:810::44 bytes=1254 missing=[]
 COORD fdbd:dc05:11:634::45 bytes=1923 invalidations=5 pings=4 missing=[]
 COORD fdbd:dc05:13:10c::40 bytes=1923 invalidations=5 pings=4 missing=[]
 COORD fdbd:dc07:0:810::44 bytes=1920 invalidations=5 pings=4 missing=[]
+```
+
+最新 Top N query 验证：
+
+```text
+COORD fdbd:dc05:11:634::45 series=3 points=90 truncated=True missing=[] labels=[{'agent_id': 'dc05-p11-t636-n033.byted.org'}, {'agent_id': 'dc05-p13-t46-n047.byted.org'}, {'agent_id': 'dc05-p13-t36-n046.byted.org'}]
+COORD fdbd:dc05:13:10c::40 series=3 points=90 truncated=True missing=[] labels=[{'agent_id': 'dc05-p13-t46-n047.byted.org'}, {'agent_id': 'dc05-p11-t636-n014.byted.org'}, {'agent_id': 'dc05-p11-t636-n017.byted.org'}]
+COORD fdbd:dc07:0:810::44 series=3 points=92 truncated=True missing=[] labels=[{'agent_id': 'dc05-p13-t46-n047.byted.org'}, {'agent_id': 'dc05-p11-t636-n014.byted.org'}, {'agent_id': 'dc05-p13-t46-n050.byted.org'}]
 ```
 
 历史 coordinator rollout：`3/3 ok`。
