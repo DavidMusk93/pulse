@@ -18,6 +18,8 @@ import java.util.Map;
 interface MetricStorage extends AutoCloseable {
     void writeHeartbeat(HeartbeatMetricSample sample) throws Exception;
 
+    void writeGroupLeader(GroupLeaderMetricSample sample) throws Exception;
+
     MetricQueryResult queryRange(MetricQuery query) throws Exception;
 
     @Override
@@ -53,7 +55,16 @@ final class LocalMetricStorage implements MetricStorage {
                 new MetricCatalogItem("heartbeat.agent_encode_ms", "Agent encode time", "ms"),
                 new MetricCatalogItem("heartbeat.agent_send_ms", "Agent send time", "ms"),
                 new MetricCatalogItem("agent.thread_count", "Agent thread count", "threads"),
-                new MetricCatalogItem("agent.rss_kb", "Agent RSS", "KiB"));
+                new MetricCatalogItem("agent.rss_kb", "Agent RSS", "KiB"),
+                new MetricCatalogItem("tide_worker.cpu_pct", "Tide worker CPU", "%"),
+                new MetricCatalogItem("tide_worker.rss_kb", "Tide worker RSS", "KiB"),
+                new MetricCatalogItem("tide_worker.thread_count", "Tide worker threads", "threads"),
+                new MetricCatalogItem("group.member_count", "Group member count", "count"),
+                new MetricCatalogItem("group.submitted_agent_count", "Group submitted agents", "count"),
+                new MetricCatalogItem("group.accepted_agent_count", "Group accepted agents", "count"),
+                new MetricCatalogItem("group.missing_member_count", "Group missing members", "count"),
+                new MetricCatalogItem("group.leader_collect_ms", "Group leader collection time", "ms"),
+                new MetricCatalogItem("group.group_latency_ms", "Group latency", "ms"));
     }
 
     @Override
@@ -86,11 +97,56 @@ final class LocalMetricStorage implements MetricStorage {
             statement.setString(18, MAPPER.writeValueAsString(sample.state()));
             statement.executeUpdate();
         }
+        upsertHostDimension(sample);
+        writeTideWorkers(sample);
+    }
+
+    @Override
+    public void writeGroupLeader(GroupLeaderMetricSample sample) throws Exception {
+        String sql = """
+                INSERT OR REPLACE INTO group_leader_sample (
+                    bucket_ms, observed_at_ms, group_id, leader_agent_id, leader_ip, cluster, area,
+                    group_generation, member_count, submitted_agent_count, accepted_agent_count,
+                    rejected_agent_count, stale_member_count, missing_member_count, direct_fallback_count,
+                    leader_collect_ms, group_latency_ms, arrival_gap_ms, status, debug_json, stored_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """;
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            int index = 1;
+            statement.setLong(index++, bucketMs(sample.observedAtMs()));
+            statement.setLong(index++, sample.observedAtMs());
+            statement.setString(index++, sample.groupId());
+            statement.setString(index++, sample.leaderAgentId());
+            statement.setString(index++, sample.leaderIp());
+            statement.setString(index++, sample.cluster());
+            statement.setString(index++, sample.area());
+            statement.setLong(index++, sample.groupGeneration());
+            statement.setLong(index++, sample.memberCount());
+            statement.setLong(index++, sample.submittedAgentCount());
+            statement.setLong(index++, sample.acceptedAgentCount());
+            statement.setLong(index++, sample.rejectedAgentCount());
+            statement.setLong(index++, sample.staleMemberCount());
+            statement.setLong(index++, sample.missingMemberCount());
+            statement.setLong(index++, sample.directFallbackCount());
+            statement.setLong(index++, sample.leaderCollectMs());
+            statement.setLong(index++, sample.groupLatencyMs());
+            statement.setLong(index++, sample.arrivalGapMs());
+            statement.setString(index++, sample.status());
+            statement.setString(index++, MAPPER.writeValueAsString(sample.debug()));
+            statement.setLong(index, System.currentTimeMillis());
+            statement.executeUpdate();
+        }
     }
 
     @Override
     public MetricQueryResult queryRange(MetricQuery query) throws Exception {
         MetricColumn metric = MetricColumn.fromName(query.metric());
+        if (metric.source == MetricSource.TIDE_WORKER) {
+            return queryTideWorkerRange(query, metric);
+        }
+        if (metric.source == MetricSource.GROUP_LEADER) {
+            return queryGroupLeaderRange(query, metric);
+        }
         int pointLimit = Math.max(1, query.pointLimit());
         StringBuilder sql = new StringBuilder("""
                 SELECT observed_at_ms, agent_id, heartbeat_path, group_mode, epoch, seq, %s AS metric_value, state_json
@@ -153,6 +209,99 @@ final class LocalMetricStorage implements MetricStorage {
                 series);
     }
 
+    private MetricQueryResult queryTideWorkerRange(MetricQuery query, MetricColumn metric) throws Exception {
+        int pointLimit = Math.max(1, query.pointLimit());
+        StringBuilder sql = new StringBuilder("""
+                SELECT observed_at_ms, agent_id, pid, version, role, %s AS metric_value
+                FROM tide_worker_sample
+                WHERE observed_at_ms >= ? AND observed_at_ms <= ?
+                """.formatted(metric.column()));
+        if (!query.agentIds().isEmpty()) {
+            sql.append(" AND agent_id IN (");
+            sql.append("?,".repeat(query.agentIds().size()));
+            sql.setLength(sql.length() - 1);
+            sql.append(")");
+        }
+        sql.append(" ORDER BY agent_id ASC, pid ASC, observed_at_ms ASC LIMIT ?");
+
+        Map<String, List<MetricPoint>> pointsBySeries = new LinkedHashMap<>();
+        Map<String, Map<String, String>> labelsBySeries = new LinkedHashMap<>();
+        boolean truncated;
+        try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+            int index = 1;
+            statement.setLong(index++, query.startMs());
+            statement.setLong(index++, query.endMs());
+            for (String agentId : query.agentIds()) {
+                statement.setString(index++, agentId);
+            }
+            statement.setInt(index, pointLimit + 1);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                int rows = 0;
+                while (resultSet.next()) {
+                    rows++;
+                    if (rows > pointLimit) {
+                        break;
+                    }
+                    String pid = String.valueOf(resultSet.getLong("pid"));
+                    String seriesId = resultSet.getString("agent_id") + ":" + pid;
+                    labelsBySeries.putIfAbsent(seriesId, Map.of(
+                            "agent_id", resultSet.getString("agent_id"),
+                            "pid", pid,
+                            "version", nullToEmpty(resultSet.getString("version")),
+                            "role", nullToEmpty(resultSet.getString("role"))));
+                    pointsBySeries.computeIfAbsent(seriesId, ignored -> new ArrayList<>())
+                            .add(new MetricPoint(resultSet.getLong("observed_at_ms"), resultSet.getDouble("metric_value"), Map.of()));
+                }
+                truncated = rows > pointLimit;
+            }
+        }
+        List<MetricSeries> series = pointsBySeries.entrySet().stream()
+                .map(entry -> new MetricSeries(labelsBySeries.get(entry.getKey()), List.copyOf(entry.getValue())))
+                .toList();
+        return new MetricQueryResult(query.metric(), "avg", truncated, Math.max(1, query.stepMs()), query.agentIds().size(), pointLimit, series);
+    }
+
+    private MetricQueryResult queryGroupLeaderRange(MetricQuery query, MetricColumn metric) throws Exception {
+        int pointLimit = Math.max(1, query.pointLimit());
+        String sql = """
+                SELECT observed_at_ms, group_id, leader_agent_id, cluster, area, status, %s AS metric_value
+                FROM group_leader_sample
+                WHERE observed_at_ms >= ? AND observed_at_ms <= ?
+                ORDER BY group_id ASC, observed_at_ms ASC LIMIT ?
+                """.formatted(metric.column());
+        Map<String, List<MetricPoint>> pointsByGroup = new LinkedHashMap<>();
+        Map<String, Map<String, String>> labelsByGroup = new LinkedHashMap<>();
+        boolean truncated;
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, query.startMs());
+            statement.setLong(2, query.endMs());
+            statement.setInt(3, pointLimit + 1);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                int rows = 0;
+                while (resultSet.next()) {
+                    rows++;
+                    if (rows > pointLimit) {
+                        break;
+                    }
+                    String groupId = resultSet.getString("group_id");
+                    labelsByGroup.putIfAbsent(groupId, Map.of(
+                            "group_id", groupId,
+                            "leader_agent_id", resultSet.getString("leader_agent_id"),
+                            "cluster", resultSet.getString("cluster"),
+                            "area", resultSet.getString("area"),
+                            "status", resultSet.getString("status")));
+                    pointsByGroup.computeIfAbsent(groupId, ignored -> new ArrayList<>())
+                            .add(new MetricPoint(resultSet.getLong("observed_at_ms"), resultSet.getDouble("metric_value"), Map.of()));
+                }
+                truncated = rows > pointLimit;
+            }
+        }
+        List<MetricSeries> series = pointsByGroup.entrySet().stream()
+                .map(entry -> new MetricSeries(labelsByGroup.get(entry.getKey()), List.copyOf(entry.getValue())))
+                .toList();
+        return new MetricQueryResult(query.metric(), "avg", truncated, Math.max(1, query.stepMs()), 0, pointLimit, series);
+    }
+
     private void initialize() throws SQLException {
         try (Statement statement = connection.createStatement()) {
             statement.execute("PRAGMA journal_mode=WAL");
@@ -182,6 +331,181 @@ final class LocalMetricStorage implements MetricStorage {
                     """);
             statement.execute("CREATE INDEX IF NOT EXISTS idx_heartbeat_agent_time ON heartbeat_sample(agent_id, observed_at_ms)");
             statement.execute("CREATE INDEX IF NOT EXISTS idx_heartbeat_cluster_time ON heartbeat_sample(cluster, observed_at_ms)");
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS host_dimension (
+                        agent_id TEXT PRIMARY KEY,
+                        ip TEXT NOT NULL,
+                        normalized_ip TEXT NOT NULL,
+                        cluster TEXT NOT NULL DEFAULT 'unknown',
+                        area TEXT NOT NULL DEFAULT 'unknown',
+                        host_group TEXT NOT NULL DEFAULT 'unknown',
+                        mode TEXT NOT NULL DEFAULT 'unknown',
+                        coordinator_id TEXT NOT NULL DEFAULT 'local',
+                        first_seen_ms INTEGER NOT NULL,
+                        last_seen_ms INTEGER NOT NULL,
+                        last_status TEXT NOT NULL,
+                        last_heartbeat_seq INTEGER,
+                        metadata_json TEXT
+                    )
+                    """);
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_host_dimension_cluster ON host_dimension(cluster, area, host_group)");
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_host_dimension_ip ON host_dimension(normalized_ip)");
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS tide_worker_sample (
+                        bucket_ms INTEGER NOT NULL,
+                        observed_at_ms INTEGER NOT NULL,
+                        agent_id TEXT NOT NULL,
+                        pid INTEGER NOT NULL,
+                        version TEXT,
+                        role TEXT,
+                        leader TEXT,
+                        area TEXT,
+                        group_name TEXT,
+                        cpu_pct REAL,
+                        usr_pct REAL,
+                        sys_pct REAL,
+                        mem_pct REAL,
+                        rss_kb INTEGER,
+                        thread_count INTEGER,
+                        port INTEGER,
+                        age_seconds INTEGER,
+                        mode TEXT,
+                        size_current INTEGER,
+                        size_total INTEGER,
+                        debug_json TEXT,
+                        stored_at_ms INTEGER NOT NULL,
+                        PRIMARY KEY (agent_id, observed_at_ms, pid)
+                    )
+                    """);
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_tide_worker_time ON tide_worker_sample(bucket_ms, observed_at_ms)");
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_tide_worker_agent_time ON tide_worker_sample(agent_id, observed_at_ms)");
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_tide_worker_role_time ON tide_worker_sample(role, observed_at_ms)");
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS group_leader_sample (
+                        bucket_ms INTEGER NOT NULL,
+                        observed_at_ms INTEGER NOT NULL,
+                        group_id TEXT NOT NULL,
+                        leader_agent_id TEXT NOT NULL,
+                        leader_ip TEXT,
+                        cluster TEXT NOT NULL DEFAULT 'unknown',
+                        area TEXT NOT NULL DEFAULT 'unknown',
+                        group_generation INTEGER,
+                        member_count INTEGER NOT NULL,
+                        submitted_agent_count INTEGER NOT NULL,
+                        accepted_agent_count INTEGER NOT NULL,
+                        rejected_agent_count INTEGER NOT NULL DEFAULT 0,
+                        stale_member_count INTEGER NOT NULL DEFAULT 0,
+                        missing_member_count INTEGER NOT NULL DEFAULT 0,
+                        direct_fallback_count INTEGER NOT NULL DEFAULT 0,
+                        leader_collect_ms INTEGER,
+                        group_latency_ms INTEGER,
+                        arrival_gap_ms INTEGER,
+                        status TEXT NOT NULL,
+                        debug_json TEXT,
+                        stored_at_ms INTEGER NOT NULL,
+                        PRIMARY KEY (group_id, observed_at_ms)
+                    )
+                    """);
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_group_leader_time ON group_leader_sample(bucket_ms, observed_at_ms)");
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_group_leader_cluster_time ON group_leader_sample(cluster, area, bucket_ms)");
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_group_leader_agent_time ON group_leader_sample(leader_agent_id, observed_at_ms)");
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS host_event (
+                        event_id TEXT PRIMARY KEY,
+                        observed_at_ms INTEGER NOT NULL,
+                        agent_id TEXT NOT NULL,
+                        severity TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        message TEXT NOT NULL,
+                        details_json TEXT,
+                        stored_at_ms INTEGER NOT NULL
+                    )
+                    """);
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_host_event_agent_time ON host_event(agent_id, observed_at_ms)");
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_host_event_type_time ON host_event(event_type, observed_at_ms)");
+        }
+    }
+
+    private void upsertHostDimension(HeartbeatMetricSample sample) throws Exception {
+        String sql = """
+                INSERT INTO host_dimension (
+                    agent_id, ip, normalized_ip, cluster, area, host_group, mode, coordinator_id,
+                    first_seen_ms, last_seen_ms, last_status, last_heartbeat_seq, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'local', ?, ?, 'alive', ?, ?)
+                ON CONFLICT(agent_id) DO UPDATE SET
+                    ip=excluded.ip,
+                    normalized_ip=excluded.normalized_ip,
+                    cluster=excluded.cluster,
+                    area=excluded.area,
+                    host_group=excluded.host_group,
+                    mode=excluded.mode,
+                    last_seen_ms=excluded.last_seen_ms,
+                    last_status=excluded.last_status,
+                    last_heartbeat_seq=excluded.last_heartbeat_seq,
+                    metadata_json=excluded.metadata_json
+                """;
+        String ip = stringValue(sample.state().get("ip"), sample.agentId());
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, sample.agentId());
+            statement.setString(2, ip);
+            statement.setString(3, ip);
+            statement.setString(4, sample.cluster());
+            statement.setString(5, sample.area());
+            statement.setString(6, stringValue(sample.state().get("group"), "unknown"));
+            statement.setString(7, sample.groupMode());
+            statement.setLong(8, sample.observedAtMs());
+            statement.setLong(9, sample.observedAtMs());
+            statement.setLong(10, sample.seq());
+            statement.setString(11, MAPPER.writeValueAsString(sample.state()));
+            statement.executeUpdate();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void writeTideWorkers(HeartbeatMetricSample sample) throws Exception {
+        Object workersValue = sample.state().get("tide_workers");
+        if (!(workersValue instanceof List<?> workers) || workers.isEmpty()) {
+            return;
+        }
+        String sql = """
+                INSERT OR REPLACE INTO tide_worker_sample (
+                    bucket_ms, observed_at_ms, agent_id, pid, version, role, leader, area, group_name,
+                    cpu_pct, usr_pct, sys_pct, mem_pct, rss_kb, thread_count, port,
+                    age_seconds, mode, size_current, size_total, debug_json, stored_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """;
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            for (Object workerValue : workers) {
+                if (!(workerValue instanceof Map<?, ?> rawWorker)) {
+                    continue;
+                }
+                Map<String, Object> worker = (Map<String, Object>) rawWorker;
+                int index = 1;
+                statement.setLong(index++, bucketMs(sample.observedAtMs()));
+                statement.setLong(index++, sample.observedAtMs());
+                statement.setString(index++, sample.agentId());
+                statement.setLong(index++, longValue(worker.get("pid")));
+                statement.setString(index++, stringValue(worker.get("component_version"), ""));
+                statement.setString(index++, stringValue(worker.get("role"), ""));
+                statement.setString(index++, stringValue(worker.get("leader"), ""));
+                statement.setString(index++, stringValue(worker.get("area"), sample.area()));
+                statement.setString(index++, stringValue(worker.get("group"), ""));
+                statement.setDouble(index++, doubleValue(worker.get("cpu_percent")));
+                statement.setDouble(index++, doubleValue(worker.get("user_cpu_percent")));
+                statement.setDouble(index++, doubleValue(worker.get("sys_cpu_percent")));
+                statement.setDouble(index++, doubleValue(worker.get("mem_percent")));
+                statement.setLong(index++, longValue(worker.get("rss_kb")));
+                statement.setLong(index++, longValue(worker.get("threads")));
+                statement.setLong(index++, longValue(worker.get("port1")));
+                statement.setLong(index++, longValue(worker.get("age_seconds")));
+                statement.setString(index++, stringValue(worker.get("mode"), ""));
+                statement.setLong(index++, longValue(worker.get("size_current")));
+                statement.setLong(index++, longValue(worker.get("size_total")));
+                statement.setString(index++, MAPPER.writeValueAsString(worker));
+                statement.setLong(index, System.currentTimeMillis());
+                statement.addBatch();
+            }
+            statement.executeBatch();
         }
     }
 
@@ -192,26 +516,80 @@ final class LocalMetricStorage implements MetricStorage {
         return MAPPER.readValue(json, MAP_TYPE);
     }
 
+    private static long bucketMs(long observedAtMs) {
+        return observedAtMs - Math.floorMod(observedAtMs, 10_000L);
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
+    private static String stringValue(Object value, String fallback) {
+        if (value == null || value.toString().isBlank()) {
+            return fallback;
+        }
+        return value.toString();
+    }
+
+    private static long longValue(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value == null || value.toString().isBlank()) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(value.toString());
+        } catch (NumberFormatException ignored) {
+            return 0L;
+        }
+    }
+
+    private static double doubleValue(Object value) {
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        if (value == null || value.toString().isBlank()) {
+            return 0.0;
+        }
+        try {
+            return Double.parseDouble(value.toString());
+        } catch (NumberFormatException ignored) {
+            return 0.0;
+        }
+    }
+
     @Override
     public void close() throws SQLException {
         connection.close();
     }
 
     private enum MetricColumn {
-        ARRIVAL_GAP("heartbeat.arrival_gap_ms", "arrival_gap_ms"),
-        SEQ_GAP("heartbeat.seq_gap", "seq_gap"),
-        AGENT_COLLECT("heartbeat.agent_collect_ms", "agent_collect_ms"),
-        AGENT_ENCODE("heartbeat.agent_encode_ms", "agent_encode_ms"),
-        AGENT_SEND("heartbeat.agent_send_ms", "agent_send_ms"),
-        AGENT_THREADS("agent.thread_count", "agent_thread_count"),
-        AGENT_RSS("agent.rss_kb", "agent_rss_kb");
+        ARRIVAL_GAP("heartbeat.arrival_gap_ms", "arrival_gap_ms", MetricSource.HEARTBEAT),
+        SEQ_GAP("heartbeat.seq_gap", "seq_gap", MetricSource.HEARTBEAT),
+        AGENT_COLLECT("heartbeat.agent_collect_ms", "agent_collect_ms", MetricSource.HEARTBEAT),
+        AGENT_ENCODE("heartbeat.agent_encode_ms", "agent_encode_ms", MetricSource.HEARTBEAT),
+        AGENT_SEND("heartbeat.agent_send_ms", "agent_send_ms", MetricSource.HEARTBEAT),
+        AGENT_THREADS("agent.thread_count", "agent_thread_count", MetricSource.HEARTBEAT),
+        AGENT_RSS("agent.rss_kb", "agent_rss_kb", MetricSource.HEARTBEAT),
+        TIDE_CPU("tide_worker.cpu_pct", "cpu_pct", MetricSource.TIDE_WORKER),
+        TIDE_RSS("tide_worker.rss_kb", "rss_kb", MetricSource.TIDE_WORKER),
+        TIDE_THREADS("tide_worker.thread_count", "thread_count", MetricSource.TIDE_WORKER),
+        GROUP_MEMBER("group.member_count", "member_count", MetricSource.GROUP_LEADER),
+        GROUP_SUBMITTED("group.submitted_agent_count", "submitted_agent_count", MetricSource.GROUP_LEADER),
+        GROUP_ACCEPTED("group.accepted_agent_count", "accepted_agent_count", MetricSource.GROUP_LEADER),
+        GROUP_MISSING("group.missing_member_count", "missing_member_count", MetricSource.GROUP_LEADER),
+        GROUP_COLLECT("group.leader_collect_ms", "leader_collect_ms", MetricSource.GROUP_LEADER),
+        GROUP_LATENCY("group.group_latency_ms", "group_latency_ms", MetricSource.GROUP_LEADER);
 
         private final String name;
         private final String column;
+        private final MetricSource source;
 
-        MetricColumn(String name, String column) {
+        MetricColumn(String name, String column, MetricSource source) {
             this.name = name;
             this.column = column;
+            this.source = source;
         }
 
         private String column() {
@@ -226,6 +604,12 @@ final class LocalMetricStorage implements MetricStorage {
             }
             throw new IllegalArgumentException("unsupported metric: " + name);
         }
+    }
+
+    private enum MetricSource {
+        HEARTBEAT,
+        TIDE_WORKER,
+        GROUP_LEADER
     }
 }
 
@@ -250,6 +634,31 @@ record HeartbeatMetricSample(
         Map<String, Object> state) {
     HeartbeatMetricSample {
         state = state == null ? Map.of() : Map.copyOf(state);
+    }
+}
+
+record GroupLeaderMetricSample(
+        long observedAtMs,
+        String groupId,
+        String leaderAgentId,
+        String leaderIp,
+        String cluster,
+        String area,
+        long groupGeneration,
+        long memberCount,
+        long submittedAgentCount,
+        long acceptedAgentCount,
+        long rejectedAgentCount,
+        long staleMemberCount,
+        long missingMemberCount,
+        long directFallbackCount,
+        long leaderCollectMs,
+        long groupLatencyMs,
+        long arrivalGapMs,
+        String status,
+        Map<String, Object> debug) {
+    GroupLeaderMetricSample {
+        debug = debug == null ? Map.of() : Map.copyOf(debug);
     }
 }
 

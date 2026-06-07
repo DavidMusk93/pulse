@@ -149,6 +149,42 @@ class CoordinatorServiceTest {
     }
 
     @Test
+    void batchHeartbeatWritesGroupLeaderMetricSample() throws Exception {
+        MutableClock mutableClock = new MutableClock(Instant.ofEpochMilli(1_710_000_000_000L));
+        try (LocalMetricStorage storage = LocalMetricStorage.open(tempDir.resolve("metrics.db"))) {
+            CoordinatorService service = new CoordinatorService("coordinator-a", mutableClock, storage);
+            for (int i = 1; i <= 5; i++) {
+                confirmAlive(service, "agent-" + i, "host-" + i, "10.0.0." + i);
+            }
+            GroupView group = service.groups().get(0);
+            mutableClock.advance(Duration.ofSeconds(10));
+
+            service.handleHeartbeat(new HeartbeatRequest(
+                    group.groupId(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    List.of(),
+                    group.members().stream()
+                            .map(agentId -> agent(agentId, 1, 20, "host-" + agentId, "10.0.0." + agentId.replace("agent-", "")))
+                            .toList()));
+
+            MetricQueryResult result = storage.queryRange(new MetricQuery(
+                    "group.submitted_agent_count",
+                    List.of(),
+                    1_710_000_010_000L,
+                    1_710_000_010_000L,
+                    1_000,
+                    10));
+
+            assertEquals(1, result.series().size());
+            assertEquals(group.groupId(), result.series().get(0).labels().get("group_id"));
+            assertEquals((double) group.members().size(), result.series().get(0).points().get(0).value());
+        }
+    }
+
+    @Test
     void coordinatorUsesSqrtLeaderCountAndLocationAwareShards() {
         CoordinatorService service = new CoordinatorService("coordinator-a", clock);
         for (int i = 1; i <= 8; i++) {

@@ -22,6 +22,7 @@ public class CoordinatorService {
     private final Map<String, NodeState> states = new ConcurrentHashMap<>();
     private final Map<String, AgentGroupPlan> groupPlans = new ConcurrentHashMap<>();
     private final Map<String, GroupView> groupViews = new ConcurrentHashMap<>();
+    private final Map<String, Long> groupMetricObservedAt = new ConcurrentHashMap<>();
     private final int groupLeaderPort;
     private final RemoteTaskService taskService;
     private final MetricStorage metricStorage;
@@ -57,11 +58,14 @@ public class CoordinatorService {
         if (request.isBatch()) {
             List<AgentHeartbeatResponse> agentResponses = new ArrayList<>();
             String source = request.groupId() == null || request.groupId().isBlank() ? "group" : request.groupId();
+            int accepted = 0;
             for (AgentHeartbeat agent : request.agents()) {
                 long acceptedSeq = merge(agent, source, now, agent.messages());
                 taskService.handleReplies(agent.agentId(), agent.messages());
                 agentResponses.add(new AgentHeartbeatResponse(agent.agentId(), acceptedSeq, List.of()));
+                accepted++;
             }
+            writeGroupLeaderMetric(request, source, now, accepted);
             maybeRecomputeGroups(now, false);
             agentResponses = agentResponses.stream()
                     .map(response -> new AgentHeartbeatResponse(
@@ -261,6 +265,53 @@ public class CoordinatorService {
                     state));
         } catch (Exception exception) {
             System.err.printf("metric_write status=failed agent_id=%s error=%s%n", heartbeat.agentId(), exception.getMessage());
+        }
+    }
+
+    private void writeGroupLeaderMetric(HeartbeatRequest request, String groupId, long observedAtMs, int accepted) {
+        if (metricStorage == null) {
+            return;
+        }
+        GroupView group = groupViews.get(groupId);
+        List<String> expectedMembers = group == null ? List.of() : group.members();
+        long staleMembers = expectedMembers.isEmpty()
+                ? 0
+                : request.agents().stream().filter(agent -> !expectedMembers.contains(agent.agentId())).count();
+        long missingMembers = expectedMembers.isEmpty()
+                ? 0
+                : Math.max(0, expectedMembers.size() - request.agents().size());
+        String leaderAgentId = group == null ? request.agents().get(0).agentId() : group.leaderAgentId();
+        Map<String, Object> leaderState = request.agents().stream()
+                .filter(agent -> agent.agentId().equals(leaderAgentId))
+                .findFirst()
+                .map(agent -> NodeState.extractState(agent.messages()))
+                .orElseGet(Map::of);
+        Long previousObservedAt = groupMetricObservedAt.put(groupId, observedAtMs);
+        long arrivalGapMs = previousObservedAt == null ? 0 : Math.max(0, observedAtMs - previousObservedAt);
+        String status = staleMembers > 0 ? "stale_plan" : missingMembers > 0 ? "partial" : "ok";
+        try {
+            metricStorage.writeGroupLeader(new GroupLeaderMetricSample(
+                    observedAtMs,
+                    groupId,
+                    leaderAgentId,
+                    stringState(leaderState, "ip", ""),
+                    group == null ? "unknown" : group.cluster(),
+                    group == null ? "unknown" : group.area(),
+                    0,
+                    expectedMembers.isEmpty() ? request.agents().size() : expectedMembers.size(),
+                    request.agents().size(),
+                    accepted,
+                    0,
+                    staleMembers,
+                    missingMembers,
+                    0,
+                    0,
+                    0,
+                    arrivalGapMs,
+                    status,
+                    Map.of("leader_url", group == null ? "" : group.leaderUrl())));
+        } catch (Exception exception) {
+            System.err.printf("metric_group_write status=failed group_id=%s error=%s%n", groupId, exception.getMessage());
         }
     }
 

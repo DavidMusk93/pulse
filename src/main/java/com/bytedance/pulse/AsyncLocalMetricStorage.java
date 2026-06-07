@@ -43,11 +43,20 @@ final class AsyncLocalMetricStorage implements MetricStorage {
     @Override
     public void writeHeartbeat(HeartbeatMetricSample sample) {
         Objects.requireNonNull(sample, "sample");
+        offer(new InsertHeartbeatCommand(sample));
+    }
+
+    @Override
+    public void writeGroupLeader(GroupLeaderMetricSample sample) {
+        Objects.requireNonNull(sample, "sample");
+        offer(new InsertGroupLeaderCommand(sample));
+    }
+
+    private void offer(MetricWriteCommand command) {
         if (!running) {
             droppedCommands.incrementAndGet();
             return;
         }
-        MetricWriteCommand command = new InsertHeartbeatCommand(sample);
         if (queue.offer(command)) {
             acceptedCommands.incrementAndGet();
         } else {
@@ -111,6 +120,8 @@ final class AsyncLocalMetricStorage implements MetricStorage {
         try {
             if (command instanceof InsertHeartbeatCommand heartbeat) {
                 storage.writeHeartbeat(heartbeat.sample());
+            } else if (command instanceof InsertGroupLeaderCommand groupLeader) {
+                storage.writeGroupLeader(groupLeader.sample());
             }
             writtenCommands.incrementAndGet();
         } catch (Exception exception) {
@@ -125,9 +136,11 @@ final class AsyncLocalMetricStorage implements MetricStorage {
         writerThread.join(Math.max(1_000L, flushInterval.toMillis() * 2));
     }
 
-    private sealed interface MetricWriteCommand permits InsertHeartbeatCommand {}
+    private sealed interface MetricWriteCommand permits InsertHeartbeatCommand, InsertGroupLeaderCommand {}
 
     private record InsertHeartbeatCommand(HeartbeatMetricSample sample) implements MetricWriteCommand {}
+
+    private record InsertGroupLeaderCommand(GroupLeaderMetricSample sample) implements MetricWriteCommand {}
 }
 
 record MetricStorageHealth(
