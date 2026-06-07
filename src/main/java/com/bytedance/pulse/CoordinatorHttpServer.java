@@ -14,6 +14,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -23,12 +25,16 @@ import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class CoordinatorHttpServer {
     private final CoordinatorService service;
     private final HttpServer server;
     private final ObjectMapper mapper = JsonSupport.objectMapper();
     private final PeerForwarder peerForwarder;
+    private final ArrayDeque<SseEvent> metricEventCache = new ArrayDeque<>();
+    private final AtomicLong metricEventSequence = new AtomicLong();
+    private final int metricEventCacheLimit;
 
     public CoordinatorHttpServer(CoordinatorService service, int port) throws IOException {
         this(service, "127.0.0.1", port);
@@ -41,6 +47,7 @@ public class CoordinatorHttpServer {
     CoordinatorHttpServer(CoordinatorService service, String bindHost, int port, PeerForwarder peerForwarder) throws IOException {
         this.service = service;
         this.peerForwarder = peerForwarder;
+        this.metricEventCacheLimit = positiveInt("PULSE_METRIC_SSE_CACHE_EVENTS", 256);
         this.server = HttpServer.create(new InetSocketAddress(bindHost, port), httpBacklog());
         this.server.createContext("/", this::handle);
         this.server.setExecutor(httpExecutor());
@@ -257,22 +264,59 @@ public class CoordinatorHttpServer {
                 .orElse(queryValue(exchange.getRequestURI(), "last_event_id"));
         boolean resumed = lastEventId != null && !lastEventId.isBlank();
         long compensateFromMs = resumed ? Math.max(lastEventTimestamp(lastEventId), now - 300_000) : now - 30_000;
+        List<SseEvent> replayEvents = resumed ? metricEventsAfter(lastEventId) : List.of();
         try (OutputStream output = exchange.getResponseBody()) {
-            writeSse(output, "hello", 0, mapper.writeValueAsString(Map.of(
+            writeSse(output, new SseEvent(nextMetricEventId(), "hello", mapper.writeValueAsString(Map.of(
                     "coordinator_id", service.coordinatorId(),
                     "server_time_ms", now,
                     "compensate_from_ms", compensateFromMs,
                     "resumed", resumed,
                     "last_event_id", lastEventId == null ? "" : lastEventId,
-                    "event_cache_supported", false)));
-            writeSse(output, "storage.health", 1, mapper.writeValueAsString(service.metricStorageHealth()));
-            writeSse(output, "metric.invalidate", 2, mapper.writeValueAsString(Map.of(
+                    "event_cache_supported", true,
+                    "replayed_events", replayEvents.size(),
+                    "replay_limit", metricEventCacheLimit))));
+            for (SseEvent event : replayEvents) {
+                writeSse(output, event);
+            }
+            writeCachedMetricEvent(output, "storage.health", mapper.writeValueAsString(service.metricStorageHealth()));
+            writeCachedMetricEvent(output, "metric.invalidate", mapper.writeValueAsString(Map.of(
                     "from", compensateFromMs,
                     "to", now,
                     "metrics", List.of("heartbeat.arrival_gap_ms", "agent.thread_count", "group.submitted_agent_count"))));
             if (!once) {
-                writeSse(output, "ping", 3, mapper.writeValueAsString(Map.of("server_time_ms", System.currentTimeMillis())));
+                writeCachedMetricEvent(output, "ping", mapper.writeValueAsString(Map.of("server_time_ms", System.currentTimeMillis())));
             }
+        }
+    }
+
+    private void writeCachedMetricEvent(OutputStream output, String event, String data) throws IOException {
+        SseEvent sseEvent = new SseEvent(nextMetricEventId(), event, data);
+        cacheMetricEvent(sseEvent);
+        writeSse(output, sseEvent);
+    }
+
+    private String nextMetricEventId() {
+        return System.currentTimeMillis() + "-" + metricEventSequence.incrementAndGet();
+    }
+
+    private void cacheMetricEvent(SseEvent event) {
+        synchronized (metricEventCache) {
+            metricEventCache.addLast(event);
+            while (metricEventCache.size() > metricEventCacheLimit) {
+                metricEventCache.removeFirst();
+            }
+        }
+    }
+
+    private List<SseEvent> metricEventsAfter(String lastEventId) {
+        synchronized (metricEventCache) {
+            List<SseEvent> events = new ArrayList<>();
+            for (SseEvent event : metricEventCache) {
+                if (compareEventId(event.id(), lastEventId) > 0) {
+                    events.add(event);
+                }
+            }
+            return List.copyOf(events);
         }
     }
 
@@ -289,11 +333,39 @@ public class CoordinatorHttpServer {
         }
     }
 
+    private static int compareEventId(String left, String right) {
+        long leftTimestamp = lastEventTimestamp(left);
+        long rightTimestamp = lastEventTimestamp(right);
+        if (leftTimestamp != rightTimestamp) {
+            return Long.compare(leftTimestamp, rightTimestamp);
+        }
+        return Long.compare(eventSequence(left), eventSequence(right));
+    }
+
+    private static long eventSequence(String eventId) {
+        if (eventId == null || eventId.isBlank()) {
+            return 0;
+        }
+        int separator = eventId.indexOf('-');
+        if (separator < 0 || separator == eventId.length() - 1) {
+            return 0;
+        }
+        try {
+            return Long.parseLong(eventId.substring(separator + 1));
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
+    }
+
     private static void writeSse(OutputStream output, String event, int sequence, String data) throws IOException {
-        String payload = "id: " + System.currentTimeMillis() + "-" + sequence + "\n"
+        writeSse(output, new SseEvent(System.currentTimeMillis() + "-" + sequence, event, data));
+    }
+
+    private static void writeSse(OutputStream output, SseEvent event) throws IOException {
+        String payload = "id: " + event.id() + "\n"
                 + "retry: 3000\n"
-                + "event: " + event + "\n"
-                + "data: " + data.replace("\n", "\\n") + "\n\n";
+                + "event: " + event.event() + "\n"
+                + "data: " + event.data().replace("\n", "\\n") + "\n\n";
         output.write(payload.getBytes(StandardCharsets.UTF_8));
         output.flush();
     }
@@ -519,6 +591,8 @@ public class CoordinatorHttpServer {
     }
 
     private record TaskCompletionAction(String agentId, String taskId, String action) {}
+
+    private record SseEvent(String id, String event, String data) {}
 
     interface PeerForwarder {
         void forward(HeartbeatRequest request);

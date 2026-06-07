@@ -68,8 +68,9 @@
 
 - SSE 重连补偿：
   - `/api/metrics/stream` 已读取 `Last-Event-ID`。
-  - `hello` 事件已返回 `resumed`、`last_event_id`、`event_cache_supported=false` 和 `compensate_from_ms`。
-  - 当前明确采用 bounded reconnect compensation；服务端尚未实现完整 event cache replay。
+  - `hello` 事件已返回 `resumed`、`last_event_id`、`event_cache_supported=true`、`replayed_events`、`replay_limit` 和 `compensate_from_ms`。
+  - 服务端已实现 bounded event cache replay，默认保留最近 256 个 metrics SSE 事件。
+  - 缓存未命中时仍通过 `metric.invalidate` 的 `compensate_from_ms` 做 bounded reconnect compensation。
 
 ## 测试
 
@@ -85,7 +86,7 @@
   - `LocalMetricStorageTest#queryRangeSuggestsLargerStepWhenRequestExceedsPointBudget`
   - `LocalMetricStorageTest#queryRangeAggregatesTideWorkerPointsByRequestedStep`
   - `LocalMetricStorageTest#queryRangeAggregatesGroupLeaderPointsByRequestedStep`
-  - `CoordinatorHttpServerTest#metricsStorageAndStreamExposeHealthAndInvalidationEvents` 已覆盖 SSE `retry` 和 `Last-Event-ID` resume metadata。
+  - `CoordinatorHttpServerTest#metricsStorageAndStreamExposeHealthAndInvalidationEvents` 已覆盖 SSE `retry`、`Last-Event-ID` resume metadata 和 cache replay。
   - `CoordinatorHttpServerTest#hostsPageRendersFlatSquareChineseHeartbeatConsole` 已断言 Metrics Panel 静态资源标记。
 
 ## 线上验证
@@ -206,7 +207,8 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
 
 - SSE 仍是轻量第一版：
   - 已有 `hello`、`storage.health`、`metric.invalidate`。
-  - 尚未实现事件缓存、`Last-Event-ID` 补发和 slow client bounded queue。
+  - 已实现 bounded event cache replay 和 `Last-Event-ID` 补发。
+  - 尚未实现 long-running stream 的周期性 invalidate 生产和 slow client bounded queue。
 
 - 部署脚本经验沉淀：
   - 一次错误 full rollout 使用同一行环境变量赋值并传 `"$COORDINATORS"`，导致参数展开为空，引发远端 `$6: unbound variable`。
@@ -227,6 +229,6 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
 ## 下一步
 
 1. 为 Metrics Panel 增加可见性暂停、absolute range pause、断线全窗口补偿和前端 render metrics。
-2. 为 tide worker 和 group leader query 补齐 step 聚合、series budget 和 topN。
-3. 为 SSE 增加完整 event cache replay 和 slow client bounded queue。
+2. 为 tide worker 和 group leader query 补齐 topN。
+3. 为 SSE 增加 long-running stream 周期性 invalidate 生产和 slow client bounded queue。
 4. 上线前端后继续用线上 SQLite 分析 group heartbeat 是否达到设计目标。

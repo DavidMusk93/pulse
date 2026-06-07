@@ -183,18 +183,26 @@ class CoordinatorHttpServerTest {
         assertTrue(stream.body().contains("event_cache_supported"));
         assertTrue(stream.body().contains("event: storage.health"));
         assertTrue(stream.body().contains("event: metric.invalidate"));
+        String firstEventId = stream.body().lines()
+                .filter(line -> line.startsWith("id: "))
+                .findFirst()
+                .orElseThrow()
+                .substring("id: ".length());
 
         HttpResponse<String> resumed = client.send(
                 HttpRequest.newBuilder(URI.create(baseUrl + "/api/metrics/stream?once=true"))
                         .timeout(Duration.ofSeconds(5))
-                        .header("Last-Event-ID", "1710000000000-2")
+                        .header("Last-Event-ID", firstEventId)
                         .GET()
                         .build(),
                 HttpResponse.BodyHandlers.ofString());
 
         assertEquals(200, resumed.statusCode());
         assertTrue(resumed.body().contains("\"resumed\":true"));
-        assertTrue(resumed.body().contains("\"last_event_id\":\"1710000000000-2\""));
+        assertTrue(resumed.body().contains("\"last_event_id\":\"" + firstEventId + "\""));
+        assertTrue(resumed.body().contains("\"event_cache_supported\":true"));
+        assertTrue(resumed.body().contains("\"replayed_events\":"));
+        assertTrue(resumed.body().contains("event: storage.health"));
     }
 
     @Test
