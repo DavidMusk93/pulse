@@ -3,10 +3,10 @@
 ## 状态
 
 - 时间：2026-06-07
-- 最新已部署提交：`3bdf858 Add metrics SSE event replay cache`
+- 最新已部署提交：`42d052e Add bounded periodic metrics stream`
 - 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget
 - 部署范围：`cdn_new` 50 台 agent 已完成 query budget rollout；3 台 coordinator 已完成 frontend Metrics Panel rollout
-- JAR SHA：`89522526c4fd1745c845a4c5dc29b3a5f483d9f25dbcdc0d07aec3cd189c33f0`
+- JAR SHA：`3961cfc7f4bd7e787f2caca012a091389fef2a55c37dd4a1b234712a5f8ca28d`
 - 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览。
 
 ## 已完成
@@ -106,6 +106,7 @@ frontend live compensation deploy: total=3 ok=3 failed=0 elapsed=16s
 tide/group aggregation deploy: total=3 ok=3 failed=0 elapsed=18s
 SSE resume metadata deploy: total=3 ok=3 failed=0 elapsed=18s
 SSE event replay cache deploy: total=3 ok=3 failed=0 elapsed=17s
+bounded periodic metrics stream deploy: total=3 ok=3 failed=0 elapsed=15s
 ```
 
 最新 query budget 和 storage health 验证：
@@ -165,6 +166,14 @@ QUERY metric=group.submitted_agent_count unit=count policy=avg truncated=True su
 COORD fdbd:dc05:11:634::45 bytes=1259 missing=[]
 COORD fdbd:dc05:13:10c::40 bytes=1257 missing=[]
 COORD fdbd:dc07:0:810::44 bytes=1254 missing=[]
+```
+
+最新周期性 metrics stream 验证：
+
+```text
+COORD fdbd:dc05:11:634::45 bytes=1923 invalidations=5 pings=4 missing=[]
+COORD fdbd:dc05:13:10c::40 bytes=1923 invalidations=5 pings=4 missing=[]
+COORD fdbd:dc07:0:810::44 bytes=1920 invalidations=5 pings=4 missing=[]
 ```
 
 历史 coordinator rollout：`3/3 ok`。
