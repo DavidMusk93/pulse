@@ -62,6 +62,7 @@
   - 已实现 Ant Design Metrics Panel 第一版，包含 storage health、metric selector、agent selector、range selector、query budget 状态和 SVG sparkline。
   - 已接入 `/api/metrics/catalog`、`/api/metrics/storage`、`/api/metrics/query_range`、`/api/metrics/stream`。
   - 已用 Vite 构建同步 `src/main/resources/static/pulse-hosts.js` 和 `pulse-hosts.css`。
+  - 已新增 `src/main/frontend/src/metrics.ts`，拆出 `MetricQueryController`、`SeriesStore`、`RenderScheduler`、`SvgChartAdapter` 的第一版骨架。
 
 ## 测试
 
@@ -160,7 +161,8 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
 
 - 前端时序面板仍需增强：
   - 第一版已实现 Ant Design Metrics Panel 和 SVG 预览。
-  - 尚未实现 QueryController、SeriesStore、RenderScheduler、ChartAdapter 的完整分层。
+  - 已有 QueryController、SeriesStore、RenderScheduler、ChartAdapter 骨架。
+  - 仍需把 live invalidation merge、range cache、降采样补偿查询从 React 组件中继续下沉。
   - 尚未接入 ECharts/uPlot 高密度图表。
 
 - SSE 仍是轻量第一版：
@@ -186,7 +188,7 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
 
 ## 下一步
 
-1. 将 Metrics Panel 拆分为 QueryController、SeriesStore、RenderScheduler、ChartAdapter。
+1. 为 Metrics Panel 增加 live invalidation merge、range cache、降采样补偿查询。
 2. 为 tide worker 和 group leader query 补齐 step 聚合、series budget 和 topN。
 3. 为 SSE 增加 `Last-Event-ID`、事件缓存和 slow client bounded queue。
 4. 上线前端后继续用线上 SQLite 分析 group heartbeat 是否达到设计目标。

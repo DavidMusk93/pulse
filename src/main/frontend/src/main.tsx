@@ -23,6 +23,15 @@ import {
   theme
 } from 'antd';
 import { CopyOutlined, DownloadOutlined, InboxOutlined } from '@ant-design/icons';
+import {
+  MetricQueryController,
+  RenderScheduler,
+  SeriesStore,
+  SvgChartAdapter,
+  type MetricCatalogItem,
+  type MetricQueryResultView,
+  type MetricStorageHealth
+} from './metrics';
 import 'antd/dist/reset.css';
 import './style.css';
 
@@ -72,57 +81,6 @@ type TaskSnapshot = {
   task_definitions?: string[];
   file_transfers?: any[];
   output_streams?: any[];
-};
-
-type MetricCatalogItem = {
-  metric: string;
-  title: string;
-  unit: string;
-};
-
-type MetricStorageHealth = {
-  status?: string;
-  queue_depth?: number;
-  accepted_commands?: number;
-  written_commands?: number;
-  dropped_commands?: number;
-  failed_commands?: number;
-  maintenance_commands?: number;
-  deleted_samples?: number;
-  checkpoint_commands?: number;
-  transaction_batches?: number;
-  last_error?: string;
-};
-
-type MetricPointView = {
-  timestamp_ms?: number;
-  timestampMs?: number;
-  value?: number;
-  metadata?: Record<string, any>;
-};
-
-type MetricSeriesView = {
-  labels?: Record<string, string>;
-  points?: MetricPointView[];
-};
-
-type MetricQueryResultView = {
-  query_id?: string;
-  queryId?: string;
-  metric?: string;
-  from?: number;
-  to?: number;
-  unit?: string;
-  sample_policy?: string;
-  samplePolicy?: string;
-  truncated?: boolean;
-  suggested_step_ms?: number;
-  suggestedStepMs?: number;
-  series_limit?: number;
-  seriesLimit?: number;
-  point_limit?: number;
-  pointLimit?: number;
-  series?: MetricSeriesView[];
 };
 
 const loadAverageWindowMs = 5 * 60 * 1000;
@@ -668,15 +626,6 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json();
 }
 
-function metricPointTimestamp(point: MetricPointView) {
-  return point.timestamp_ms ?? point.timestampMs ?? 0;
-}
-
-function metricPointValue(point: MetricPointView) {
-  const value = Number(point.value);
-  return Number.isFinite(value) ? value : 0;
-}
-
 function parseTaskArgs(input: string) {
   return input.split(/\s+/).map(part => part.trim()).filter(Boolean);
 }
@@ -1055,6 +1004,8 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const [error, setError] = useState('');
   const [liveStatus, setLiveStatus] = useState('connecting');
   const [lastInvalidateAt, setLastInvalidateAt] = useState<number | null>(null);
+  const queryController = useMemo(() => new MetricQueryController(fetchJson), []);
+  const renderScheduler = useMemo(() => new RenderScheduler(), []);
   const agentOptions = useMemo(() => sortHosts(hosts)
     .filter(host => host.status === 'alive')
     .slice(0, 120)
@@ -1071,24 +1022,11 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const visibleAgents = selectedAgents.length ? selectedAgents : agentOptions.slice(0, 3).map(option => option.value);
 
   async function loadMetrics(nextMetric = metric, nextAgents = visibleAgents, nextRangeMinutes = rangeMinutes) {
-    const end = Date.now();
-    const start = end - nextRangeMinutes * 60_000;
-    const params = new URLSearchParams({
-      metric: nextMetric,
-      start_ms: String(start),
-      end_ms: String(end),
-      step_ms: '10000',
-      point_limit: '20000',
-      series_limit: '12'
-    });
-    if (nextAgents.length) {
-      params.set('agents', nextAgents.join(','));
-    }
     setLoading(true);
     setError('');
     try {
-      const data = await fetchJson<MetricQueryResultView>(`/api/metrics/query_range?${params.toString()}`);
-      setResult(data);
+      const data = await queryController.queryRange({ metric: nextMetric, agents: nextAgents, rangeMinutes: nextRangeMinutes });
+      renderScheduler.schedule(() => setResult(data));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1097,13 +1035,13 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   }
 
   useEffect(() => {
-    fetchJson<MetricCatalogItem[]>('/api/metrics/catalog').then(items => {
+    queryController.catalog().then(items => {
       setCatalog(items);
       if (items.length && !items.some(item => item.metric === metric)) {
         setMetric(items[0].metric);
       }
     }).catch(err => setError(err instanceof Error ? err.message : String(err)));
-    fetchJson<MetricStorageHealth>('/api/metrics/storage').then(setStorage).catch(err => setError(err instanceof Error ? err.message : String(err)));
+    queryController.storage().then(setStorage).catch(err => setError(err instanceof Error ? err.message : String(err)));
   }, []);
 
   useEffect(() => {
@@ -1137,8 +1075,11 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
     return () => events.close();
   }, []);
 
-  const seriesCount = result?.series?.length || 0;
-  const pointCount = result?.series?.reduce((sum, series) => sum + (series.points?.length || 0), 0) || 0;
+  useEffect(() => () => renderScheduler.cancel(), [renderScheduler]);
+
+  const seriesStore = useMemo(() => new SeriesStore(result), [result]);
+  const seriesCount = seriesStore.seriesCount();
+  const pointCount = seriesStore.pointCount();
   const storageStatus = storage?.status || 'unknown';
   const storageTone = storageStatus === 'ok' ? 'success' : storageStatus === 'disabled' ? 'default' : 'warning';
 
@@ -1199,33 +1140,18 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
 });
 
 const MetricSparkline = memo(function MetricSparkline({ result }: { result: MetricQueryResultView | null }) {
-  const series = result?.series || [];
-  const points = series.flatMap(item => item.points || []);
-  if (!points.length) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有可绘制的数据点" />;
-  const timestamps = points.map(metricPointTimestamp);
-  const values = points.map(metricPointValue);
-  const minT = Math.min(...timestamps);
-  const maxT = Math.max(...timestamps);
-  const minV = Math.min(...values);
-  const maxV = Math.max(...values);
-  const spanT = Math.max(1, maxT - minT);
-  const spanV = Math.max(1, maxV - minV);
-  const width = 720;
-  const height = 220;
+  const adapter = useMemo(() => new SvgChartAdapter(), []);
+  const model = useMemo(() => adapter.model(result), [adapter, result]);
+  if (!model) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有可绘制的数据点" />;
   const palette = ['#2563eb', '#16a34a', '#dc2626', '#9333ea', '#ea580c', '#0891b2'];
-  const toX = (timestamp: number) => 28 + (timestamp - minT) * (width - 56) / spanT;
-  const toY = (value: number) => height - 26 - (value - minV) * (height - 52) / spanV;
 
-  return <svg className="metrics-sparkline" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="metrics sparkline">
-    <rect x="0" y="0" width={width} height={height} rx="18" />
-    <line x1="28" y1={height - 26} x2={width - 28} y2={height - 26} />
-    <line x1="28" y1="24" x2="28" y2={height - 26} />
-    {series.slice(0, 6).map((item, index) => {
-      const path = (item.points || []).map(point => `${toX(metricPointTimestamp(point)).toFixed(1)},${toY(metricPointValue(point)).toFixed(1)}`).join(' ');
-      return <polyline key={index} points={path} fill="none" stroke={palette[index % palette.length]} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />;
-    })}
-    <text x="34" y="20">{maxV.toFixed(1)}</text>
-    <text x="34" y={height - 8}>{minV.toFixed(1)}</text>
+  return <svg className="metrics-sparkline" viewBox={`0 0 ${model.width} ${model.height}`} role="img" aria-label="metrics sparkline">
+    <rect x="0" y="0" width={model.width} height={model.height} rx="18" />
+    <line x1="28" y1={model.height - 26} x2={model.width - 28} y2={model.height - 26} />
+    <line x1="28" y1="24" x2="28" y2={model.height - 26} />
+    {model.series.map((path, index) => <polyline key={index} points={path} fill="none" stroke={palette[index % palette.length]} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />)}
+    <text x="34" y="20">{model.maxValue.toFixed(1)}</text>
+    <text x="34" y={model.height - 8}>{model.minValue.toFixed(1)}</text>
   </svg>;
 });
 
