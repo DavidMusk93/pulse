@@ -206,6 +206,23 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
+    void metricsStreamProducesBoundedPeriodicInvalidations() throws Exception {
+        HttpResponse<String> stream = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl + "/api/metrics/stream?interval_ms=5&max_ms=25"))
+                        .timeout(Duration.ofSeconds(5))
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, stream.statusCode());
+        long invalidations = stream.body().lines().filter("event: metric.invalidate"::equals).count();
+        assertTrue(invalidations >= 2);
+        assertTrue(stream.body().contains("\"stream_max_ms\":25"));
+        assertTrue(stream.body().contains("\"stream_interval_ms\":5"));
+        assertTrue(stream.body().contains("event: ping"));
+    }
+
+    @Test
     void metricsEventsEndpointReturnsHostEvents() throws Exception {
         metricStorage.writeHostEvent(new HostEvent(
                 "event-1",

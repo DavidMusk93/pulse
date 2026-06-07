@@ -260,6 +260,8 @@ public class CoordinatorHttpServer {
 
         boolean once = "true".equalsIgnoreCase(queryValue(exchange.getRequestURI(), "once"));
         long now = System.currentTimeMillis();
+        long intervalMs = Math.max(1, longQuery(exchange.getRequestURI(), "interval_ms", positiveLong("PULSE_METRIC_SSE_INTERVAL_MS", 5_000)));
+        long maxStreamMs = Math.max(1, longQuery(exchange.getRequestURI(), "max_ms", positiveLong("PULSE_METRIC_SSE_MAX_MS", 15 * 60_000)));
         String lastEventId = Optional.ofNullable(exchange.getRequestHeaders().getFirst("Last-Event-ID"))
                 .orElse(queryValue(exchange.getRequestURI(), "last_event_id"));
         boolean resumed = lastEventId != null && !lastEventId.isBlank();
@@ -274,7 +276,9 @@ public class CoordinatorHttpServer {
                     "last_event_id", lastEventId == null ? "" : lastEventId,
                     "event_cache_supported", true,
                     "replayed_events", replayEvents.size(),
-                    "replay_limit", metricEventCacheLimit))));
+                    "replay_limit", metricEventCacheLimit,
+                    "stream_interval_ms", intervalMs,
+                    "stream_max_ms", maxStreamMs))));
             for (SseEvent event : replayEvents) {
                 writeSse(output, event);
             }
@@ -284,8 +288,28 @@ public class CoordinatorHttpServer {
                     "to", now,
                     "metrics", List.of("heartbeat.arrival_gap_ms", "agent.thread_count", "group.submitted_agent_count"))));
             if (!once) {
-                writeCachedMetricEvent(output, "ping", mapper.writeValueAsString(Map.of("server_time_ms", System.currentTimeMillis())));
+                long deadline = System.currentTimeMillis() + maxStreamMs;
+                while (!Thread.currentThread().isInterrupted() && System.currentTimeMillis() < deadline) {
+                    sleepQuietly(intervalMs);
+                    long tick = System.currentTimeMillis();
+                    if (tick >= deadline) {
+                        break;
+                    }
+                    writeCachedMetricEvent(output, "metric.invalidate", mapper.writeValueAsString(Map.of(
+                            "from", tick - Math.max(intervalMs, 30_000),
+                            "to", tick,
+                            "metrics", List.of("heartbeat.arrival_gap_ms", "agent.thread_count", "group.submitted_agent_count"))));
+                    writeCachedMetricEvent(output, "ping", mapper.writeValueAsString(Map.of("server_time_ms", tick)));
+                }
             }
+        }
+    }
+
+    private static void sleepQuietly(long intervalMs) {
+        try {
+            Thread.sleep(intervalMs);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
         }
     }
 
