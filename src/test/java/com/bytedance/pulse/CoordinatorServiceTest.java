@@ -3,6 +3,7 @@ package com.bytedance.pulse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -10,9 +11,12 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class CoordinatorServiceTest {
     private final Clock clock = Clock.fixed(Instant.ofEpochMilli(1_710_000_000_000L), ZoneOffset.UTC);
+    @TempDir
+    Path tempDir;
 
     @Test
     void heartbeatStoresHostState() {
@@ -51,6 +55,49 @@ class CoordinatorServiceTest {
         HostView host = service.hosts().get(0);
         assertEquals("warming", host.status());
         assertEquals(1, host.heartbeatConfirmations());
+    }
+
+    @Test
+    void heartbeatWritesDiagnosticMetricSamples() throws Exception {
+        MutableClock mutableClock = new MutableClock(Instant.ofEpochMilli(1_710_000_000_000L));
+        try (LocalMetricStorage storage = LocalMetricStorage.open(tempDir.resolve("metrics.db"))) {
+            CoordinatorService service = new CoordinatorService("coordinator-a", mutableClock, storage);
+
+            service.handleHeartbeat(diagnosticHeartbeat("agent-1", 1, 40, 4, 5, 6, 19, 72_000));
+            mutableClock.advance(Duration.ofSeconds(10));
+            service.handleHeartbeat(diagnosticHeartbeat("agent-1", 1, 43, 7, 8, 9, 21, 73_000));
+
+            MetricQueryResult gaps = storage.queryRange(new MetricQuery(
+                    "heartbeat.seq_gap",
+                    List.of("agent-1"),
+                    1_710_000_000_000L,
+                    1_710_000_010_000L,
+                    1_000,
+                    10));
+            MetricQueryResult arrivals = storage.queryRange(new MetricQuery(
+                    "heartbeat.arrival_gap_ms",
+                    List.of("agent-1"),
+                    1_710_000_000_000L,
+                    1_710_000_010_000L,
+                    1_000,
+                    10));
+
+            assertEquals(List.of(0.0, 2.0), gaps.series().get(0).points().stream().map(MetricPoint::value).toList());
+            assertEquals(List.of(0.0, 10_000.0), arrivals.series().get(0).points().stream().map(MetricPoint::value).toList());
+            assertEquals(List.of(19.0, 21.0), storage.queryRange(new MetricQuery(
+                            "agent.thread_count",
+                            List.of("agent-1"),
+                            1_710_000_000_000L,
+                            1_710_000_010_000L,
+                            1_000,
+                            10))
+                    .series()
+                    .get(0)
+                    .points()
+                    .stream()
+                    .map(MetricPoint::value)
+                    .toList());
+        }
     }
 
     @Test
@@ -556,6 +603,40 @@ class CoordinatorServiceTest {
                 .filter(message -> "cmd.task_execute".equals(message.type()))
                 .findFirst()
                 .orElseThrow();
+    }
+
+    private static HeartbeatRequest diagnosticHeartbeat(
+            String agentId,
+            long epoch,
+            long seq,
+            long collectMs,
+            long encodeMs,
+            long sendMs,
+            long threadCount,
+            long rssKb) {
+        return new HeartbeatRequest(
+                null,
+                agentId,
+                epoch,
+                seq,
+                30_000L,
+                List.of(new PulseMessage(
+                        "state-" + agentId + "-" + seq,
+                        "state.heartbeat",
+                        1,
+                        null,
+                        null,
+                        Map.ofEntries(
+                                Map.entry("host", "host-1"),
+                                Map.entry("ip", "10.0.0.1"),
+                                Map.entry("cluster", "cluster-a"),
+                                Map.entry("area", "area-a"),
+                                Map.entry("agent_collect_ms", collectMs),
+                                Map.entry("agent_encode_ms", encodeMs),
+                                Map.entry("agent_send_ms", sendMs),
+                                Map.entry("agent_thread_count", threadCount),
+                                Map.entry("agent_rss_kb", rssKb)))),
+                List.of());
     }
 
     private static void completeTask(CoordinatorService service, PulseMessage command, String output, long seq) {

@@ -24,6 +24,7 @@ public class CoordinatorService {
     private final Map<String, GroupView> groupViews = new ConcurrentHashMap<>();
     private final int groupLeaderPort;
     private final RemoteTaskService taskService;
+    private final LocalMetricStorage metricStorage;
     private final long hostSnapshotTtlMs;
     private final long groupRecomputeIntervalMs;
     private final Object hostSnapshotLock = new Object();
@@ -34,10 +35,15 @@ public class CoordinatorService {
     private volatile long lastGroupRecomputeAtMs = Long.MIN_VALUE;
 
     public CoordinatorService(String coordinatorId, Clock clock) {
+        this(coordinatorId, clock, null);
+    }
+
+    CoordinatorService(String coordinatorId, Clock clock, LocalMetricStorage metricStorage) {
         this.coordinatorId = coordinatorId;
         this.clock = clock;
         this.groupLeaderPort = Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_PORT", "9977"));
         this.taskService = new RemoteTaskService(clock);
+        this.metricStorage = metricStorage;
         this.hostSnapshotTtlMs = positiveLong("PULSE_HOST_SNAPSHOT_TTL_MS", DEFAULT_HOST_SNAPSHOT_TTL_MS);
         this.groupRecomputeIntervalMs = positiveLong("PULSE_GROUP_RECOMPUTE_INTERVAL_MS", DEFAULT_GROUP_RECOMPUTE_INTERVAL_MS);
     }
@@ -185,8 +191,10 @@ public class CoordinatorService {
     }
 
     private long merge(AgentHeartbeat heartbeat, String source, long observedAtMs, List<PulseMessage> messages) {
+        NodeState previous = states.get(heartbeat.agentId());
         NodeState incoming = NodeState.fromHeartbeat(heartbeat, source, observedAtMs, messages);
         states.merge(heartbeat.agentId(), incoming, NodeState::newer);
+        writeHeartbeatMetric(heartbeat, source, observedAtMs, messages, previous);
         markStateChanged();
         return states.get(heartbeat.agentId()).seq;
     }
@@ -203,6 +211,69 @@ public class CoordinatorService {
     private void markStateChanged() {
         groupRecomputeDirty = true;
         hostSnapshotAtMs = Long.MIN_VALUE;
+    }
+
+    private void writeHeartbeatMetric(
+            AgentHeartbeat heartbeat,
+            String source,
+            long observedAtMs,
+            List<PulseMessage> messages,
+            NodeState previous) {
+        if (metricStorage == null) {
+            return;
+        }
+        Map<String, Object> state = NodeState.extractState(messages);
+        AgentGroupPlan plan = groupPlans.getOrDefault(heartbeat.agentId(), AgentGroupPlan.direct(heartbeat.agentId()));
+        long arrivalGapMs = previous == null ? 0 : Math.max(0, observedAtMs - previous.observedAtMs);
+        long seqGap = previous == null || previous.epoch != heartbeat.epoch()
+                ? 0
+                : Math.max(0, heartbeat.seq() - previous.seq - 1);
+        try {
+            metricStorage.writeHeartbeat(new HeartbeatMetricSample(
+                    observedAtMs,
+                    heartbeat.agentId(),
+                    stringState(state, "host", heartbeat.agentId()),
+                    stringState(state, "cluster", "unknown"),
+                    stringState(state, "area", "unknown"),
+                    source == null || source.isBlank() ? "unknown" : source,
+                    plan.groupMode(),
+                    heartbeat.epoch(),
+                    heartbeat.seq(),
+                    heartbeat.ttlMs(),
+                    seqGap,
+                    arrivalGapMs,
+                    longState(state, "agent_collect_ms"),
+                    longState(state, "agent_encode_ms"),
+                    longState(state, "agent_send_ms"),
+                    longState(state, "agent_thread_count"),
+                    longState(state, "agent_rss_kb"),
+                    state));
+        } catch (Exception exception) {
+            System.err.printf("metric_write status=failed agent_id=%s error=%s%n", heartbeat.agentId(), exception.getMessage());
+        }
+    }
+
+    private static String stringState(Map<String, Object> state, String key, String fallback) {
+        Object value = state.get(key);
+        if (value == null || value.toString().isBlank()) {
+            return fallback;
+        }
+        return value.toString();
+    }
+
+    private static long longState(Map<String, Object> state, String key) {
+        Object value = state.get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value == null || value.toString().isBlank()) {
+            return 0;
+        }
+        try {
+            return Long.parseLong(value.toString());
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
     }
 
     private List<HostView> hostSnapshot(long now) {
