@@ -23,3 +23,9 @@
 - Regression tests should cover both cases:
   - Small sparse windows keep the requested step and preserve separate points.
   - Truncated results return `truncated=true` and a larger `suggested_step_ms`.
+
+## Heartbeat HTTP fixtures
+
+- `CoordinatorHttpServer` heartbeat tests should put agent runtime fields inside `messages[].payload` for `state.heartbeat` messages.
+- Do not rely on top-level `state` to populate metric columns such as `agent_thread_count`; it may still leave the storage metric value at the default and make TopN tests pass only because of stable label tie-break ordering.
+- When testing TopN or aggregate behavior through HTTP, assert both ordering and numeric values so fixture mistakes cannot produce a false green result.

@@ -774,7 +774,29 @@ final class LocalMetricStorage implements MetricStorage {
         if (ordered.size() > limit) {
             ordered = List.copyOf(ordered.subList(0, limit));
         }
+        if (truncated) {
+            List<MetricSeries> withAggregate = new ArrayList<>(ordered);
+            withAggregate.add(aggregateSeries(series));
+            ordered = List.copyOf(withAggregate);
+        }
         return new SeriesBudgetResult(ordered, truncated);
+    }
+
+    private static MetricSeries aggregateSeries(List<MetricSeries> series) {
+        Map<Long, AggregateBucket> buckets = new LinkedHashMap<>();
+        series.stream()
+                .flatMap(item -> item.points().stream())
+                .sorted(Comparator.comparingLong(MetricPoint::timestampMs))
+                .forEach(point -> buckets
+                        .computeIfAbsent(point.timestampMs(), ignored -> new AggregateBucket())
+                        .add(point.value()));
+        List<MetricPoint> points = buckets.entrySet().stream()
+                .map(entry -> new MetricPoint(
+                        entry.getKey(),
+                        entry.getValue().average(),
+                        Map.of("series_count", entry.getValue().count())))
+                .toList();
+        return new MetricSeries(Map.of("series_role", "aggregate", "aggregate", "avg"), points);
     }
 
     private static double maxPointValue(MetricSeries series) {
@@ -889,6 +911,24 @@ final class LocalMetricStorage implements MetricStorage {
 }
 
 record SeriesBudgetResult(List<MetricSeries> series, boolean truncated) {}
+
+final class AggregateBucket {
+    private double sum;
+    private int count;
+
+    void add(double value) {
+        sum += value;
+        count++;
+    }
+
+    double average() {
+        return count == 0 ? 0.0 : sum / count;
+    }
+
+    int count() {
+        return count;
+    }
+}
 
 record HeartbeatMetricSample(
         long observedAtMs,

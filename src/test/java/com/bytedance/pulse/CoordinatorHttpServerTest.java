@@ -174,7 +174,14 @@ class CoordinatorHttpServerTest {
                   "epoch":1,
                   "seq":1,
                   "ttl_ms":30000,
-                  "state":{"agent_thread_count":10}
+                  "messages":[
+                    {
+                      "message_id":"msg-agent-low-1",
+                      "type":"state.heartbeat",
+                      "version":1,
+                      "payload":{"agent_thread_count":10}
+                    }
+                  ]
                 }
                 """);
         postJson("/heartbeat", """
@@ -187,7 +194,14 @@ class CoordinatorHttpServerTest {
                   "epoch":1,
                   "seq":1,
                   "ttl_ms":30000,
-                  "state":{"agent_thread_count":90}
+                  "messages":[
+                    {
+                      "message_id":"msg-agent-high-1",
+                      "type":"state.heartbeat",
+                      "version":1,
+                      "payload":{"agent_thread_count":90}
+                    }
+                  ]
                 }
                 """);
 
@@ -196,8 +210,11 @@ class CoordinatorHttpServerTest {
         assertEquals(200, range.statusCode());
         JsonNode body = mapper.readTree(range.body());
         assertEquals(true, body.get("truncated").asBoolean());
-        assertEquals(1, body.get("series").size());
+        assertEquals(2, body.get("series").size());
         assertEquals("agent-high", body.get("series").get(0).get("labels").get("agent_id").asText());
+        assertEquals("aggregate", body.get("series").get(1).get("labels").get("series_role").asText());
+        assertEquals(50.0, body.get("series").get(1).get("points").get(0).get("value").asDouble(), 0.001);
+        assertEquals(2, body.get("series").get(1).get("points").get(0).get("metadata").get("series_count").asInt());
     }
 
     @Test

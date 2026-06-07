@@ -331,9 +331,16 @@ class LocalMetricStorageTest {
                     2));
 
             assertTrue(result.truncated());
-            assertEquals(List.of("agent-high", "agent-mid"), result.series().stream()
+            assertEquals(List.of("agent-high", "agent-mid"), result.series().subList(0, 2).stream()
                     .map(series -> series.labels().get("agent_id"))
                     .toList());
+            assertEquals(3, result.series().size());
+            MetricSeries aggregate = result.series().get(2);
+            assertEquals("aggregate", aggregate.labels().get("series_role"));
+            assertEquals("avg", aggregate.labels().get("aggregate"));
+            assertEquals(1, aggregate.points().size());
+            assertEquals((80.0 + 40.0 + 10.0) / 3.0, aggregate.points().get(0).value(), 0.001);
+            assertEquals(3, aggregate.points().get(0).metadata().get("series_count"));
         }
     }
 
