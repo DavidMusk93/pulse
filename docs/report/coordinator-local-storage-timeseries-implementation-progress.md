@@ -3,10 +3,10 @@
 ## 状态
 
 - 时间：2026-06-07
-- 最新已部署提交：`7c0628e Add metrics SSE resume metadata`
+- 最新已部署提交：`3bdf858 Add metrics SSE event replay cache`
 - 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget
 - 部署范围：`cdn_new` 50 台 agent 已完成 query budget rollout；3 台 coordinator 已完成 frontend Metrics Panel rollout
-- JAR SHA：`fda3161bd4ece0e72a9323a15403e401237208487d29955b28447efc9fae203e`
+- JAR SHA：`89522526c4fd1745c845a4c5dc29b3a5f483d9f25dbcdc0d07aec3cd189c33f0`
 - 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览。
 
 ## 已完成
@@ -102,6 +102,7 @@ frontend data-layer deploy: total=3 ok=3 failed=0 elapsed=25s
 frontend live compensation deploy: total=3 ok=3 failed=0 elapsed=16s
 tide/group aggregation deploy: total=3 ok=3 failed=0 elapsed=18s
 SSE resume metadata deploy: total=3 ok=3 failed=0 elapsed=18s
+SSE event replay cache deploy: total=3 ok=3 failed=0 elapsed=17s
 ```
 
 最新 query budget 和 storage health 验证：
@@ -158,9 +159,9 @@ QUERY metric=group.submitted_agent_count unit=count policy=avg truncated=True su
 最新 SSE resume 验证：
 
 ```text
-COORD fdbd:dc05:11:634::45 bytes=734 missing=[]
-COORD fdbd:dc05:13:10c::40 bytes=731 missing=[]
-COORD fdbd:dc07:0:810::44 bytes=730 missing=[]
+COORD fdbd:dc05:11:634::45 bytes=1259 missing=[]
+COORD fdbd:dc05:13:10c::40 bytes=1257 missing=[]
+COORD fdbd:dc07:0:810::44 bytes=1254 missing=[]
 ```
 
 历史 coordinator rollout：`3/3 ok`。
