@@ -1,6 +1,7 @@
 package com.bytedance.pulse;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -56,6 +57,21 @@ class AgentHeartbeatFactoryTest {
                         "task_type", "analyze_block_layout_dry_run",
                         "status", "running")),
                 heartbeat.messages().get(0).payload().get("async_tasks"));
+    }
+
+    @Test
+    void includesLowResourceAgentDiagnosticsInStateHeartbeat() {
+        Clock clock = Clock.fixed(Instant.ofEpochMilli(1_710_000_000_000L), ZoneOffset.UTC);
+        AgentHeartbeatFactory factory = new AgentHeartbeatFactory(
+                "agent-1", "host-1", "fd00::1", "cdn_new", "area-a", "az-a", "worker", 100, 15_000, clock);
+
+        Map<String, Object> payload = factory.nextHeartbeat().messages().get(0).payload();
+
+        assertTrue(((Number) payload.get("agent_thread_count")).longValue() > 0);
+        assertTrue(((Number) payload.get("agent_rss_kb")).longValue() >= 0);
+        assertTrue(((Number) payload.get("agent_collect_ms")).longValue() >= 0);
+        assertEquals(0L, payload.get("agent_encode_ms"));
+        assertEquals(0L, payload.get("agent_send_ms"));
     }
 
     @Test

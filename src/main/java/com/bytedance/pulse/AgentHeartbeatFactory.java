@@ -1,5 +1,6 @@
 package com.bytedance.pulse;
 
+import java.lang.management.ManagementFactory;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
@@ -118,6 +119,7 @@ public class AgentHeartbeatFactory {
     }
 
     private Map<String, Object> heartbeatPayload(List<Map<String, Object>> asyncTasks) {
+        long startedNs = System.nanoTime();
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("status", "alive");
         payload.put("host", host);
@@ -130,6 +132,11 @@ public class AgentHeartbeatFactory {
         payload.put("tide_workers", tideWorkers());
         payload.put("async_tasks", asyncTasks == null ? List.of() : asyncTasks);
         payload.put("agent_time_ms", clock.millis());
+        payload.put("agent_thread_count", ManagementFactory.getThreadMXBean().getThreadCount());
+        payload.put("agent_rss_kb", selfRssKb());
+        payload.put("agent_encode_ms", 0L);
+        payload.put("agent_send_ms", 0L);
+        payload.put("agent_collect_ms", Math.max(0L, (System.nanoTime() - startedNs) / 1_000_000L));
         return payload;
     }
 
@@ -323,6 +330,10 @@ public class AgentHeartbeatFactory {
                 .findFirst()
                 .flatMap(AgentHeartbeatFactory::firstNumber)
                 .orElse(0L);
+    }
+
+    private long selfRssKb() {
+        return statusNumber(readString(procDir.resolve("self/status")), "VmRSS:").orElse(0L);
     }
 
     private static Optional<Long> firstNumber(String line) {
