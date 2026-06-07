@@ -71,7 +71,8 @@ final class AsyncLocalMetricStorage implements MetricStorage {
         }
     }
 
-    MetricStorageHealth health() {
+    @Override
+    public MetricStorageHealth health() {
         String status = failedCommands.get() > 0 || droppedCommands.get() > 0 ? "degraded" : "ok";
         return new MetricStorageHealth(
                 status,

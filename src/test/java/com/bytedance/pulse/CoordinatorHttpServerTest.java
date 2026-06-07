@@ -146,6 +146,27 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
+    void metricsStorageAndStreamExposeHealthAndInvalidationEvents() throws Exception {
+        HttpResponse<String> storage = get("/api/metrics/storage");
+        assertEquals(200, storage.statusCode());
+        JsonNode health = mapper.readTree(storage.body());
+        assertEquals("ok", health.get("status").asText());
+
+        HttpResponse<String> stream = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl + "/api/metrics/stream?once=true"))
+                        .timeout(Duration.ofSeconds(5))
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, stream.statusCode());
+        assertTrue(stream.headers().firstValue("content-type").orElse("").contains("text/event-stream"));
+        assertTrue(stream.body().contains("event: hello"));
+        assertTrue(stream.body().contains("event: storage.health"));
+        assertTrue(stream.body().contains("event: metric.invalidate"));
+    }
+
+    @Test
     void hostsPageRendersFlatSquareChineseHeartbeatConsole() throws Exception {
         postJson("/heartbeat", """
                 {

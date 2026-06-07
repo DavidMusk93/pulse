@@ -90,6 +90,18 @@ public class CoordinatorHttpServer {
                 writeJson(exchange, 200, service.queryMetrics(metricQuery(exchange.getRequestURI())));
                 return;
             }
+            if ("GET".equals(method) && "/api/metrics/storage".equals(path)) {
+                writeJson(exchange, 200, service.metricStorageHealth());
+                return;
+            }
+            if ("GET".equals(method) && "/api/metrics/stream".equals(path)) {
+                try {
+                    writeMetricStream(exchange);
+                } catch (IOException ignored) {
+                    // Client disconnected or proxy closed the SSE stream.
+                }
+                return;
+            }
             if ("GET".equals(method) && path.startsWith("/assets/")) {
                 writeStaticAsset(exchange, path);
                 return;
@@ -224,6 +236,31 @@ public class CoordinatorHttpServer {
                     Thread.currentThread().interrupt();
                     break;
                 }
+            }
+        }
+    }
+
+    private void writeMetricStream(HttpExchange exchange) throws IOException {
+        exchange.getResponseHeaders().set("content-type", "text/event-stream; charset=utf-8");
+        exchange.getResponseHeaders().set("cache-control", "no-cache");
+        exchange.getResponseHeaders().set("connection", "keep-alive");
+        exchange.getResponseHeaders().set("x-accel-buffering", "no");
+        exchange.sendResponseHeaders(200, 0);
+
+        boolean once = "true".equalsIgnoreCase(queryValue(exchange.getRequestURI(), "once"));
+        long now = System.currentTimeMillis();
+        try (OutputStream output = exchange.getResponseBody()) {
+            writeSse(output, "hello", 0, mapper.writeValueAsString(Map.of(
+                    "coordinator_id", service.coordinatorId(),
+                    "server_time_ms", now,
+                    "compensate_from_ms", now - 30_000)));
+            writeSse(output, "storage.health", 1, mapper.writeValueAsString(service.metricStorageHealth()));
+            writeSse(output, "metric.invalidate", 2, mapper.writeValueAsString(Map.of(
+                    "from", now - 30_000,
+                    "to", now,
+                    "metrics", List.of("heartbeat.arrival_gap_ms", "agent.thread_count", "group.submitted_agent_count"))));
+            if (!once) {
+                writeSse(output, "ping", 3, mapper.writeValueAsString(Map.of("server_time_ms", System.currentTimeMillis())));
             }
         }
     }

@@ -190,6 +190,34 @@ class LocalMetricStorageTest {
         }
     }
 
+    @Test
+    void queryRangeAggregatesHeartbeatPointsByRequestedStep() throws Exception {
+        Path db = tempDir.resolve("pulse-metrics.db");
+        try (LocalMetricStorage storage = LocalMetricStorage.open(db)) {
+            storage.writeHeartbeat(new HeartbeatMetricSample(
+                    1_710_000_000_000L, "agent-1", "host-1", "cluster-a", "area-a", "direct", "direct",
+                    1, 40, 30_000, 0, 10, 0, 0, 0, 10, 1_000, Map.of()));
+            storage.writeHeartbeat(new HeartbeatMetricSample(
+                    1_710_000_005_000L, "agent-1", "host-1", "cluster-a", "area-a", "direct", "direct",
+                    1, 41, 30_000, 0, 20, 0, 0, 0, 10, 1_000, Map.of()));
+            storage.writeHeartbeat(new HeartbeatMetricSample(
+                    1_710_000_010_000L, "agent-1", "host-1", "cluster-a", "area-a", "direct", "direct",
+                    1, 42, 30_000, 0, 40, 0, 0, 0, 10, 1_000, Map.of()));
+
+            MetricQueryResult result = storage.queryRange(new MetricQuery(
+                    "heartbeat.arrival_gap_ms",
+                    List.of("agent-1"),
+                    1_710_000_000_000L,
+                    1_710_000_010_000L,
+                    10_000,
+                    10));
+
+            assertEquals(List.of(15.0, 40.0), result.series().get(0).points().stream().map(MetricPoint::value).toList());
+            assertEquals(List.of(1_710_000_000_000L, 1_710_000_010_000L),
+                    result.series().get(0).points().stream().map(MetricPoint::timestampMs).toList());
+        }
+    }
+
     private static int count(java.sql.Statement statement, String table) throws Exception {
         try (var result = statement.executeQuery("SELECT COUNT(*) FROM " + table)) {
             return result.next() ? result.getInt(1) : 0;

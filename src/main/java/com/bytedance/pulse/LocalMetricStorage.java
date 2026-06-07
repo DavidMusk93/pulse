@@ -22,6 +22,8 @@ interface MetricStorage extends AutoCloseable {
 
     MetricQueryResult queryRange(MetricQuery query) throws Exception;
 
+    MetricStorageHealth health();
+
     @Override
     void close() throws Exception;
 }
@@ -148,8 +150,17 @@ final class LocalMetricStorage implements MetricStorage {
             return queryGroupLeaderRange(query, metric);
         }
         int pointLimit = Math.max(1, query.pointLimit());
+        long stepMs = Math.max(1, query.stepMs());
         StringBuilder sql = new StringBuilder("""
-                SELECT observed_at_ms, agent_id, heartbeat_path, group_mode, epoch, seq, %s AS metric_value, state_json
+                SELECT
+                    (observed_at_ms / ?) * ? AS observed_at_ms,
+                    agent_id,
+                    MIN(heartbeat_path) AS heartbeat_path,
+                    MIN(group_mode) AS group_mode,
+                    MAX(epoch) AS epoch,
+                    MAX(seq) AS seq,
+                    AVG(%s) AS metric_value,
+                    MIN(state_json) AS state_json
                 FROM heartbeat_sample
                 WHERE observed_at_ms >= ? AND observed_at_ms <= ?
                 """.formatted(metric.column()));
@@ -159,17 +170,20 @@ final class LocalMetricStorage implements MetricStorage {
             sql.setLength(sql.length() - 1);
             sql.append(")");
         }
-        sql.append(" ORDER BY agent_id ASC, observed_at_ms ASC LIMIT ?");
+        sql.append(" GROUP BY agent_id, (observed_at_ms / ?) ORDER BY agent_id ASC, observed_at_ms ASC LIMIT ?");
 
         Map<String, List<MetricPoint>> pointsByAgent = new LinkedHashMap<>();
         boolean truncated;
         try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
             int index = 1;
+            statement.setLong(index++, stepMs);
+            statement.setLong(index++, stepMs);
             statement.setLong(index++, query.startMs());
             statement.setLong(index++, query.endMs());
             for (String agentId : query.agentIds()) {
                 statement.setString(index++, agentId);
             }
+            statement.setLong(index++, stepMs);
             statement.setInt(index, pointLimit + 1);
             try (ResultSet resultSet = statement.executeQuery()) {
                 int rows = 0;
@@ -203,10 +217,15 @@ final class LocalMetricStorage implements MetricStorage {
                 query.metric(),
                 "avg",
                 truncated,
-                Math.max(1, query.stepMs()),
+                stepMs,
                 query.agentIds().size(),
                 pointLimit,
                 series);
+    }
+
+    @Override
+    public MetricStorageHealth health() {
+        return new MetricStorageHealth("ok", 0, 0, 0, 0, 0, "");
     }
 
     private MetricQueryResult queryTideWorkerRange(MetricQuery query, MetricColumn metric) throws Exception {

@@ -127,6 +127,13 @@ public class CoordinatorService {
         return metricStorage.queryRange(query);
     }
 
+    public MetricStorageHealth metricStorageHealth() {
+        if (metricStorage == null) {
+            return new MetricStorageHealth("disabled", 0, 0, 0, 0, 0, "metric storage is disabled");
+        }
+        return metricStorage.health();
+    }
+
     public TaskSnapshot taskSnapshot(String agentId) {
         return taskService.snapshot(agentId);
     }
