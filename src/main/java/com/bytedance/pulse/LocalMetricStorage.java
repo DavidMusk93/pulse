@@ -280,7 +280,11 @@ final class LocalMetricStorage implements MetricStorage {
                 .map(entry -> new MetricSeries(Map.of("agent_id", entry.getKey()), List.copyOf(entry.getValue())))
                 .toList();
         return new MetricQueryResult(
+                queryId(query),
                 query.metric(),
+                query.startMs(),
+                query.endMs(),
+                metric.unit(),
                 "avg",
                 truncated,
                 stepMs,
@@ -343,7 +347,18 @@ final class LocalMetricStorage implements MetricStorage {
         List<MetricSeries> series = pointsBySeries.entrySet().stream()
                 .map(entry -> new MetricSeries(labelsBySeries.get(entry.getKey()), List.copyOf(entry.getValue())))
                 .toList();
-        return new MetricQueryResult(query.metric(), "avg", truncated, Math.max(1, query.stepMs()), query.agentIds().size(), pointLimit, series);
+        return new MetricQueryResult(
+                queryId(query),
+                query.metric(),
+                query.startMs(),
+                query.endMs(),
+                metric.unit(),
+                "avg",
+                truncated,
+                Math.max(1, query.stepMs()),
+                query.agentIds().size(),
+                pointLimit,
+                series);
     }
 
     private MetricQueryResult queryGroupLeaderRange(MetricQuery query, MetricColumn metric) throws Exception {
@@ -384,7 +399,18 @@ final class LocalMetricStorage implements MetricStorage {
         List<MetricSeries> series = pointsByGroup.entrySet().stream()
                 .map(entry -> new MetricSeries(labelsByGroup.get(entry.getKey()), List.copyOf(entry.getValue())))
                 .toList();
-        return new MetricQueryResult(query.metric(), "avg", truncated, Math.max(1, query.stepMs()), 0, pointLimit, series);
+        return new MetricQueryResult(
+                queryId(query),
+                query.metric(),
+                query.startMs(),
+                query.endMs(),
+                metric.unit(),
+                "avg",
+                truncated,
+                Math.max(1, query.stepMs()),
+                0,
+                pointLimit,
+                series);
     }
 
     @Override
@@ -690,41 +716,52 @@ final class LocalMetricStorage implements MetricStorage {
         }
     }
 
+    private static String queryId(MetricQuery query) {
+        int hash = Math.abs((query.metric() + query.agentIds()).hashCode());
+        return "q-" + query.startMs() + "-" + query.endMs() + "-" + hash;
+    }
+
     @Override
     public void close() throws SQLException {
         connection.close();
     }
 
     private enum MetricColumn {
-        ARRIVAL_GAP("heartbeat.arrival_gap_ms", "arrival_gap_ms", MetricSource.HEARTBEAT),
-        SEQ_GAP("heartbeat.seq_gap", "seq_gap", MetricSource.HEARTBEAT),
-        AGENT_COLLECT("heartbeat.agent_collect_ms", "agent_collect_ms", MetricSource.HEARTBEAT),
-        AGENT_ENCODE("heartbeat.agent_encode_ms", "agent_encode_ms", MetricSource.HEARTBEAT),
-        AGENT_SEND("heartbeat.agent_send_ms", "agent_send_ms", MetricSource.HEARTBEAT),
-        AGENT_THREADS("agent.thread_count", "agent_thread_count", MetricSource.HEARTBEAT),
-        AGENT_RSS("agent.rss_kb", "agent_rss_kb", MetricSource.HEARTBEAT),
-        TIDE_CPU("tide_worker.cpu_pct", "cpu_pct", MetricSource.TIDE_WORKER),
-        TIDE_RSS("tide_worker.rss_kb", "rss_kb", MetricSource.TIDE_WORKER),
-        TIDE_THREADS("tide_worker.thread_count", "thread_count", MetricSource.TIDE_WORKER),
-        GROUP_MEMBER("group.member_count", "member_count", MetricSource.GROUP_LEADER),
-        GROUP_SUBMITTED("group.submitted_agent_count", "submitted_agent_count", MetricSource.GROUP_LEADER),
-        GROUP_ACCEPTED("group.accepted_agent_count", "accepted_agent_count", MetricSource.GROUP_LEADER),
-        GROUP_MISSING("group.missing_member_count", "missing_member_count", MetricSource.GROUP_LEADER),
-        GROUP_COLLECT("group.leader_collect_ms", "leader_collect_ms", MetricSource.GROUP_LEADER),
-        GROUP_LATENCY("group.group_latency_ms", "group_latency_ms", MetricSource.GROUP_LEADER);
+        ARRIVAL_GAP("heartbeat.arrival_gap_ms", "arrival_gap_ms", "ms", MetricSource.HEARTBEAT),
+        SEQ_GAP("heartbeat.seq_gap", "seq_gap", "count", MetricSource.HEARTBEAT),
+        AGENT_COLLECT("heartbeat.agent_collect_ms", "agent_collect_ms", "ms", MetricSource.HEARTBEAT),
+        AGENT_ENCODE("heartbeat.agent_encode_ms", "agent_encode_ms", "ms", MetricSource.HEARTBEAT),
+        AGENT_SEND("heartbeat.agent_send_ms", "agent_send_ms", "ms", MetricSource.HEARTBEAT),
+        AGENT_THREADS("agent.thread_count", "agent_thread_count", "threads", MetricSource.HEARTBEAT),
+        AGENT_RSS("agent.rss_kb", "agent_rss_kb", "KiB", MetricSource.HEARTBEAT),
+        TIDE_CPU("tide_worker.cpu_pct", "cpu_pct", "%", MetricSource.TIDE_WORKER),
+        TIDE_RSS("tide_worker.rss_kb", "rss_kb", "KiB", MetricSource.TIDE_WORKER),
+        TIDE_THREADS("tide_worker.thread_count", "thread_count", "threads", MetricSource.TIDE_WORKER),
+        GROUP_MEMBER("group.member_count", "member_count", "count", MetricSource.GROUP_LEADER),
+        GROUP_SUBMITTED("group.submitted_agent_count", "submitted_agent_count", "count", MetricSource.GROUP_LEADER),
+        GROUP_ACCEPTED("group.accepted_agent_count", "accepted_agent_count", "count", MetricSource.GROUP_LEADER),
+        GROUP_MISSING("group.missing_member_count", "missing_member_count", "count", MetricSource.GROUP_LEADER),
+        GROUP_COLLECT("group.leader_collect_ms", "leader_collect_ms", "ms", MetricSource.GROUP_LEADER),
+        GROUP_LATENCY("group.group_latency_ms", "group_latency_ms", "ms", MetricSource.GROUP_LEADER);
 
         private final String name;
         private final String column;
+        private final String unit;
         private final MetricSource source;
 
-        MetricColumn(String name, String column, MetricSource source) {
+        MetricColumn(String name, String column, String unit, MetricSource source) {
             this.name = name;
             this.column = column;
+            this.unit = unit;
             this.source = source;
         }
 
         private String column() {
             return column;
+        }
+
+        private String unit() {
+            return unit;
         }
 
         private static MetricColumn fromName(String name) {
@@ -830,7 +867,11 @@ record MetricQuery(
 }
 
 record MetricQueryResult(
+        String queryId,
         String metric,
+        long from,
+        long to,
+        String unit,
         String samplePolicy,
         boolean truncated,
         long suggestedStepMs,

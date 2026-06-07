@@ -138,7 +138,12 @@ class CoordinatorHttpServerTest {
         HttpResponse<String> range = get("/api/metrics/query_range?metric=agent.thread_count&agents=agent-1&start_ms=1710000000000&end_ms=1710000000000&step_ms=1000&point_limit=10");
         assertEquals(200, range.statusCode());
         JsonNode body = mapper.readTree(range.body());
+        assertTrue(body.get("query_id").asText().startsWith("q-"));
         assertEquals("agent.thread_count", body.get("metric").asText());
+        assertEquals(1710000000000L, body.get("from").asLong());
+        assertEquals(1710000000000L, body.get("to").asLong());
+        assertEquals("threads", body.get("unit").asText());
+        assertEquals(10, body.get("point_limit").asInt());
         assertEquals("avg", body.get("sample_policy").asText());
         assertEquals(false, body.get("truncated").asBoolean());
         assertEquals("agent-1", body.get("series").get(0).get("labels").get("agent_id").asText());
