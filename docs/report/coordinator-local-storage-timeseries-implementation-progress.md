@@ -3,11 +3,11 @@
 ## 状态
 
 - 时间：2026-06-07
-- 最新已部署提交：`db1388c Add bounded metric retention cleanup`
+- 最新已部署提交：`03b033d Add metric query budget controls`
 - 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget
-- 部署范围：`cdn_new` 三台 coordinator
-- JAR SHA：`2feb51f4455556bc2e91e39773a6988e21f416dd04134e45258057364d11bdab`
-- 结论：后端本地时序存储核心链路已从最小闭环推进到可在线验证阶段；前端 Ant Design 时序面板仍未完成。
+- 部署范围：`cdn_new` 50 台 agent + 3 台 coordinator
+- JAR SHA：`1359662bddeff263596de4017897c5479461998179061a5602fbbc19388290fa`
+- 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板仍未完成。
 
 ## 已完成
 
@@ -71,7 +71,31 @@
 
 ## 线上验证
 
-三台 coordinator rollout：`3/3 ok`。
+最新 rollout：
+
+```text
+staged coordinator deploy: total=3 ok=3 failed=0
+full cdn_new deploy: total=50 ok=50 failed=0 elapsed=170s
+verify cdn_new: total=50 ok=50 failed=0
+```
+
+最新 query budget 和 storage health 验证：
+
+```text
+COORD fdbd:dc05:11:634::45
+STORAGE status=ok queue=0 written=6219 dropped=0 failed=0 maintenance=0 deleted=0 checkpoint=0 batches=1610
+QUERY query_id=q-0-1-1086903931 metric=agent.thread_count from=0 to=1 unit=threads policy=avg truncated=False suggested_step_ms=1 series_limit=2 point_limit=20000
+
+COORD fdbd:dc05:13:10c::40
+STORAGE status=ok queue=0 written=4417 dropped=0 failed=0 maintenance=0 deleted=0 checkpoint=0 batches=1052
+QUERY query_id=q-0-1-1086903931 metric=agent.thread_count from=0 to=1 unit=threads policy=avg truncated=False suggested_step_ms=1 series_limit=2 point_limit=20000
+
+COORD fdbd:dc07:0:810::44
+STORAGE status=ok queue=0 written=2260 dropped=0 failed=0 maintenance=0 deleted=0 checkpoint=0 batches=443
+QUERY query_id=q-0-1-1086903931 metric=agent.thread_count from=0 to=1 unit=threads policy=avg truncated=False suggested_step_ms=1 series_limit=2 point_limit=20000
+```
+
+历史 coordinator rollout：`3/3 ok`。
 
 ```text
 dc05-p11-t634-n045 STORAGE status=ok queue=0 written=2087 dropped=0 failed=0
@@ -115,9 +139,11 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
   - 已有 `hello`、`storage.health`、`metric.invalidate`。
   - 尚未实现事件缓存、`Last-Event-ID` 补发和 slow client bounded queue。
 
-- 本地最新后端能力尚未部署：
-  - writer maintenance、batch transaction、query envelope、query budget 已本地测试通过。
-  - 尚未 rollout 到 `cdn_new` coordinator 并验证线上 health 新字段。
+- 部署脚本经验沉淀：
+  - 一次错误 full rollout 使用同一行环境变量赋值并传 `"$COORDINATORS"`，导致参数展开为空，引发远端 `$6: unbound variable`。
+  - 已停止错误 rollout、改用 `.tmp/deploy_query_budget_full.sh` 落盘脚本重跑并成功。
+  - 已记录到 `docs/debug/auto-ops-argument-passing.md`。
+  - 已记录禁止 heredoc/inline script 作为验证证据到 `docs/debug/shell-heredoc-and-inline-script-notes.md`。
 
 - 查询预算仍可完善：
   - heartbeat 已支持 `step_ms avg`。
@@ -131,8 +157,7 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
 
 ## 下一步
 
-1. 部署最新 coordinator，验证 `/api/metrics/storage` health 新字段和 `/api/metrics/query_range` budget envelope。
-2. 恢复前端构建环境或生成稳定静态同步脚本，实现 Ant Design metrics panel。
-3. 为 tide worker 和 group leader query 补齐 step 聚合、series budget 和 topN。
-4. 为 SSE 增加 `Last-Event-ID`、事件缓存和 slow client bounded queue。
-5. 上线前端后继续用线上 SQLite 分析 group heartbeat 是否达到设计目标。
+1. 恢复前端构建环境或生成稳定静态同步脚本，实现 Ant Design metrics panel。
+2. 为 tide worker 和 group leader query 补齐 step 聚合、series budget 和 topN。
+3. 为 SSE 增加 `Last-Event-ID`、事件缓存和 slow client bounded queue。
+4. 上线前端后继续用线上 SQLite 分析 group heartbeat 是否达到设计目标。
