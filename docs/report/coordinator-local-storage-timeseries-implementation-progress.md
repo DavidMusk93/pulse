@@ -3,10 +3,10 @@
 ## 状态
 
 - 时间：2026-06-07
-- 最新已部署提交：`fa22b9d Add metrics topN series selection`
+- 最新已部署提交：`5ee4520 Add aggregate metric series`
 - 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection、aggregate series
 - 部署范围：`cdn_new` 50 台 agent 已完成 query budget rollout；3 台 coordinator 已完成 frontend Metrics Panel rollout
-- JAR SHA：`92f89b65252a6d5c724e51e1afa94c808a93a59545598fb21995ae27ec6c1581`
+- JAR SHA：`cf145a2d10563cc7c74a1be539c66604a5535b3e22968dbeccdc39a9f46251d0`
 - 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览。
 
 ## 已完成
@@ -112,6 +112,7 @@ SSE resume metadata deploy: total=3 ok=3 failed=0 elapsed=18s
 SSE event replay cache deploy: total=3 ok=3 failed=0 elapsed=17s
 bounded periodic metrics stream deploy: total=3 ok=3 failed=0 elapsed=15s
 topN series selection deploy: total=3 ok=3 failed=0 elapsed=15s
+aggregate metric series deploy: total=3 ok=3 failed=0 elapsed=19s
 ```
 
 最新 query budget 和 storage health 验证：
@@ -181,12 +182,12 @@ COORD fdbd:dc05:13:10c::40 bytes=1923 invalidations=5 pings=4 missing=[]
 COORD fdbd:dc07:0:810::44 bytes=1920 invalidations=5 pings=4 missing=[]
 ```
 
-最新 Top N query 验证：
+最新 Top N + aggregate query 验证：
 
 ```text
-COORD fdbd:dc05:11:634::45 series=3 points=90 truncated=True missing=[] labels=[{'agent_id': 'dc05-p11-t636-n033.byted.org'}, {'agent_id': 'dc05-p13-t46-n047.byted.org'}, {'agent_id': 'dc05-p13-t36-n046.byted.org'}]
-COORD fdbd:dc05:13:10c::40 series=3 points=90 truncated=True missing=[] labels=[{'agent_id': 'dc05-p13-t46-n047.byted.org'}, {'agent_id': 'dc05-p11-t636-n014.byted.org'}, {'agent_id': 'dc05-p11-t636-n017.byted.org'}]
-COORD fdbd:dc07:0:810::44 series=3 points=92 truncated=True missing=[] labels=[{'agent_id': 'dc05-p13-t46-n047.byted.org'}, {'agent_id': 'dc05-p11-t636-n014.byted.org'}, {'agent_id': 'dc05-p13-t46-n050.byted.org'}]
+COORD fdbd:dc05:11:634::45 series=4 points=122 aggregate=1 truncated=True missing=[] labels=[{'agent_id': 'dc05-p13-t46-n050.byted.org'}, {'agent_id': 'dc05-p13-t46-n047.byted.org'}, {'agent_id': 'dc05-p13-t46-n049.byted.org'}, {'aggregate': 'avg', 'series_role': 'aggregate'}]
+COORD fdbd:dc05:13:10c::40 series=4 points=124 aggregate=1 truncated=True missing=[] labels=[{'agent_id': 'dc05-p13-t46-n050.byted.org'}, {'agent_id': 'dc05-p13-t46-n047.byted.org'}, {'agent_id': 'dc05-p13-t46-n049.byted.org'}, {'aggregate': 'avg', 'series_role': 'aggregate'}]
+COORD fdbd:dc07:0:810::44 series=4 points=124 aggregate=1 truncated=True missing=[] labels=[{'agent_id': 'dc05-p13-t46-n050.byted.org'}, {'agent_id': 'dc05-p13-t46-n049.byted.org'}, {'agent_id': 'dc05-p13-t46-n047.byted.org'}, {'series_role': 'aggregate', 'aggregate': 'avg'}]
 ```
 
 历史 coordinator rollout：`3/3 ok`。
