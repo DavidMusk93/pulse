@@ -2,12 +2,12 @@
 
 ## 状态
 
-- 时间：2026-06-07
+- 时间：2026-06-08
 - 最新已部署提交：`1482fde Add metrics panel render metrics`
 - 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection、aggregate series、frontend visibility/range pause、frontend render metrics
-- 部署范围：`cdn_new` 50 台 agent 已完成 query budget rollout；3 台 coordinator 已完成 frontend Metrics Panel rollout
+- 部署范围：`cdn_new` 50 台 agent 与 3 台 coordinator/group leader 已完成最新版本全量 rollout
 - JAR SHA：`d9c7ddd5911f6860eec839c9d7820029da03d13151c9206b7c8d1519c116f061`
-- 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览。
+- 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览；SQLite 统计显示 `cdn_new` 心跳链路整体健康但仍缺少若干关键 timing instrumentation。
 
 ## 已完成
 
@@ -117,7 +117,18 @@ topN series selection deploy: total=3 ok=3 failed=0 elapsed=15s
 aggregate metric series deploy: total=3 ok=3 failed=0 elapsed=19s
 metrics panel live pause deploy: total=3 ok=3 failed=0 elapsed=20s
 metrics panel render metrics deploy: total=3 ok=3 failed=0 elapsed=19s
+full cdn_new latest rollout: total=50 ok=50 failed=0 elapsed=166s
+full cdn_new latest verify: total=50 ok=50 failed=0 elapsed=2s
 ```
+
+最新 SQLite 心跳链路分析：
+
+- 报告：`docs/report/heartbeat-chain-sqlite-analysis-2026-06-08.md`
+- `cdn2` agents：3 台 coordinator 均观测到 `50/50`。
+- `cdn2` arrival p95：`5025-5036ms`；arrival p99：`8488-9007ms`；低于 `30000ms` TTL。
+- `cdn2` `seq_gap > 1`：每台 coordinator 过去 1 小时仅 `1-2` 条。
+- `cdn2` group status：`ok` 约 `98.3%-98.6%`，仍有低量 `partial` / `stale_plan`。
+- 主要缺口：`agent_encode_ms`、`agent_send_ms`、`leader_collect_ms`、`group_latency_ms` 线上值仍为 `0`，需要补真实 instrumentation。
 
 最新 query budget 和 storage health 验证：
 

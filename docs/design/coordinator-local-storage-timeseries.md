@@ -22,6 +22,54 @@
 - 前端实时更新默认使用 SSE，不再新增 HTTP polling；现有 polling 调用需要迁移到 SSE 事件流。
 - 数据必须有 TTL、容量上限、降级策略和损坏恢复策略。
 
+## 架构图
+
+第一版采用“heartbeat 热路径轻量化、SQLite 写入异步化、查询预算服务端化、前端渐进渲染”的分层架构。
+
+```mermaid
+flowchart LR
+  subgraph AgentSide["agent side"]
+    A["PulseAgent<br/>lightweight collect"]
+    TW["tide_worker probe<br/>cached discovery"]
+    GL["Group leader<br/>batch heartbeat"]
+    A --> TW
+    A -->|direct heartbeat| C
+    A -->|follower reply| GL
+    GL -->|batch heartbeat| C
+  end
+
+  subgraph CoordinatorSide["coordinator side"]
+    C["Coordinator HTTP<br/>validate + sample"]
+    Q["AsyncLocalMetricStorage<br/>bounded queue"]
+    W["single SQLite writer<br/>batch transaction"]
+    DB[("SQLite WAL<br/>local timeseries")]
+    C -->|immutable command| Q
+    Q --> W
+    W --> DB
+  end
+
+  subgraph QuerySide["query and live side"]
+    API["metrics API<br/>catalog/query/events/storage"]
+    SSE["metrics SSE<br/>invalidate + replay"]
+    TOP["budget layer<br/>step + topN + aggregate"]
+    UI["AntD MetricsPanel<br/>cache + live pause"]
+    DB --> API
+    DB --> TOP
+    C --> SSE
+    API --> UI
+    TOP --> UI
+    SSE --> UI
+  end
+```
+
+关键边界：
+
+- Agent 热路径只做轻量采集、序列号递增、payload 编码和 HTTP 发送；不能在每次 heartbeat 做全量 `/proc` 扫描或创建长生命周期资源。
+- Group leader 是 fan-in 优化层，不是唯一事实源；leader 异常时 coordinator 仍可接收 direct heartbeat，并通过 `heartbeat_path`、`group_mode`、`group_leader_sample` 诊断覆盖率。
+- Coordinator handler 只构造不可变 sample 并入队；SQLite transaction、TTL cleanup、WAL checkpoint 全部在 writer 侧串行执行。
+- Query API 必须先执行 series/point budget，再返回 `truncated`、`suggested_step_ms`、TopN 明细和 aggregate 聚合线，前端必须诚实展示降级状态。
+- SSE 只负责 invalidation 和 bounded replay；断线或不可见页面由前端补偿查询和 live pause 控制，避免后台页面持续消耗资源。
+
 ## 非目标
 
 - 不实现跨 coordinator 的全局一致查询。
