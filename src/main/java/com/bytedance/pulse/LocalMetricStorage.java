@@ -161,6 +161,28 @@ final class LocalMetricStorage implements MetricStorage {
         }
     }
 
+    public int deleteExpiredSamples(long cutoffMs, int limit) throws SQLException {
+        int boundedLimit = Math.max(1, limit);
+        return deleteExpired("heartbeat_sample", cutoffMs, boundedLimit)
+                + deleteExpired("tide_worker_sample", cutoffMs, boundedLimit)
+                + deleteExpired("group_leader_sample", cutoffMs, boundedLimit)
+                + deleteExpired("host_event", cutoffMs, boundedLimit);
+    }
+
+    private int deleteExpired(String table, long cutoffMs, int limit) throws SQLException {
+        String sql = """
+                DELETE FROM %s
+                WHERE rowid IN (
+                    SELECT rowid FROM %s WHERE observed_at_ms < ? ORDER BY observed_at_ms ASC LIMIT ?
+                )
+                """.formatted(table, table);
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, cutoffMs);
+            statement.setInt(2, limit);
+            return statement.executeUpdate();
+        }
+    }
+
     @Override
     public MetricQueryResult queryRange(MetricQuery query) throws Exception {
         MetricColumn metric = MetricColumn.fromName(query.metric());

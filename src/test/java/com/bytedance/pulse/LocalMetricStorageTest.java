@@ -244,6 +244,41 @@ class LocalMetricStorageTest {
         }
     }
 
+    @Test
+    void deletesExpiredSamplesWithBoundedLimit() throws Exception {
+        Path db = tempDir.resolve("pulse-metrics.db");
+        try (LocalMetricStorage storage = LocalMetricStorage.open(db)) {
+            storage.writeHeartbeat(new HeartbeatMetricSample(
+                    1_710_000_000_000L, "agent-old", "host-old", "cluster-a", "area-a", "direct", "direct",
+                    1, 1, 30_000, 0, 10, 0, 0, 0, 10, 1_000, Map.of()));
+            storage.writeHeartbeat(new HeartbeatMetricSample(
+                    1_710_000_100_000L, "agent-new", "host-new", "cluster-a", "area-a", "direct", "direct",
+                    1, 1, 30_000, 0, 20, 0, 0, 0, 10, 1_000, Map.of()));
+            storage.writeHostEvent(new HostEvent(
+                    "event-old", 1_710_000_000_000L, "agent-old", "warn", "heartbeat.arrival_gap_spike", "old", Map.of()));
+
+            int deleted = storage.deleteExpiredSamples(1_710_000_050_000L, 10);
+
+            assertTrue(deleted >= 2);
+            assertEquals(0, storage.queryRange(new MetricQuery(
+                    "heartbeat.arrival_gap_ms",
+                    List.of("agent-old"),
+                    1_710_000_000_000L,
+                    1_710_000_100_000L,
+                    1_000,
+                    10)).series().size());
+            assertEquals(1, storage.queryRange(new MetricQuery(
+                    "heartbeat.arrival_gap_ms",
+                    List.of("agent-new"),
+                    1_710_000_000_000L,
+                    1_710_000_100_000L,
+                    1_000,
+                    10)).series().size());
+            assertEquals(0, storage.queryEvents(new MetricEventQuery(
+                    1_710_000_000_000L, 1_710_000_100_000L, "agent-old", List.of(), 10)).size());
+        }
+    }
+
     private static int count(java.sql.Statement statement, String table) throws Exception {
         try (var result = statement.executeQuery("SELECT COUNT(*) FROM " + table)) {
             return result.next() ? result.getInt(1) : 0;
