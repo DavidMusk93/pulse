@@ -218,6 +218,32 @@ class LocalMetricStorageTest {
         }
     }
 
+    @Test
+    void storesAndQueriesHostEventsForChartAnnotations() throws Exception {
+        Path db = tempDir.resolve("pulse-metrics.db");
+        try (LocalMetricStorage storage = LocalMetricStorage.open(db)) {
+            storage.writeHostEvent(new HostEvent(
+                    "event-1",
+                    1_710_000_000_000L,
+                    "agent-1",
+                    "warn",
+                    "heartbeat.arrival_gap_spike",
+                    "arrival gap exceeded budget",
+                    Map.of("gap_ms", 45_000)));
+
+            List<HostEvent> events = storage.queryEvents(new MetricEventQuery(
+                    1_710_000_000_000L,
+                    1_710_000_001_000L,
+                    "agent-1",
+                    List.of("warn", "error"),
+                    10));
+
+            assertEquals(1, events.size());
+            assertEquals("heartbeat.arrival_gap_spike", events.get(0).eventType());
+            assertEquals(45_000, events.get(0).details().get("gap_ms"));
+        }
+    }
+
     private static int count(java.sql.Statement statement, String table) throws Exception {
         try (var result = statement.executeQuery("SELECT COUNT(*) FROM " + table)) {
             return result.next() ? result.getInt(1) : 0;

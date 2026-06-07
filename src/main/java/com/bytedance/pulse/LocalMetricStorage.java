@@ -22,6 +22,8 @@ interface MetricStorage extends AutoCloseable {
 
     MetricQueryResult queryRange(MetricQuery query) throws Exception;
 
+    List<HostEvent> queryEvents(MetricEventQuery query) throws Exception;
+
     MetricStorageHealth health();
 
     @Override
@@ -136,6 +138,25 @@ final class LocalMetricStorage implements MetricStorage {
             statement.setString(index++, sample.status());
             statement.setString(index++, MAPPER.writeValueAsString(sample.debug()));
             statement.setLong(index, System.currentTimeMillis());
+            statement.executeUpdate();
+        }
+    }
+
+    public void writeHostEvent(HostEvent event) throws Exception {
+        String sql = """
+                INSERT OR REPLACE INTO host_event (
+                    event_id, observed_at_ms, agent_id, severity, event_type, message, details_json, stored_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """;
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, event.eventId());
+            statement.setLong(2, event.observedAtMs());
+            statement.setString(3, event.agentId());
+            statement.setString(4, event.severity());
+            statement.setString(5, event.eventType());
+            statement.setString(6, event.message());
+            statement.setString(7, MAPPER.writeValueAsString(event.details()));
+            statement.setLong(8, System.currentTimeMillis());
             statement.executeUpdate();
         }
     }
@@ -319,6 +340,52 @@ final class LocalMetricStorage implements MetricStorage {
                 .map(entry -> new MetricSeries(labelsByGroup.get(entry.getKey()), List.copyOf(entry.getValue())))
                 .toList();
         return new MetricQueryResult(query.metric(), "avg", truncated, Math.max(1, query.stepMs()), 0, pointLimit, series);
+    }
+
+    @Override
+    public List<HostEvent> queryEvents(MetricEventQuery query) throws Exception {
+        int limit = Math.max(1, query.limit());
+        StringBuilder sql = new StringBuilder("""
+                SELECT event_id, observed_at_ms, agent_id, severity, event_type, message, details_json
+                FROM host_event
+                WHERE observed_at_ms >= ? AND observed_at_ms <= ?
+                """);
+        if (query.agentId() != null && !query.agentId().isBlank()) {
+            sql.append(" AND agent_id = ?");
+        }
+        if (!query.severities().isEmpty()) {
+            sql.append(" AND severity IN (");
+            sql.append("?,".repeat(query.severities().size()));
+            sql.setLength(sql.length() - 1);
+            sql.append(")");
+        }
+        sql.append(" ORDER BY observed_at_ms ASC LIMIT ?");
+        List<HostEvent> events = new ArrayList<>();
+        try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+            int index = 1;
+            statement.setLong(index++, query.startMs());
+            statement.setLong(index++, query.endMs());
+            if (query.agentId() != null && !query.agentId().isBlank()) {
+                statement.setString(index++, query.agentId());
+            }
+            for (String severity : query.severities()) {
+                statement.setString(index++, severity);
+            }
+            statement.setInt(index, limit);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    events.add(new HostEvent(
+                            resultSet.getString("event_id"),
+                            resultSet.getLong("observed_at_ms"),
+                            resultSet.getString("agent_id"),
+                            resultSet.getString("severity"),
+                            resultSet.getString("event_type"),
+                            resultSet.getString("message"),
+                            readState(resultSet.getString("details_json"))));
+                }
+            }
+        }
+        return events;
     }
 
     private void initialize() throws SQLException {
@@ -678,6 +745,30 @@ record GroupLeaderMetricSample(
         Map<String, Object> debug) {
     GroupLeaderMetricSample {
         debug = debug == null ? Map.of() : Map.copyOf(debug);
+    }
+}
+
+record HostEvent(
+        String eventId,
+        long observedAtMs,
+        String agentId,
+        String severity,
+        String eventType,
+        String message,
+        Map<String, Object> details) {
+    HostEvent {
+        details = details == null ? Map.of() : Map.copyOf(details);
+    }
+}
+
+record MetricEventQuery(
+        long startMs,
+        long endMs,
+        String agentId,
+        List<String> severities,
+        int limit) {
+    MetricEventQuery {
+        severities = severities == null ? List.of() : List.copyOf(severities);
     }
 }
 

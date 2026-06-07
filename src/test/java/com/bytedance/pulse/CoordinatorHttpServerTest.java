@@ -167,6 +167,26 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
+    void metricsEventsEndpointReturnsHostEvents() throws Exception {
+        metricStorage.writeHostEvent(new HostEvent(
+                "event-1",
+                1_710_000_000_000L,
+                "agent-1",
+                "warn",
+                "heartbeat.arrival_gap_spike",
+                "arrival gap exceeded budget",
+                Map.of("gap_ms", 45_000)));
+
+        HttpResponse<String> response = get("/api/metrics/events?start_ms=1710000000000&end_ms=1710000001000&agent=agent-1&severity=warn,error&limit=10");
+
+        assertEquals(200, response.statusCode());
+        JsonNode body = mapper.readTree(response.body());
+        assertEquals(1, body.size());
+        assertEquals("heartbeat.arrival_gap_spike", body.get(0).get("event_type").asText());
+        assertEquals(45_000, body.get(0).get("details").get("gap_ms").asInt());
+    }
+
+    @Test
     void hostsPageRendersFlatSquareChineseHeartbeatConsole() throws Exception {
         postJson("/heartbeat", """
                 {

@@ -2,6 +2,7 @@ package com.bytedance.pulse;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -68,6 +69,13 @@ final class AsyncLocalMetricStorage implements MetricStorage {
     public MetricQueryResult queryRange(MetricQuery query) throws Exception {
         try (LocalMetricStorage storage = LocalMetricStorage.open(dbPath)) {
             return storage.queryRange(query);
+        }
+    }
+
+    @Override
+    public List<HostEvent> queryEvents(MetricEventQuery query) throws Exception {
+        try (LocalMetricStorage storage = LocalMetricStorage.open(dbPath)) {
+            return storage.queryEvents(query);
         }
     }
 

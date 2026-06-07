@@ -134,6 +134,13 @@ public class CoordinatorService {
         return metricStorage.health();
     }
 
+    public List<HostEvent> queryMetricEvents(MetricEventQuery query) throws Exception {
+        if (metricStorage == null) {
+            throw new IllegalArgumentException("metric storage is disabled");
+        }
+        return metricStorage.queryEvents(query);
+    }
+
     public TaskSnapshot taskSnapshot(String agentId) {
         return taskService.snapshot(agentId);
     }

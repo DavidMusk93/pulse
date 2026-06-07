@@ -90,6 +90,10 @@ public class CoordinatorHttpServer {
                 writeJson(exchange, 200, service.queryMetrics(metricQuery(exchange.getRequestURI())));
                 return;
             }
+            if ("GET".equals(method) && "/api/metrics/events".equals(path)) {
+                writeJson(exchange, 200, service.queryMetricEvents(metricEventQuery(exchange.getRequestURI())));
+                return;
+            }
             if ("GET".equals(method) && "/api/metrics/storage".equals(path)) {
                 writeJson(exchange, 200, service.metricStorageHealth());
                 return;
@@ -301,6 +305,15 @@ public class CoordinatorHttpServer {
                 longQuery(uri, "end_ms", Long.MAX_VALUE),
                 longQuery(uri, "step_ms", 10_000),
                 (int) Math.min(Integer.MAX_VALUE, longQuery(uri, "point_limit", 20_000)));
+    }
+
+    private static MetricEventQuery metricEventQuery(URI uri) {
+        return new MetricEventQuery(
+                longQuery(uri, "start_ms", longQuery(uri, "from", 0)),
+                longQuery(uri, "end_ms", longQuery(uri, "to", Long.MAX_VALUE)),
+                queryValue(uri, "agent"),
+                queryList(uri, "severity"),
+                (int) Math.min(Integer.MAX_VALUE, longQuery(uri, "limit", 500)));
     }
 
     private static String requiredQuery(URI uri, String key) {
