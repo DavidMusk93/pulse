@@ -1168,6 +1168,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
           options={[
             { label: '手动指标', value: 'manual' },
             { label: '架构健康', value: 'heartbeat-architecture' },
+            { label: '计划收敛', value: 'plan-convergence' },
             { label: '采集实效', value: 'agent-freshness' },
             { label: '发送链路', value: 'send-path' }
           ]}
@@ -1262,6 +1263,7 @@ type MetricPreset = {
 
 const metricPresets: MetricPreset[] = [
   { key: 'heartbeat-architecture', metric: 'group.status_unhealthy', rangeMinutes: 15 },
+  { key: 'plan-convergence', metric: 'group.plan_lag', rangeMinutes: 15 },
   { key: 'agent-freshness', metric: 'heartbeat.agent_collect_ms', rangeMinutes: 15 },
   { key: 'send-path', metric: 'heartbeat.agent_send_ms', rangeMinutes: 15 }
 ];
@@ -1284,6 +1286,9 @@ function metricAssessment(metric: string, result: MetricQueryResultView | null, 
   }
   if (metric === 'group.status_unhealthy') {
     return max > 0 ? { label: '架构退化', tone: 'error' as const } : { label: '架构健康', tone: 'success' as const };
+  }
+  if (metric === 'group.plan_lag') {
+    return max > 0 ? { label: '计划滞后', tone: 'warning' as const } : { label: '计划收敛', tone: 'success' as const };
   }
   if (metric === 'group.missing_member_count' || metric === 'group.stale_member_count' || metric === 'group.direct_fallback_count') {
     return max > 0 ? { label: 'group 有尾部', tone: 'warning' as const } : { label: 'group 稳定', tone: 'success' as const };

@@ -11,7 +11,21 @@ public record AgentGroupPlan(
         List<String> members,
         String cluster,
         String area,
-        int sizeLimit) {
+        int sizeLimit,
+        long generation) {
+    public AgentGroupPlan(
+            String agentId,
+            String groupId,
+            String groupMode,
+            String leaderAgentId,
+            String leaderUrl,
+            List<String> members,
+            String cluster,
+            String area,
+            int sizeLimit) {
+        this(agentId, groupId, groupMode, leaderAgentId, leaderUrl, members, cluster, area, sizeLimit, 0);
+    }
+
     public AgentGroupPlan {
         members = members == null ? List.of() : List.copyOf(members);
     }
@@ -27,6 +41,7 @@ public record AgentGroupPlan(
                 List.of(safeAgentId),
                 "unknown",
                 "unknown",
-                1);
+                1,
+                0);
     }
 }

@@ -8,6 +8,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class CoordinatorService {
@@ -197,16 +198,18 @@ public class CoordinatorService {
                 1,
                 null,
                 clock.millis() + 30_000,
-                Map.of(
-                        "agent_id", plan.agentId(),
-                        "group_id", plan.groupId(),
-                        "group_mode", plan.groupMode(),
-                        "leader_agent_id", plan.leaderAgentId(),
-                        "leader_url", plan.leaderUrl(),
-                        "members", plan.members(),
-                        "cluster", plan.cluster(),
-                        "area", plan.area(),
-                        "size_limit", plan.sizeLimit()));
+                Map.ofEntries(
+                        Map.entry("agent_id", plan.agentId()),
+                        Map.entry("group_id", plan.groupId()),
+                        Map.entry("group_mode", plan.groupMode()),
+                        Map.entry("leader_agent_id", plan.leaderAgentId()),
+                        Map.entry("leader_url", plan.leaderUrl()),
+                        Map.entry("members", plan.members()),
+                        Map.entry("cluster", plan.cluster()),
+                        Map.entry("area", plan.area()),
+                        Map.entry("size_limit", plan.sizeLimit()),
+                        Map.entry("plan_generation", plan.generation()),
+                        Map.entry("expected_generation", plan.generation())));
     }
 
     private List<PulseMessage> responseMessages(String agentId) {
@@ -304,6 +307,9 @@ public class CoordinatorService {
         long arrivalGapMs = previousObservedAt == null ? 0 : Math.max(0, observedAtMs - previousObservedAt);
         long groupSentAtMs = longState(leaderState, "group_sent_at_ms");
         long groupLatencyMs = groupSentAtMs <= 0 ? 0 : Math.max(0, observedAtMs - groupSentAtMs);
+        long expectedGeneration = groupPlans.getOrDefault(leaderAgentId, AgentGroupPlan.direct(leaderAgentId)).generation();
+        long agentPlanGeneration = longState(leaderState, "agent_plan_generation");
+        long planLag = Math.max(0, expectedGeneration - agentPlanGeneration);
         String status = staleMembers > 0 ? "stale_plan" : missingMembers > 0 ? "partial" : "ok";
         try {
             metricStorage.writeGroupLeader(new GroupLeaderMetricSample(
@@ -313,7 +319,7 @@ public class CoordinatorService {
                     stringState(leaderState, "ip", ""),
                     group == null ? "unknown" : group.cluster(),
                     group == null ? "unknown" : group.area(),
-                    0,
+                    expectedGeneration,
                     expectedMembers.isEmpty() ? request.agents().size() : expectedMembers.size(),
                     request.agents().size(),
                     accepted,
@@ -325,7 +331,11 @@ public class CoordinatorService {
                     groupLatencyMs,
                     arrivalGapMs,
                     status,
-                    Map.of("leader_url", group == null ? "" : group.leaderUrl())));
+                    Map.of(
+                            "leader_url", group == null ? "" : group.leaderUrl(),
+                            "expected_generation", expectedGeneration,
+                            "agent_plan_generation", agentPlanGeneration,
+                            "plan_lag", planLag)));
         } catch (Exception exception) {
             System.err.printf("metric_group_write status=failed group_id=%s error=%s%n", groupId, exception.getMessage());
         }
@@ -464,6 +474,7 @@ public class CoordinatorService {
                 .orElse(groupMembers.get(0));
         String leaderUrl = leaderUrl(leader);
         List<String> memberIds = groupMembers.stream().map(HostView::agentId).toList();
+        long generation = planGeneration(cluster, area, groupId, leader.agentId(), memberIds);
         nextGroups.put(groupId, new GroupView(
                 groupId,
                 cluster,
@@ -484,8 +495,13 @@ public class CoordinatorService {
                     memberIds,
                     cluster,
                     area,
-                    groupMembers.size()));
+                    groupMembers.size(),
+                    generation));
         }
+    }
+
+    private static long planGeneration(String cluster, String area, String groupId, String leaderAgentId, List<String> memberIds) {
+        return Integer.toUnsignedLong(Objects.hash(cluster, area, groupId, leaderAgentId, memberIds));
     }
 
     private static List<List<HostView>> locationAwareShards(List<HostView> members, int groupCount) {

@@ -118,6 +118,8 @@ public final class PulseAgentApp {
             if ("unknown".equals(currentPlan.agentId())) {
                 currentPlan = AgentGroupPlan.direct(heartbeat.agentId());
             }
+            stampStatePayloads(heartbeat, heartbeat.agentId(), Map.of(
+                    "agent_plan_generation", currentPlan.generation()));
             String mode = currentPlan.groupMode();
             receiver.setAcceptingFollowers("leader".equalsIgnoreCase(mode), Set.copyOf(currentPlan.members()));
             if ("leader".equalsIgnoreCase(mode)) {
@@ -172,8 +174,21 @@ public final class PulseAgentApp {
         long collectMs = elapsedMsSince(startedNs);
         stampStatePayloads(batch, leaderHeartbeat.agentId(), Map.of(
                 "leader_collect_ms", collectMs,
-                "group_sent_at_ms", Clock.systemUTC().millis()));
+                "group_sent_at_ms", Clock.systemUTC().millis(),
+                "agent_plan_generation", leaderHeartbeatStateLong(leaderHeartbeat, "agent_plan_generation")));
         return batch;
+    }
+
+    private static long leaderHeartbeatStateLong(HeartbeatRequest heartbeat, String key) {
+        return heartbeat.messages().stream()
+                .filter(PulseMessage::isStateMessage)
+                .map(PulseMessage::payload)
+                .filter(payload -> payload != null)
+                .map(payload -> payload.get(key))
+                .filter(value -> value instanceof Number)
+                .map(value -> ((Number) value).longValue())
+                .findFirst()
+                .orElse(0L);
     }
 
     private static void stampStatePayloads(HeartbeatRequest request, String agentId, Map<String, Object> values) {
@@ -213,7 +228,8 @@ public final class PulseAgentApp {
                         : List.of(fallbackAgentId),
                 stringValue(payload, "cluster", "unknown"),
                 stringValue(payload, "area", "unknown"),
-                intValue(payload, "size_limit", memberCount(payload)));
+                intValue(payload, "size_limit", memberCount(payload)),
+                longValue(payload, "plan_generation", 0));
     }
 
     private static String stringValue(Map<String, Object> payload, String key, String fallback) {
@@ -228,6 +244,18 @@ public final class PulseAgentApp {
         }
         try {
             return value == null ? fallback : Integer.parseInt(value.toString());
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private static long longValue(Map<String, Object> payload, String key, long fallback) {
+        Object value = payload.get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return value == null ? fallback : Long.parseLong(value.toString());
         } catch (NumberFormatException ignored) {
             return fallback;
         }

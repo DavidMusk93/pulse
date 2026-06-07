@@ -136,6 +136,7 @@ class CoordinatorHttpServerTest {
         assertTrue(catalog.body().contains("agent.thread_count"));
         assertTrue(catalog.body().contains("group.status_unhealthy"));
         assertTrue(catalog.body().contains("group.direct_fallback_count"));
+        assertTrue(catalog.body().contains("group.plan_lag"));
 
         HttpResponse<String> range = get("/api/metrics/query_range?metric=agent.thread_count&agents=agent-1&start_ms=1710000000000&end_ms=1710000000000&step_ms=1000&point_limit=10");
         assertEquals(200, range.statusCode());
@@ -376,10 +377,12 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("query_ms"));
         assertTrue(js.body().contains("render_ms"));
         assertTrue(js.body().contains("架构健康"));
+        assertTrue(js.body().contains("计划收敛"));
         assertTrue(js.body().contains("采集实效"));
         assertTrue(js.body().contains("发送链路"));
         assertTrue(js.body().contains("全局 TopN"));
         assertTrue(js.body().contains("group.status_unhealthy"));
+        assertTrue(js.body().contains("group.plan_lag"));
         assertTrue(js.body().contains("heartbeat.agent_collect_ms"));
         assertTrue(js.body().contains("stale"));
         assertTrue(js.body().contains("run-button"));
