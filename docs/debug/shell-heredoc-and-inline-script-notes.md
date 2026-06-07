@@ -19,6 +19,11 @@
 - For auto-ops deploy commands, avoid same-line environment assignment when the value is also passed as an argument.
 - Always inspect clean stdout for semantic evidence, not only process exit code.
 - Keep Python verification print logic simple; compute booleans before formatting rather than embedding escaped strings inside f-string expressions.
+- Local JSON summarization is still verification. Do not use `python3 - <<'PY'` for quick summaries; create `.tmp/summarize_*.py` and execute it.
+
+## Regression note
+
+- 2026-06-08: a local SQLite JSON summary was briefly run with heredoc. The output was readable but still polluted by `heredoc>` prompts, so the correct replacement is `.tmp/summarize_heartbeat_sqlite_analysis.py`.
 
 ## Anti-patterns
 

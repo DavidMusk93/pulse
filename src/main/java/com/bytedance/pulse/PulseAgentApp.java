@@ -169,7 +169,7 @@ public final class PulseAgentApp {
         long nowMs = Clock.systemUTC().millis();
         long startedNs = System.nanoTime();
         HeartbeatRequest batch = collector.batch(groupId, leaderHeartbeat, nowMs, sizeLimit);
-        long collectMs = Math.max(0L, (System.nanoTime() - startedNs) / 1_000_000L);
+        long collectMs = elapsedMsSince(startedNs);
         stampStatePayloads(batch, leaderHeartbeat.agentId(), Map.of(
                 "leader_collect_ms", collectMs,
                 "group_sent_at_ms", Clock.systemUTC().millis()));
@@ -299,7 +299,7 @@ public final class PulseAgentApp {
                             "agent_send_ms", lastSendMs));
                     long encodeStartedNs = System.nanoTime();
                     String body = mapper.writeValueAsString(heartbeat);
-                    long encodeMs = Math.max(0L, (System.nanoTime() - encodeStartedNs) / 1_000_000L);
+                    long encodeMs = elapsedMsSince(encodeStartedNs);
                     HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path))
                             .timeout(timeout)
                             .header("content-type", "application/json")
@@ -307,7 +307,7 @@ public final class PulseAgentApp {
                             .build();
                     long sendStartedNs = System.nanoTime();
                     HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-                    long sendMs = Math.max(0L, (System.nanoTime() - sendStartedNs) / 1_000_000L);
+                    long sendMs = elapsedMsSince(sendStartedNs);
                     lastEncodeMs = encodeMs;
                     lastSendMs = sendMs;
                     if (response.statusCode() >= 200 && response.statusCode() < 300) {
@@ -346,6 +346,11 @@ public final class PulseAgentApp {
             return null;
         }
 
+    }
+
+    private static long elapsedMsSince(long startedNs) {
+        long elapsedNs = Math.max(0L, System.nanoTime() - startedNs);
+        return elapsedNs == 0 ? 0 : Math.max(1L, (elapsedNs + 999_999L) / 1_000_000L);
     }
 
     private static int intEnv(String key, int fallback) {
