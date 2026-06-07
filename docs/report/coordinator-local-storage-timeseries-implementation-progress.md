@@ -3,10 +3,10 @@
 ## 状态
 
 - 时间：2026-06-08
-- 最新已部署提交：`1482fde Add metrics panel render metrics`
-- 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection、aggregate series、frontend visibility/range pause、frontend render metrics
+- 最新已部署提交：`88fc018 Make heartbeat timing metrics visible`
+- 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection、aggregate series、frontend visibility/range pause、frontend render metrics、heartbeat timing instrumentation
 - 部署范围：`cdn_new` 50 台 agent 与 3 台 coordinator/group leader 已完成最新版本全量 rollout
-- JAR SHA：`d9c7ddd5911f6860eec839c9d7820029da03d13151c9206b7c8d1519c116f061`
+- JAR SHA：`5e82cd6908f7c470af59fa8feedc9da808d419e52eb2fe3374f21ea27e63f194`
 - 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览；SQLite 统计显示 `cdn_new` 心跳链路整体健康但仍缺少若干关键 timing instrumentation。
 
 ## 已完成
@@ -27,6 +27,7 @@
   - heartbeat 样本写入 `arrival_gap_ms`、`seq_gap`、agent collect/encode/send/thread/rss。
   - heartbeat payload 中的 `tide_workers` 抽取到 `tide_worker_sample`。
   - batch heartbeat 写入 `group_leader_sample`，包含 member/submitted/accepted/missing/stale/arrival/status。
+  - agent outbound 已写入上一轮真实 `agent_encode_ms` / `agent_send_ms`；group leader 已写入 `leader_collect_ms` 并由 coordinator 计算 `group_latency_ms`。
   - host 维度写入 `host_dimension`。
 
 - 查询 API：
@@ -119,6 +120,8 @@ metrics panel live pause deploy: total=3 ok=3 failed=0 elapsed=20s
 metrics panel render metrics deploy: total=3 ok=3 failed=0 elapsed=19s
 full cdn_new latest rollout: total=50 ok=50 failed=0 elapsed=166s
 full cdn_new latest verify: total=50 ok=50 failed=0 elapsed=2s
+heartbeat timing instrumentation rollout: total=50 ok=50 failed=0 elapsed=187s
+heartbeat timing instrumentation verify: total=50 ok=50 failed=0 elapsed=2s
 ```
 
 最新 SQLite 心跳链路分析：
@@ -128,7 +131,8 @@ full cdn_new latest verify: total=50 ok=50 failed=0 elapsed=2s
 - `cdn2` arrival p95：`5025-5036ms`；arrival p99：`8488-9007ms`；低于 `30000ms` TTL。
 - `cdn2` `seq_gap > 1`：每台 coordinator 过去 1 小时仅 `1-2` 条。
 - `cdn2` group status：`ok` 约 `98.3%-98.6%`，仍有低量 `partial` / `stale_plan`。
-- 主要缺口：`agent_encode_ms`、`agent_send_ms`、`leader_collect_ms`、`group_latency_ms` 线上值仍为 `0`，需要补真实 instrumentation。
+- post-fix：`agent_encode_ms` p99 `1ms`，`agent_send_ms` p95 `3ms`，`leader_collect_ms` p95 `1ms`，`group_latency_ms` p95 `2ms`。
+- post-fix：`cdn2` 短窗口 3 台 coordinator 均为 `50/50` agents，`seq_gap=0`。
 
 最新 query budget 和 storage health 验证：
 

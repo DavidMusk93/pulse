@@ -59,8 +59,33 @@ Latest `cdn2` group samples showed zero missing and zero stale members for sampl
 
 ## Recommended Follow-Ups
 
-1. Instrument real `agent_encode_ms` and `agent_send_ms` in the agent heartbeat path.
-2. Instrument `leader_collect_ms` and `group_latency_ms` in the group leader collector path.
-3. Add first-class columns or normalized event details for `agent_plan_generation`, `expected_generation`, `plan_lag`, and `reject_reason`.
-4. Re-run the `cdn2` subset analysis after rollout cooldown and alert if direct samples or `stale_plan` do not decay.
-5. Add a Metrics Panel preset for `cdn2` group health: arrival p99, seq gaps, group missing p99, direct fallback, and stale plan count.
+1. Add first-class columns or normalized event details for `agent_plan_generation`, `expected_generation`, `plan_lag`, and `reject_reason`.
+2. Re-run the `cdn2` subset analysis after rollout cooldown and alert if direct samples or `stale_plan` do not decay.
+3. Add a Metrics Panel preset for `cdn2` group health: arrival p99, seq gaps, group missing p99, direct fallback, and stale plan count.
+
+## Post-Fix Verification
+
+Instrumentation commits:
+
+- `d62a649 Instrument heartbeat timing metrics`
+- `88fc018 Make heartbeat timing metrics visible`
+
+Deployment:
+
+- Full `cdn_new` rollout: `total=50 ok=50 failed=0 elapsed=187s`.
+- Full `cdn_new` verify: `total=50 ok=50 failed=0 elapsed=2s`.
+- JAR SHA: `5e82cd6908f7c470af59fa8feedc9da808d419e52eb2fe3374f21ea27e63f194`.
+
+Short-window SQLite verification after rollout:
+
+| Coordinator | Agent encode p99 | Agent send p95 | Agent send p99 | Leader collect p95 | Group latency p95 | `cdn2` agents | `cdn2` seq gaps |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `fdbd:dc05:11:634::45` | 1 ms | 3 ms | 7 ms | 1 ms | 2 ms | 50 | 0 |
+| `fdbd:dc05:13:10c::40` | 1 ms | 3 ms | 6 ms | 1 ms | 2 ms | 50 | 0 |
+| `fdbd:dc07:0:810::44` | 1 ms | 3 ms | 5 ms | 1 ms | 2 ms | 50 | 0 |
+
+Result:
+
+- The previous “always zero” timing gaps are fixed for `agent_encode_ms`, `agent_send_ms`, `leader_collect_ms`, and `group_latency_ms`.
+- `cdn2` remains fully visible on all coordinators.
+- The short-window `cdn2` sequence gap count is `0` on all coordinators after the latest rollout.
