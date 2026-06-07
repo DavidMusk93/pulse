@@ -33,6 +33,7 @@ class AsyncLocalMetricStorageTest {
 
             assertEquals(List.of(19.0, 20.0), result.series().get(0).points().stream().map(MetricPoint::value).toList());
             assertEquals(2, storage.health().writtenCommands());
+            assertTrue(storage.health().transactionBatches() > 0);
             assertEquals(0, storage.health().droppedCommands());
             assertEquals("ok", storage.health().status());
         }

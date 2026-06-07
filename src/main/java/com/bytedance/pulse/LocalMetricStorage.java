@@ -189,6 +189,23 @@ final class LocalMetricStorage implements MetricStorage {
         }
     }
 
+    public void beginTransaction() throws SQLException {
+        connection.setAutoCommit(false);
+    }
+
+    public void commitTransaction() throws SQLException {
+        connection.commit();
+        connection.setAutoCommit(true);
+    }
+
+    public void rollbackTransaction() throws SQLException {
+        try {
+            connection.rollback();
+        } finally {
+            connection.setAutoCommit(true);
+        }
+    }
+
     @Override
     public MetricQueryResult queryRange(MetricQuery query) throws Exception {
         MetricColumn metric = MetricColumn.fromName(query.metric());
@@ -274,7 +291,7 @@ final class LocalMetricStorage implements MetricStorage {
 
     @Override
     public MetricStorageHealth health() {
-        return new MetricStorageHealth("ok", 0, 0, 0, 0, 0, 0, 0, 0, "");
+        return new MetricStorageHealth("ok", 0, 0, 0, 0, 0, 0, 0, 0, 0, "");
     }
 
     private MetricQueryResult queryTideWorkerRange(MetricQuery query, MetricColumn metric) throws Exception {

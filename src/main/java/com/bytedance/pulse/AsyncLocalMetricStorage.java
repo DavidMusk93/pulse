@@ -2,6 +2,7 @@ package com.bytedance.pulse;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -23,6 +24,7 @@ final class AsyncLocalMetricStorage implements MetricStorage {
     private final AtomicLong maintenanceCommands = new AtomicLong();
     private final AtomicLong deletedSamples = new AtomicLong();
     private final AtomicLong checkpointCommands = new AtomicLong();
+    private final AtomicLong transactionBatches = new AtomicLong();
     private final Thread writerThread;
     private volatile boolean running = true;
     private volatile String lastError = "";
@@ -130,6 +132,7 @@ final class AsyncLocalMetricStorage implements MetricStorage {
                 maintenanceCommands.get(),
                 deletedSamples.get(),
                 checkpointCommands.get(),
+                transactionBatches.get(),
                 lastError);
     }
 
@@ -152,14 +155,16 @@ final class AsyncLocalMetricStorage implements MetricStorage {
                     runMaintenanceIfDue(storage);
                     continue;
                 }
-                writeCommand(storage, first);
+                List<MetricWriteCommand> batch = new ArrayList<>(batchSize);
+                batch.add(first);
                 for (int i = 1; i < batchSize; i++) {
                     MetricWriteCommand next = queue.poll();
                     if (next == null) {
                         break;
                     }
-                    writeCommand(storage, next);
+                    batch.add(next);
                 }
+                writeBatch(storage, batch);
                 runMaintenanceIfDue(storage);
             }
         } catch (Exception exception) {
@@ -178,6 +183,28 @@ final class AsyncLocalMetricStorage implements MetricStorage {
             writtenCommands.incrementAndGet();
         } catch (Exception exception) {
             failedCommands.incrementAndGet();
+            lastError = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
+        }
+    }
+
+    private void writeBatch(LocalMetricStorage storage, List<MetricWriteCommand> batch) {
+        if (batch.isEmpty()) {
+            return;
+        }
+        try {
+            storage.beginTransaction();
+            for (MetricWriteCommand command : batch) {
+                writeCommand(storage, command);
+            }
+            storage.commitTransaction();
+            transactionBatches.incrementAndGet();
+        } catch (Exception exception) {
+            try {
+                storage.rollbackTransaction();
+            } catch (Exception rollbackException) {
+                exception.addSuppressed(rollbackException);
+            }
+            failedCommands.addAndGet(batch.size());
             lastError = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
         }
     }
@@ -224,4 +251,5 @@ record MetricStorageHealth(
         long maintenanceCommands,
         long deletedSamples,
         long checkpointCommands,
+        long transactionBatches,
         String lastError) {}
