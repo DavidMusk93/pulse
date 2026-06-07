@@ -3,7 +3,8 @@
 ## 状态
 
 - 时间：2026-06-07
-- 最新提交：`db1388c Add bounded metric retention cleanup`
+- 最新已部署提交：`db1388c Add bounded metric retention cleanup`
+- 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget
 - 部署范围：`cdn_new` 三台 coordinator
 - JAR SHA：`2feb51f4455556bc2e91e39773a6988e21f416dd04134e45258057364d11bdab`
 - 结论：后端本地时序存储核心链路已从最小闭环推进到可在线验证阶段；前端 Ant Design 时序面板仍未完成。
@@ -43,17 +44,30 @@
 
 - 保留与清理：
   - `deleteExpiredSamples(cutoffMs, limit)` 已支持 bounded 删除 `heartbeat_sample`、`tide_worker_sample`、`group_leader_sample`、`host_event`。
-  - 当前尚未接入 writer 定时调度。
+  - `AsyncLocalMetricStorage` writer 已定时执行 TTL cleanup 和 WAL checkpoint。
+  - storage health 已暴露 `maintenance_commands`、`deleted_samples`、`checkpoint_commands`。
+
+- 写入批处理：
+  - writer 已按 batch drain queue，并用显式 transaction 提交。
+  - storage health 已暴露 `transaction_batches`。
+
+- 查询预算：
+  - `/api/metrics/query_range` 已支持 `series_limit`，默认 50，最大 200。
+  - `point_limit` 已服务端钳制到最大 20000。
+  - 响应已包含 `query_id`、`from`、`to`、`unit`、`sample_policy`、`truncated`、`suggested_step_ms`、`series_limit`、`point_limit`。
+  - 查询默认保持请求 `step_ms`；只有结果被截断时才返回更大的 `suggested_step_ms`，避免稀疏样本被错误合并。
 
 ## 测试
 
-- `mvn test`：`61` tests passed。
+- `mvn test`：`64` tests passed。
 - 关键新增测试：
   - `AsyncLocalMetricStorageTest`
   - `LocalMetricStorageTest`
   - `CoordinatorServiceTest#batchHeartbeatWritesGroupLeaderMetricSample`
   - `CoordinatorHttpServerTest#metricsStorageAndStreamExposeHealthAndInvalidationEvents`
   - `CoordinatorHttpServerTest#metricsEventsEndpointReturnsHostEvents`
+  - `CoordinatorHttpServerTest#metricsRangeQueryAppliesServerSideBudgets`
+  - `LocalMetricStorageTest#queryRangeSuggestsLargerStepWhenRequestExceedsPointBudget`
 
 ## 线上验证
 
@@ -101,23 +115,24 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
   - 已有 `hello`、`storage.health`、`metric.invalidate`。
   - 尚未实现事件缓存、`Last-Event-ID` 补发和 slow client bounded queue。
 
-- TTL 调度未完成：
-  - 已有 bounded delete primitive。
-  - 尚未由 writer 定时插入 cleanup/checkpoint command。
-
-- 写入批处理仍可优化：
-  - 当前 writer 串行 drain queue，但每条 command 内部仍直接执行 statement。
-  - 尚未复用 prepared statement，也未显式包裹 batch transaction。
+- 本地最新后端能力尚未部署：
+  - writer maintenance、batch transaction、query envelope、query budget 已本地测试通过。
+  - 尚未 rollout 到 `cdn_new` coordinator 并验证线上 health 新字段。
 
 - 查询预算仍可完善：
   - heartbeat 已支持 `step_ms avg`。
   - tide worker 和 group leader 仍是 raw query。
-  - 尚未实现 top N 异常 host、series_limit、自动 suggested_step 增大。
+  - 已有 `series_limit`、`point_limit` 和截断后的 `suggested_step_ms`。
+  - 尚未实现 top N 异常 host、服务端聚合线和 tide/group 的 step 聚合。
+
+- 前端构建环境阻塞：
+  - 当前 agent shell 找不到 `node`/`npm`，无法运行 `src/main/frontend` 的 Vite build。
+  - 已记录到 `docs/debug/frontend-build-environment.md`。
 
 ## 下一步
 
-1. 接入 writer 定时 TTL cleanup 和 WAL checkpoint。
-2. 为 writer batch 增加显式 transaction 和 prepared statement 复用。
-3. 完成 `/api/metrics/query_range` 的统一 query envelope：`query_id`、`from`、`to`、`step`、`unit`、`series_limit`。
-4. 恢复前端构建环境或生成稳定静态同步脚本，实现 Ant Design metrics panel。
+1. 部署最新 coordinator，验证 `/api/metrics/storage` health 新字段和 `/api/metrics/query_range` budget envelope。
+2. 恢复前端构建环境或生成稳定静态同步脚本，实现 Ant Design metrics panel。
+3. 为 tide worker 和 group leader query 补齐 step 聚合、series budget 和 topN。
+4. 为 SSE 增加 `Last-Event-ID`、事件缓存和 slow client bounded queue。
 5. 上线前端后继续用线上 SQLite 分析 group heartbeat 是否达到设计目标。

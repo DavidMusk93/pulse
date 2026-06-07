@@ -301,10 +301,13 @@ public class CoordinatorHttpServer {
         return new MetricQuery(
                 requiredQuery(uri, "metric"),
                 queryList(uri, "agents"),
-                longQuery(uri, "start_ms", 0),
-                longQuery(uri, "end_ms", Long.MAX_VALUE),
-                longQuery(uri, "step_ms", 10_000),
-                (int) Math.min(Integer.MAX_VALUE, longQuery(uri, "point_limit", 20_000)));
+                longQuery(uri, "start_ms", longQuery(uri, "from", 0)),
+                longQuery(uri, "end_ms", longQuery(uri, "to", Long.MAX_VALUE)),
+                longQuery(uri, "step_ms", longQuery(uri, "step", 10_000)),
+                (int) Math.min(LocalMetricStorage.MAX_SERIES_LIMIT,
+                        longQuery(uri, "series_limit", LocalMetricStorage.DEFAULT_SERIES_LIMIT)),
+                (int) Math.min(LocalMetricStorage.MAX_POINT_LIMIT,
+                        longQuery(uri, "point_limit", LocalMetricStorage.MAX_POINT_LIMIT)));
     }
 
     private static MetricEventQuery metricEventQuery(URI uri) {

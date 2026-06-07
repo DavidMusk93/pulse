@@ -31,6 +31,10 @@ interface MetricStorage extends AutoCloseable {
 }
 
 final class LocalMetricStorage implements MetricStorage {
+    static final int DEFAULT_SERIES_LIMIT = 50;
+    static final int MAX_SERIES_LIMIT = 200;
+    static final int MAX_POINT_LIMIT = 20_000;
+
     private static final String HEARTBEAT_TABLE = "heartbeat_sample";
     private static final ObjectMapper MAPPER = JsonSupport.objectMapper();
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
@@ -215,8 +219,10 @@ final class LocalMetricStorage implements MetricStorage {
         if (metric.source == MetricSource.GROUP_LEADER) {
             return queryGroupLeaderRange(query, metric);
         }
-        int pointLimit = Math.max(1, query.pointLimit());
-        long stepMs = Math.max(1, query.stepMs());
+        int pointLimit = effectivePointLimit(query);
+        int seriesLimit = effectiveSeriesLimit(query);
+        long stepMs = effectiveStepMs(query);
+        List<String> agentIds = limitedAgentIds(query, seriesLimit);
         StringBuilder sql = new StringBuilder("""
                 SELECT
                     (observed_at_ms / ?) * ? AS observed_at_ms,
@@ -230,9 +236,9 @@ final class LocalMetricStorage implements MetricStorage {
                 FROM heartbeat_sample
                 WHERE observed_at_ms >= ? AND observed_at_ms <= ?
                 """.formatted(metric.column()));
-        if (!query.agentIds().isEmpty()) {
+        if (!agentIds.isEmpty()) {
             sql.append(" AND agent_id IN (");
-            sql.append("?,".repeat(query.agentIds().size()));
+            sql.append("?,".repeat(agentIds.size()));
             sql.setLength(sql.length() - 1);
             sql.append(")");
         }
@@ -246,7 +252,7 @@ final class LocalMetricStorage implements MetricStorage {
             statement.setLong(index++, stepMs);
             statement.setLong(index++, query.startMs());
             statement.setLong(index++, query.endMs());
-            for (String agentId : query.agentIds()) {
+            for (String agentId : agentIds) {
                 statement.setString(index++, agentId);
             }
             statement.setLong(index++, stepMs);
@@ -279,6 +285,10 @@ final class LocalMetricStorage implements MetricStorage {
         List<MetricSeries> series = pointsByAgent.entrySet().stream()
                 .map(entry -> new MetricSeries(Map.of("agent_id", entry.getKey()), List.copyOf(entry.getValue())))
                 .toList();
+        boolean seriesTruncated = query.agentIds().size() > seriesLimit || series.size() > seriesLimit;
+        if (series.size() > seriesLimit) {
+            series = List.copyOf(series.subList(0, seriesLimit));
+        }
         return new MetricQueryResult(
                 queryId(query),
                 query.metric(),
@@ -286,9 +296,9 @@ final class LocalMetricStorage implements MetricStorage {
                 query.endMs(),
                 metric.unit(),
                 "avg",
-                truncated,
-                stepMs,
-                query.agentIds().size(),
+                truncated || seriesTruncated,
+                suggestedStepMs(query, pointLimit, seriesLimit, truncated || seriesTruncated, stepMs),
+                seriesLimit,
                 pointLimit,
                 series);
     }
@@ -299,15 +309,18 @@ final class LocalMetricStorage implements MetricStorage {
     }
 
     private MetricQueryResult queryTideWorkerRange(MetricQuery query, MetricColumn metric) throws Exception {
-        int pointLimit = Math.max(1, query.pointLimit());
+        int pointLimit = effectivePointLimit(query);
+        int seriesLimit = effectiveSeriesLimit(query);
+        long stepMs = effectiveStepMs(query);
+        List<String> agentIds = limitedAgentIds(query, seriesLimit);
         StringBuilder sql = new StringBuilder("""
                 SELECT observed_at_ms, agent_id, pid, version, role, %s AS metric_value
                 FROM tide_worker_sample
                 WHERE observed_at_ms >= ? AND observed_at_ms <= ?
                 """.formatted(metric.column()));
-        if (!query.agentIds().isEmpty()) {
+        if (!agentIds.isEmpty()) {
             sql.append(" AND agent_id IN (");
-            sql.append("?,".repeat(query.agentIds().size()));
+            sql.append("?,".repeat(agentIds.size()));
             sql.setLength(sql.length() - 1);
             sql.append(")");
         }
@@ -320,7 +333,7 @@ final class LocalMetricStorage implements MetricStorage {
             int index = 1;
             statement.setLong(index++, query.startMs());
             statement.setLong(index++, query.endMs());
-            for (String agentId : query.agentIds()) {
+            for (String agentId : agentIds) {
                 statement.setString(index++, agentId);
             }
             statement.setInt(index, pointLimit + 1);
@@ -347,6 +360,10 @@ final class LocalMetricStorage implements MetricStorage {
         List<MetricSeries> series = pointsBySeries.entrySet().stream()
                 .map(entry -> new MetricSeries(labelsBySeries.get(entry.getKey()), List.copyOf(entry.getValue())))
                 .toList();
+        boolean seriesTruncated = query.agentIds().size() > seriesLimit || series.size() > seriesLimit;
+        if (series.size() > seriesLimit) {
+            series = List.copyOf(series.subList(0, seriesLimit));
+        }
         return new MetricQueryResult(
                 queryId(query),
                 query.metric(),
@@ -354,15 +371,17 @@ final class LocalMetricStorage implements MetricStorage {
                 query.endMs(),
                 metric.unit(),
                 "avg",
-                truncated,
-                Math.max(1, query.stepMs()),
-                query.agentIds().size(),
+                truncated || seriesTruncated,
+                suggestedStepMs(query, pointLimit, seriesLimit, truncated || seriesTruncated, stepMs),
+                seriesLimit,
                 pointLimit,
                 series);
     }
 
     private MetricQueryResult queryGroupLeaderRange(MetricQuery query, MetricColumn metric) throws Exception {
-        int pointLimit = Math.max(1, query.pointLimit());
+        int pointLimit = effectivePointLimit(query);
+        int seriesLimit = effectiveSeriesLimit(query);
+        long stepMs = effectiveStepMs(query);
         String sql = """
                 SELECT observed_at_ms, group_id, leader_agent_id, cluster, area, status, %s AS metric_value
                 FROM group_leader_sample
@@ -399,6 +418,10 @@ final class LocalMetricStorage implements MetricStorage {
         List<MetricSeries> series = pointsByGroup.entrySet().stream()
                 .map(entry -> new MetricSeries(labelsByGroup.get(entry.getKey()), List.copyOf(entry.getValue())))
                 .toList();
+        boolean seriesTruncated = series.size() > seriesLimit;
+        if (series.size() > seriesLimit) {
+            series = List.copyOf(series.subList(0, seriesLimit));
+        }
         return new MetricQueryResult(
                 queryId(query),
                 query.metric(),
@@ -406,9 +429,9 @@ final class LocalMetricStorage implements MetricStorage {
                 query.endMs(),
                 metric.unit(),
                 "avg",
-                truncated,
-                Math.max(1, query.stepMs()),
-                0,
+                truncated || seriesTruncated,
+                suggestedStepMs(query, pointLimit, seriesLimit, truncated || seriesTruncated, stepMs),
+                seriesLimit,
                 pointLimit,
                 series);
     }
@@ -681,6 +704,41 @@ final class LocalMetricStorage implements MetricStorage {
         return value == null ? "" : value;
     }
 
+    private static int effectivePointLimit(MetricQuery query) {
+        return Math.min(MAX_POINT_LIMIT, Math.max(1, query.pointLimit()));
+    }
+
+    private static int effectiveSeriesLimit(MetricQuery query) {
+        return Math.min(MAX_SERIES_LIMIT, Math.max(1, query.seriesLimit()));
+    }
+
+    private static long effectiveStepMs(MetricQuery query) {
+        return Math.max(1, query.stepMs());
+    }
+
+    private static long suggestedStepMs(
+            MetricQuery query, int pointLimit, int seriesLimit, boolean truncated, long actualStepMs) {
+        if (!truncated) {
+            return actualStepMs;
+        }
+        if (query.endMs() <= query.startMs()) {
+            return actualStepMs;
+        }
+        long spanMs = Math.max(1, query.endMs() - query.startMs() + 1);
+        int estimatedSeries = query.agentIds().isEmpty()
+                ? seriesLimit
+                : Math.min(seriesLimit, Math.max(1, query.agentIds().size()));
+        long budgetedStepMs = (long) Math.ceil((double) spanMs * estimatedSeries / Math.max(1, pointLimit));
+        return Math.max(actualStepMs, Math.max(1, budgetedStepMs));
+    }
+
+    private static List<String> limitedAgentIds(MetricQuery query, int seriesLimit) {
+        if (query.agentIds().size() <= seriesLimit) {
+            return query.agentIds();
+        }
+        return List.copyOf(query.agentIds().subList(0, seriesLimit));
+    }
+
     private static String stringValue(Object value, String fallback) {
         if (value == null || value.toString().isBlank()) {
             return fallback;
@@ -860,7 +918,12 @@ record MetricQuery(
         long startMs,
         long endMs,
         long stepMs,
+        int seriesLimit,
         int pointLimit) {
+    MetricQuery(String metric, List<String> agentIds, long startMs, long endMs, long stepMs, int pointLimit) {
+        this(metric, agentIds, startMs, endMs, stepMs, LocalMetricStorage.DEFAULT_SERIES_LIMIT, pointLimit);
+    }
+
     MetricQuery {
         agentIds = agentIds == null ? List.of() : List.copyOf(agentIds);
     }

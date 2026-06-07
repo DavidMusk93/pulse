@@ -151,6 +151,18 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
+    void metricsRangeQueryAppliesServerSideBudgets() throws Exception {
+        HttpResponse<String> range = get("/api/metrics/query_range?metric=agent.thread_count&agents=agent-1&start_ms=1710000000000&end_ms=1710000000000&step_ms=1000&point_limit=999999999&series_limit=2");
+
+        assertEquals(200, range.statusCode());
+        JsonNode body = mapper.readTree(range.body());
+        assertEquals(20_000, body.get("point_limit").asInt());
+        assertEquals(2, body.get("series_limit").asInt());
+        assertEquals(1_000, body.get("suggested_step_ms").asLong());
+        assertEquals(false, body.get("truncated").asBoolean());
+    }
+
+    @Test
     void metricsStorageAndStreamExposeHealthAndInvalidationEvents() throws Exception {
         HttpResponse<String> storage = get("/api/metrics/storage");
         assertEquals(200, storage.statusCode());

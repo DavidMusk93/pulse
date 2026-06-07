@@ -219,6 +219,32 @@ class LocalMetricStorageTest {
     }
 
     @Test
+    void queryRangeSuggestsLargerStepWhenRequestExceedsPointBudget() throws Exception {
+        Path db = tempDir.resolve("pulse-metrics.db");
+        try (LocalMetricStorage storage = LocalMetricStorage.open(db)) {
+            for (int i = 0; i < 11; i++) {
+                storage.writeHeartbeat(new HeartbeatMetricSample(
+                        1_710_000_000_000L + i, "agent-1", "host-1", "cluster-a", "area-a", "direct", "direct",
+                        1, i, 30_000, 0, i, 0, 0, 0, 10, 1_000, Map.of()));
+            }
+
+            MetricQueryResult result = storage.queryRange(new MetricQuery(
+                    "heartbeat.arrival_gap_ms",
+                    List.of("agent-1"),
+                    1_710_000_000_000L,
+                    1_710_000_000_010L,
+                    1,
+                    1,
+                    10));
+
+            assertEquals(10, result.pointLimit());
+            assertEquals(1, result.seriesLimit());
+            assertTrue(result.truncated());
+            assertTrue(result.suggestedStepMs() > 1);
+        }
+    }
+
+    @Test
     void storesAndQueriesHostEventsForChartAnnotations() throws Exception {
         Path db = tempDir.resolve("pulse-metrics.db");
         try (LocalMetricStorage storage = LocalMetricStorage.open(db)) {
