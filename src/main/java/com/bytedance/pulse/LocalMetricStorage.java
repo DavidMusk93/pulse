@@ -36,6 +36,17 @@ final class LocalMetricStorage implements AutoCloseable {
         return new LocalMetricStorage(connection);
     }
 
+    static List<MetricCatalogItem> catalog() {
+        return List.of(
+                new MetricCatalogItem("heartbeat.arrival_gap_ms", "Heartbeat arrival gap", "ms"),
+                new MetricCatalogItem("heartbeat.seq_gap", "Heartbeat sequence gap", "count"),
+                new MetricCatalogItem("heartbeat.agent_collect_ms", "Agent collection time", "ms"),
+                new MetricCatalogItem("heartbeat.agent_encode_ms", "Agent encode time", "ms"),
+                new MetricCatalogItem("heartbeat.agent_send_ms", "Agent send time", "ms"),
+                new MetricCatalogItem("agent.thread_count", "Agent thread count", "threads"),
+                new MetricCatalogItem("agent.rss_kb", "Agent RSS", "KiB"));
+    }
+
     void writeHeartbeat(HeartbeatMetricSample sample) throws Exception {
         String sql = """
                 INSERT INTO heartbeat_sample (
@@ -268,3 +279,5 @@ record MetricPoint(long timestampMs, double value, Map<String, Object> metadata)
         metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
     }
 }
+
+record MetricCatalogItem(String metric, String title, String unit) {}

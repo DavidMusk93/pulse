@@ -31,18 +31,24 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class CoordinatorHttpServerTest {
     private final ObjectMapper mapper = JsonSupport.objectMapper();
     private final HttpClient client = HttpClient.newHttpClient();
+    @TempDir
+    Path tempDir;
     private CoordinatorHttpServer server;
+    private LocalMetricStorage metricStorage;
     private String baseUrl;
 
     @BeforeEach
-    void setUp() throws IOException {
+    void setUp() throws Exception {
+        metricStorage = LocalMetricStorage.open(tempDir.resolve("metrics.db"));
         CoordinatorService service = new CoordinatorService(
                 "coordinator-a",
-                Clock.fixed(Instant.ofEpochMilli(1_710_000_000_000L), ZoneOffset.UTC));
+                Clock.fixed(Instant.ofEpochMilli(1_710_000_000_000L), ZoneOffset.UTC),
+                metricStorage);
         server = new CoordinatorHttpServer(service, "127.0.0.1", 0);
         server.start();
         baseUrl = "http://127.0.0.1:" + server.port();
@@ -51,6 +57,12 @@ class CoordinatorHttpServerTest {
     @AfterEach
     void tearDown() {
         server.stop();
+        if (metricStorage != null) {
+            try {
+                metricStorage.close();
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     @Test
@@ -91,6 +103,46 @@ class CoordinatorHttpServerTest {
         assertTrue(hosts.body().contains("group_mode"));
         assertTrue(hosts.body().contains("leader_agent_id"));
         assertTrue(hosts.body().contains("group_size_limit"));
+    }
+
+    @Test
+    void metricsEndpointsExposeCatalogAndQueryHeartbeatRange() throws Exception {
+        postJson("/heartbeat", """
+                {
+                  "agent_id": "agent-1",
+                  "epoch": 1,
+                  "seq": 40,
+                  "ttl_ms": 15000,
+                  "messages": [
+                    {
+                      "message_id": "msg-agent-1-40",
+                      "type": "state.heartbeat",
+                      "version": 1,
+                      "payload": {
+                        "host": "host-a",
+                        "ip": "10.0.0.1",
+                        "cluster": "cluster-a",
+                        "area": "area-a",
+                        "agent_thread_count": 19
+                      }
+                    }
+                  ]
+                }
+                """);
+
+        HttpResponse<String> catalog = get("/api/metrics/catalog");
+        assertEquals(200, catalog.statusCode());
+        assertTrue(catalog.body().contains("heartbeat.arrival_gap_ms"));
+        assertTrue(catalog.body().contains("agent.thread_count"));
+
+        HttpResponse<String> range = get("/api/metrics/query_range?metric=agent.thread_count&agents=agent-1&start_ms=1710000000000&end_ms=1710000000000&step_ms=1000&point_limit=10");
+        assertEquals(200, range.statusCode());
+        JsonNode body = mapper.readTree(range.body());
+        assertEquals("agent.thread_count", body.get("metric").asText());
+        assertEquals("avg", body.get("sample_policy").asText());
+        assertEquals(false, body.get("truncated").asBoolean());
+        assertEquals("agent-1", body.get("series").get(0).get("labels").get("agent_id").asText());
+        assertEquals(19.0, body.get("series").get(0).get("points").get(0).get("value").asDouble());
     }
 
     @Test

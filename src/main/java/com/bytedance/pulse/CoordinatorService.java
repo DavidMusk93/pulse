@@ -112,6 +112,17 @@ public class CoordinatorService {
                 .toList();
     }
 
+    public List<MetricCatalogItem> metricCatalog() {
+        return LocalMetricStorage.catalog();
+    }
+
+    public MetricQueryResult queryMetrics(MetricQuery query) throws Exception {
+        if (metricStorage == null) {
+            throw new IllegalArgumentException("metric storage is disabled");
+        }
+        return metricStorage.queryRange(query);
+    }
+
     public TaskSnapshot taskSnapshot(String agentId) {
         return taskService.snapshot(agentId);
     }

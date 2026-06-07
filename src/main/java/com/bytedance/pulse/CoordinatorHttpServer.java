@@ -82,6 +82,14 @@ public class CoordinatorHttpServer {
                 writeJson(exchange, 200, service.hosts());
                 return;
             }
+            if ("GET".equals(method) && "/api/metrics/catalog".equals(path)) {
+                writeJson(exchange, 200, service.metricCatalog());
+                return;
+            }
+            if ("GET".equals(method) && "/api/metrics/query_range".equals(path)) {
+                writeJson(exchange, 200, service.queryMetrics(metricQuery(exchange.getRequestURI())));
+                return;
+            }
             if ("GET".equals(method) && path.startsWith("/assets/")) {
                 writeStaticAsset(exchange, path);
                 return;
@@ -246,6 +254,50 @@ public class CoordinatorHttpServer {
                     .forEach(values::add);
         }
         return List.copyOf(values);
+    }
+
+    private static MetricQuery metricQuery(URI uri) {
+        return new MetricQuery(
+                requiredQuery(uri, "metric"),
+                queryList(uri, "agents"),
+                longQuery(uri, "start_ms", 0),
+                longQuery(uri, "end_ms", Long.MAX_VALUE),
+                longQuery(uri, "step_ms", 10_000),
+                (int) Math.min(Integer.MAX_VALUE, longQuery(uri, "point_limit", 20_000)));
+    }
+
+    private static String requiredQuery(URI uri, String key) {
+        String value = queryValue(uri, key);
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(key + " is required");
+        }
+        return value;
+    }
+
+    private static long longQuery(URI uri, String key, long fallback) {
+        String value = queryValue(uri, key);
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException(key + " must be a number");
+        }
+    }
+
+    private static String queryValue(URI uri, String key) {
+        String query = uri.getRawQuery();
+        if (query == null || query.isBlank()) {
+            return null;
+        }
+        String prefix = key + "=";
+        for (String part : query.split("&")) {
+            if (part.startsWith(prefix)) {
+                return URLDecoder.decode(part.substring(prefix.length()), StandardCharsets.UTF_8);
+            }
+        }
+        return null;
     }
 
     private <T> T readJson(HttpExchange exchange, Class<T> type) throws IOException {
