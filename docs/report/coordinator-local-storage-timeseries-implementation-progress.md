@@ -56,6 +56,7 @@
   - `point_limit` 已服务端钳制到最大 20000。
   - 响应已包含 `query_id`、`from`、`to`、`unit`、`sample_policy`、`truncated`、`suggested_step_ms`、`series_limit`、`point_limit`。
   - 查询默认保持请求 `step_ms`；只有结果被截断时才返回更大的 `suggested_step_ms`，避免稀疏样本被错误合并。
+  - heartbeat、tide worker、group leader 已统一按请求 `step_ms` 分桶并使用 `AVG` 聚合。
 
 - 前端时序面板：
   - 已恢复本地 Node/npm 构建链路，使用 `.tmp/runtime/node-v22.12.0-darwin-arm64`。
@@ -67,7 +68,7 @@
 
 ## 测试
 
-- `mvn test`：`64` tests passed。
+- `mvn test`：`66` tests passed。
 - `bash .tmp/build_frontend.sh`：Vite build passed，产出 `pulse-hosts.js/css`。
 - 关键新增测试：
   - `AsyncLocalMetricStorageTest`
@@ -77,6 +78,8 @@
   - `CoordinatorHttpServerTest#metricsEventsEndpointReturnsHostEvents`
   - `CoordinatorHttpServerTest#metricsRangeQueryAppliesServerSideBudgets`
   - `LocalMetricStorageTest#queryRangeSuggestsLargerStepWhenRequestExceedsPointBudget`
+  - `LocalMetricStorageTest#queryRangeAggregatesTideWorkerPointsByRequestedStep`
+  - `LocalMetricStorageTest#queryRangeAggregatesGroupLeaderPointsByRequestedStep`
   - `CoordinatorHttpServerTest#hostsPageRendersFlatSquareChineseHeartbeatConsole` 已断言 Metrics Panel 静态资源标记。
 
 ## 线上验证
@@ -180,10 +183,9 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
   - 已记录禁止 heredoc/inline script 作为验证证据到 `docs/debug/shell-heredoc-and-inline-script-notes.md`。
 
 - 查询预算仍可完善：
-  - heartbeat 已支持 `step_ms avg`。
-  - tide worker 和 group leader 仍是 raw query。
+  - heartbeat、tide worker、group leader 已支持 `step_ms avg`。
   - 已有 `series_limit`、`point_limit` 和截断后的 `suggested_step_ms`。
-  - 尚未实现 top N 异常 host、服务端聚合线和 tide/group 的 step 聚合。
+  - 尚未实现 top N 异常 host 和服务端聚合线。
 
 - 前端构建环境：
   - 当前 agent shell 全局仍找不到 `node`/`npm`。

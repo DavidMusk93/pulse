@@ -314,7 +314,13 @@ final class LocalMetricStorage implements MetricStorage {
         long stepMs = effectiveStepMs(query);
         List<String> agentIds = limitedAgentIds(query, seriesLimit);
         StringBuilder sql = new StringBuilder("""
-                SELECT observed_at_ms, agent_id, pid, version, role, %s AS metric_value
+                SELECT
+                    (observed_at_ms / ?) * ? AS observed_at_ms,
+                    agent_id,
+                    pid,
+                    MIN(version) AS version,
+                    MIN(role) AS role,
+                    AVG(%s) AS metric_value
                 FROM tide_worker_sample
                 WHERE observed_at_ms >= ? AND observed_at_ms <= ?
                 """.formatted(metric.column()));
@@ -324,18 +330,24 @@ final class LocalMetricStorage implements MetricStorage {
             sql.setLength(sql.length() - 1);
             sql.append(")");
         }
-        sql.append(" ORDER BY agent_id ASC, pid ASC, observed_at_ms ASC LIMIT ?");
+        sql.append("""
+                 GROUP BY agent_id, pid, (observed_at_ms / ?)
+                 ORDER BY agent_id ASC, pid ASC, observed_at_ms ASC LIMIT ?
+                """);
 
         Map<String, List<MetricPoint>> pointsBySeries = new LinkedHashMap<>();
         Map<String, Map<String, String>> labelsBySeries = new LinkedHashMap<>();
         boolean truncated;
         try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
             int index = 1;
+            statement.setLong(index++, stepMs);
+            statement.setLong(index++, stepMs);
             statement.setLong(index++, query.startMs());
             statement.setLong(index++, query.endMs());
             for (String agentId : agentIds) {
                 statement.setString(index++, agentId);
             }
+            statement.setLong(index++, stepMs);
             statement.setInt(index, pointLimit + 1);
             try (ResultSet resultSet = statement.executeQuery()) {
                 int rows = 0;
@@ -383,18 +395,29 @@ final class LocalMetricStorage implements MetricStorage {
         int seriesLimit = effectiveSeriesLimit(query);
         long stepMs = effectiveStepMs(query);
         String sql = """
-                SELECT observed_at_ms, group_id, leader_agent_id, cluster, area, status, %s AS metric_value
+                SELECT
+                    (observed_at_ms / ?) * ? AS observed_at_ms,
+                    group_id,
+                    MIN(leader_agent_id) AS leader_agent_id,
+                    MIN(cluster) AS cluster,
+                    MIN(area) AS area,
+                    MIN(status) AS status,
+                    AVG(%s) AS metric_value
                 FROM group_leader_sample
                 WHERE observed_at_ms >= ? AND observed_at_ms <= ?
+                GROUP BY group_id, (observed_at_ms / ?)
                 ORDER BY group_id ASC, observed_at_ms ASC LIMIT ?
                 """.formatted(metric.column());
         Map<String, List<MetricPoint>> pointsByGroup = new LinkedHashMap<>();
         Map<String, Map<String, String>> labelsByGroup = new LinkedHashMap<>();
         boolean truncated;
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setLong(1, query.startMs());
-            statement.setLong(2, query.endMs());
-            statement.setInt(3, pointLimit + 1);
+            statement.setLong(1, stepMs);
+            statement.setLong(2, stepMs);
+            statement.setLong(3, query.startMs());
+            statement.setLong(4, query.endMs());
+            statement.setLong(5, stepMs);
+            statement.setInt(6, pointLimit + 1);
             try (ResultSet resultSet = statement.executeQuery()) {
                 int rows = 0;
                 while (resultSet.next()) {
