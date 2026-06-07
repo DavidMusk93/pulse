@@ -179,8 +179,22 @@ class CoordinatorHttpServerTest {
         assertEquals(200, stream.statusCode());
         assertTrue(stream.headers().firstValue("content-type").orElse("").contains("text/event-stream"));
         assertTrue(stream.body().contains("event: hello"));
+        assertTrue(stream.body().contains("retry: 3000"));
+        assertTrue(stream.body().contains("event_cache_supported"));
         assertTrue(stream.body().contains("event: storage.health"));
         assertTrue(stream.body().contains("event: metric.invalidate"));
+
+        HttpResponse<String> resumed = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl + "/api/metrics/stream?once=true"))
+                        .timeout(Duration.ofSeconds(5))
+                        .header("Last-Event-ID", "1710000000000-2")
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, resumed.statusCode());
+        assertTrue(resumed.body().contains("\"resumed\":true"));
+        assertTrue(resumed.body().contains("\"last_event_id\":\"1710000000000-2\""));
     }
 
     @Test

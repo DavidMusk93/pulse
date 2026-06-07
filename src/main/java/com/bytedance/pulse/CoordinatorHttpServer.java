@@ -253,14 +253,21 @@ public class CoordinatorHttpServer {
 
         boolean once = "true".equalsIgnoreCase(queryValue(exchange.getRequestURI(), "once"));
         long now = System.currentTimeMillis();
+        String lastEventId = Optional.ofNullable(exchange.getRequestHeaders().getFirst("Last-Event-ID"))
+                .orElse(queryValue(exchange.getRequestURI(), "last_event_id"));
+        boolean resumed = lastEventId != null && !lastEventId.isBlank();
+        long compensateFromMs = resumed ? Math.max(lastEventTimestamp(lastEventId), now - 300_000) : now - 30_000;
         try (OutputStream output = exchange.getResponseBody()) {
             writeSse(output, "hello", 0, mapper.writeValueAsString(Map.of(
                     "coordinator_id", service.coordinatorId(),
                     "server_time_ms", now,
-                    "compensate_from_ms", now - 30_000)));
+                    "compensate_from_ms", compensateFromMs,
+                    "resumed", resumed,
+                    "last_event_id", lastEventId == null ? "" : lastEventId,
+                    "event_cache_supported", false)));
             writeSse(output, "storage.health", 1, mapper.writeValueAsString(service.metricStorageHealth()));
             writeSse(output, "metric.invalidate", 2, mapper.writeValueAsString(Map.of(
-                    "from", now - 30_000,
+                    "from", compensateFromMs,
                     "to", now,
                     "metrics", List.of("heartbeat.arrival_gap_ms", "agent.thread_count", "group.submitted_agent_count"))));
             if (!once) {
@@ -269,8 +276,22 @@ public class CoordinatorHttpServer {
         }
     }
 
+    private static long lastEventTimestamp(String lastEventId) {
+        if (lastEventId == null || lastEventId.isBlank()) {
+            return 0;
+        }
+        int separator = lastEventId.indexOf('-');
+        String timestamp = separator < 0 ? lastEventId : lastEventId.substring(0, separator);
+        try {
+            return Long.parseLong(timestamp);
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
+    }
+
     private static void writeSse(OutputStream output, String event, int sequence, String data) throws IOException {
         String payload = "id: " + System.currentTimeMillis() + "-" + sequence + "\n"
+                + "retry: 3000\n"
                 + "event: " + event + "\n"
                 + "data: " + data.replace("\n", "\\n") + "\n\n";
         output.write(payload.getBytes(StandardCharsets.UTF_8));

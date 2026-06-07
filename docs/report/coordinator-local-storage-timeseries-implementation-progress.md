@@ -66,6 +66,11 @@
   - 已新增 `src/main/frontend/src/metrics.ts`，拆出 `MetricQueryController`、`SeriesStore`、`RenderScheduler`、`SvgChartAdapter` 的第一版骨架。
   - 已实现 `metric.invalidate` 合并、range cache、500ms debounce 补偿查询和 `SeriesStore.merge` 点去重。
 
+- SSE 重连补偿：
+  - `/api/metrics/stream` 已读取 `Last-Event-ID`。
+  - `hello` 事件已返回 `resumed`、`last_event_id`、`event_cache_supported=false` 和 `compensate_from_ms`。
+  - 当前明确采用 bounded reconnect compensation；服务端尚未实现完整 event cache replay。
+
 ## 测试
 
 - `mvn test`：`66` tests passed。
@@ -80,6 +85,7 @@
   - `LocalMetricStorageTest#queryRangeSuggestsLargerStepWhenRequestExceedsPointBudget`
   - `LocalMetricStorageTest#queryRangeAggregatesTideWorkerPointsByRequestedStep`
   - `LocalMetricStorageTest#queryRangeAggregatesGroupLeaderPointsByRequestedStep`
+  - `CoordinatorHttpServerTest#metricsStorageAndStreamExposeHealthAndInvalidationEvents` 已覆盖 SSE `retry` 和 `Last-Event-ID` resume metadata。
   - `CoordinatorHttpServerTest#hostsPageRendersFlatSquareChineseHeartbeatConsole` 已断言 Metrics Panel 静态资源标记。
 
 ## 线上验证
@@ -213,5 +219,5 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
 
 1. 为 Metrics Panel 增加可见性暂停、absolute range pause、断线全窗口补偿和前端 render metrics。
 2. 为 tide worker 和 group leader query 补齐 step 聚合、series budget 和 topN。
-3. 为 SSE 增加 `Last-Event-ID`、事件缓存和 slow client bounded queue。
+3. 为 SSE 增加完整 event cache replay 和 slow client bounded queue。
 4. 上线前端后继续用线上 SQLite 分析 group heartbeat 是否达到设计目标。
