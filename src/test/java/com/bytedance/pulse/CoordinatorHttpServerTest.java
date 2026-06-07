@@ -271,6 +271,9 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("metrics-sparkline"));
         assertTrue(js.body().contains("series_limit"));
         assertTrue(js.body().contains("point_limit"));
+        assertTrue(js.body().contains("metric.invalidate"));
+        assertTrue(js.body().contains("补偿中"));
+        assertTrue(js.body().contains("stale"));
         assertTrue(js.body().contains("run-button"));
         assertTrue(js.body().contains("data-status"));
         assertTrue(js.body().contains("getFullYear"));

@@ -28,6 +28,9 @@ import {
   RenderScheduler,
   SeriesStore,
   SvgChartAdapter,
+  mergeInvalidation,
+  parseInvalidation,
+  type MetricInvalidation,
   type MetricCatalogItem,
   type MetricQueryResultView,
   type MetricStorageHealth
@@ -1004,6 +1007,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const [error, setError] = useState('');
   const [liveStatus, setLiveStatus] = useState('connecting');
   const [lastInvalidateAt, setLastInvalidateAt] = useState<number | null>(null);
+  const [invalidatedRange, setInvalidatedRange] = useState<MetricInvalidation | null>(null);
   const queryController = useMemo(() => new MetricQueryController(fetchJson), []);
   const renderScheduler = useMemo(() => new RenderScheduler(), []);
   const agentOptions = useMemo(() => sortHosts(hosts)
@@ -1068,14 +1072,48 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
         setLiveStatus('degraded');
       }
     });
-    events.addEventListener('metric.invalidate', () => {
+    events.addEventListener('metric.invalidate', (event: MessageEvent<string>) => {
+      const invalidation = parseInvalidation(event.data);
       setLastInvalidateAt(Date.now());
+      if (!invalidation || (invalidation.metrics.length && !invalidation.metrics.includes(metric))) {
+        return;
+      }
+      queryController.invalidate();
+      setInvalidatedRange(current => mergeInvalidation(current, invalidation));
     });
     events.onerror = () => setLiveStatus('reconnecting');
     return () => events.close();
-  }, []);
+  }, [metric, queryController]);
 
   useEffect(() => () => renderScheduler.cancel(), [renderScheduler]);
+
+  useEffect(() => {
+    if (!invalidatedRange || !metric) return;
+    const timer = window.setTimeout(async () => {
+      const now = Date.now();
+      const visibleFrom = now - rangeMinutes * 60_000;
+      const startMs = Math.max(visibleFrom, invalidatedRange.from);
+      const endMs = Math.max(startMs, invalidatedRange.to);
+      try {
+        const patch = await queryController.queryRange({
+          metric,
+          agents: visibleAgents,
+          startMs,
+          endMs,
+          stepMs: 10_000,
+          pointLimit: 20_000,
+          seriesLimit: 12,
+          cache: false
+        });
+        renderScheduler.schedule(() => setResult(current => SeriesStore.merge(current, patch)));
+        setInvalidatedRange(null);
+      } catch (err) {
+        setLiveStatus('stale');
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [invalidatedRange, metric, selectedAgents.join(','), rangeMinutes]);
 
   const seriesStore = useMemo(() => new SeriesStore(result), [result]);
   const seriesCount = seriesStore.seriesCount();
@@ -1129,6 +1167,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
             <Tag>{seriesCount} series</Tag>
             <Tag>{pointCount} points</Tag>
             {result?.truncated && <Tag color="warning">已截断，建议 step {result.suggested_step_ms ?? result.suggestedStepMs}ms</Tag>}
+            {invalidatedRange && <Tag color="gold">补偿中 {formatSeenTime(invalidatedRange.to)}</Tag>}
             {lastInvalidateAt && <Tag color="blue">live {formatSeenTime(lastInvalidateAt)}</Tag>}
           </Space>
           <Typography.Text type="secondary">{result?.query_id || result?.queryId || '尚未查询'}</Typography.Text>
