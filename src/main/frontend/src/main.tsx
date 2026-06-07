@@ -1072,14 +1072,11 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
           <span className="metric-label">5min AVG</span>
           <span className="metric-value metric-value-strong">{formatLoad(avg)}</span>
         </div>
-        <div className="tile-metric tile-metric-inline">
-          <span className="metric-label">20s确认</span>
-          <span className="metric-value">{confirmations}</span>
-        </div>
       </div>
       <div className="debug-panel">
         <Typography.Text className="debug-title">调试</Typography.Text>
         <div className="debug-grid">
+          <span><b>20s确认</b><em>{confirmations}</em></span>
           <span><b>age</b><em>{formatAge(lastObservedAge)}</em></span>
           <span><b>mode</b><em>{groupMode}</em></span>
           <span><b>group</b><em>{groupId}</em></span>

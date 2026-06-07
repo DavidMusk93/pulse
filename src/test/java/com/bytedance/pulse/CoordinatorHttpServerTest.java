@@ -272,7 +272,7 @@ class CoordinatorHttpServerTest {
         assertTrue(css.body().contains("text-overflow:ellipsis"));
         assertTrue(css.body().contains(".tile-id-block"));
         assertTrue(css.body().contains(".tile-metrics"));
-        assertTrue(css.body().contains(".tile-metric-inline"));
+        assertTrue(!css.body().contains(".tile-metric-inline"));
         assertTrue(css.body().contains(".ip-title-row"));
         assertTrue(css.body().contains(".ip-copy-button"));
         assertTrue(css.body().contains(".auto-fit"));
@@ -292,6 +292,7 @@ class CoordinatorHttpServerTest {
         assertTrue(css.body().contains(".worker-card"));
         assertTrue(css.body().contains(".debug-panel"));
         assertTrue(css.body().contains(".debug-grid"));
+        assertTrue(css.body().contains("grid-template-columns:48px minmax(0,1fr)"));
         assertTrue(css.body().contains(".completion-viewer"));
         assertTrue(css.body().contains(".output-status-notice"));
         assertTrue(css.body().contains(".output-status-empty"));
