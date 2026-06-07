@@ -3,10 +3,10 @@
 ## 状态
 
 - 时间：2026-06-07
-- 最新已部署提交：`6c9fbbe Add metrics panel frontend`
+- 最新已部署提交：`40a4763 Split metrics frontend data layer`
 - 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget
 - 部署范围：`cdn_new` 50 台 agent 已完成 query budget rollout；3 台 coordinator 已完成 frontend Metrics Panel rollout
-- JAR SHA：`c6b0992c258b36b79bbafcebbcbd25f14db75706883ddf656afe53c7ef37c30c`
+- JAR SHA：`1265199531ff6e28623df99de6950067b48dbbb0e6be58b3e38b7bda979c3255`
 - 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览。
 
 ## 已完成
@@ -87,6 +87,7 @@ staged coordinator deploy: total=3 ok=3 failed=0
 full cdn_new deploy: total=50 ok=50 failed=0 elapsed=170s
 verify cdn_new: total=50 ok=50 failed=0
 frontend coordinator deploy: total=3 ok=3 failed=0 elapsed=23s
+frontend data-layer deploy: total=3 ok=3 failed=0 elapsed=25s
 ```
 
 最新 query budget 和 storage health 验证：
@@ -109,19 +110,19 @@ QUERY query_id=q-0-1-1086903931 metric=agent.thread_count from=0 to=1 unit=threa
 
 ```text
 COORD fdbd:dc05:11:634::45
-ASSET /assets/pulse-hosts.js bytes=833747 missing=[]
+ASSET /assets/pulse-hosts.js bytes=834929 missing=[]
 ASSET /assets/pulse-hosts.css bytes=23316 missing=[]
-STORAGE bytes=232 status_ok=True
+STORAGE bytes=229 status_ok=True
 
 COORD fdbd:dc05:13:10c::40
-ASSET /assets/pulse-hosts.js bytes=833747 missing=[]
+ASSET /assets/pulse-hosts.js bytes=834929 missing=[]
 ASSET /assets/pulse-hosts.css bytes=23316 missing=[]
-STORAGE bytes=232 status_ok=True
+STORAGE bytes=229 status_ok=True
 
 COORD fdbd:dc07:0:810::44
-ASSET /assets/pulse-hosts.js bytes=833747 missing=[]
+ASSET /assets/pulse-hosts.js bytes=834929 missing=[]
 ASSET /assets/pulse-hosts.css bytes=23316 missing=[]
-STORAGE bytes=232 status_ok=True
+STORAGE bytes=229 status_ok=True
 ```
 
 历史 coordinator rollout：`3/3 ok`。
