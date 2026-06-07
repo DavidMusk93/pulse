@@ -464,7 +464,7 @@ body {
   color: rgba(255, 255, 255, .84) !important;
 }
 .task-modal {
-  top: 12px !important;
+  top: auto !important;
   padding-bottom: 0 !important;
   max-height: calc(100vh - 24px);
   overflow: hidden;
@@ -501,16 +501,12 @@ body {
   background: #f8fafc;
 }
 .task-shell {
-  height: min(820px, calc(100vh - 124px));
+  height: min(61.8vh, calc(100vh - 148px));
   display: grid;
-  grid-template-columns: minmax(300px, 1fr) minmax(0, 1.618fr);
+  grid-template-columns: minmax(300px, .618fr) minmax(0, 1fr);
   gap: 16px;
   min-height: 0;
   overflow: hidden;
-}
-.cluster-run-modal .task-shell {
-  height: min(920px, calc(100vh - 124px));
-  grid-template-columns: minmax(340px, 1fr) minmax(0, 1.618fr);
 }
 .task-sidebar,
 .task-workspace {
@@ -858,10 +854,12 @@ body {
 .output-title-status-stack {
   flex: 0 0 auto;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  flex-wrap: wrap;
   align-items: flex-end;
+  justify-content: flex-end;
   gap: 4px;
-  max-width: min(360px, 38vw);
+  max-width: min(560px, 58vw);
 }
 .output-title-pill {
   flex: 0 0 auto;

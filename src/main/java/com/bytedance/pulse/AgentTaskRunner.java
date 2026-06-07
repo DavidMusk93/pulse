@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class AgentTaskRunner {
     private static final int RESULT_INLINE_CHARS = 48 * 1024;
@@ -24,6 +25,8 @@ public class AgentTaskRunner {
     private static final int MAX_STREAM_CHUNKS_PER_DRAIN = 32;
     private static final int REPLY_REPLAY_SENDS = 3;
     private static final long DEFAULT_TASK_TIMEOUT_MS = 600_000;
+    private static final int DEFAULT_OUTPUT_MAX_CHARS = 256 * 1024;
+    private static final int DEFAULT_PENDING_REPLY_MAX = 512;
     private final String agentId;
     private final Clock clock;
     private final String taskDir;
@@ -33,26 +36,33 @@ public class AgentTaskRunner {
     private final Path spoolDir;
     private final ExecutorService executor;
     private final ConcurrentLinkedQueue<PendingReply> pendingReplies = new ConcurrentLinkedQueue<>();
+    private final AtomicInteger pendingReplyCount = new AtomicInteger();
     private final Set<String> acceptedTasks = ConcurrentHashMap.newKeySet();
     private final Map<String, RunningTask> runningTasks = new ConcurrentHashMap<>();
     private final Map<String, ReceivedFile> receivedFiles = new ConcurrentHashMap<>();
+    private final int maxOutputChars;
+    private final int maxPendingReplies;
 
     public AgentTaskRunner(String agentId, Clock clock) {
         this(
                 agentId,
                 clock,
                 System.getenv().getOrDefault("PULSE_TASK_DIR", "/data24/otf/pulse/tasks"),
-                Math.max(1, Integer.parseInt(System.getenv().getOrDefault("PULSE_TASK_MAX_CONCURRENCY", "1"))));
+                Math.max(1, Integer.parseInt(System.getenv().getOrDefault("PULSE_TASK_MAX_CONCURRENCY", "1"))),
+                envInt("PULSE_TASK_OUTPUT_MAX_CHARS", DEFAULT_OUTPUT_MAX_CHARS),
+                envInt("PULSE_AGENT_PENDING_REPLY_MAX", DEFAULT_PENDING_REPLY_MAX));
     }
 
     AgentTaskRunner(String agentId, Clock clock, String taskDir) {
-        this(agentId, clock, taskDir, 1);
+        this(agentId, clock, taskDir, 1, DEFAULT_OUTPUT_MAX_CHARS, DEFAULT_PENDING_REPLY_MAX);
     }
 
-    private AgentTaskRunner(String agentId, Clock clock, String taskDir, int concurrency) {
+    AgentTaskRunner(String agentId, Clock clock, String taskDir, int concurrency, int maxOutputChars, int maxPendingReplies) {
         this.agentId = agentId;
         this.clock = clock;
         this.taskDir = taskDir;
+        this.maxOutputChars = Math.max(8 * 1024, maxOutputChars);
+        this.maxPendingReplies = Math.max(32, maxPendingReplies);
         String defaultWorkDir = Path.of(taskDir).getParent() == null
                 ? "/data24/otf/pulse/agent"
                 : Path.of(taskDir).getParent().resolve("agent").toString();
@@ -91,9 +101,10 @@ public class AgentTaskRunner {
             if (reply == null) {
                 break;
             }
+            pendingReplyCount.decrementAndGet();
             replies.add(reply.message());
             if (reply.remainingSends() > 1) {
-                pendingReplies.add(new PendingReply(reply.message(), reply.remainingSends() - 1));
+                enqueuePending(new PendingReply(reply.message(), reply.remainingSends() - 1));
             }
         }
         return replies;
@@ -167,7 +178,7 @@ public class AgentTaskRunner {
         }
         long acceptedAt = clock.millis();
         runningTasks.put(taskId, new RunningTask(taskId, traceId, "shell_script", "accepted", acceptedAt, null, timeoutMs));
-        pendingReplies.add(new PendingReply(new PulseMessage(
+        enqueuePending(new PendingReply(new PulseMessage(
                 "reply-task-accepted-" + agentId + "-" + taskId,
                 "reply.task_accepted",
                 1,
@@ -207,7 +218,7 @@ public class AgentTaskRunner {
         }
         long acceptedAt = clock.millis();
         runningTasks.put(taskId, new RunningTask(taskId, traceId, taskType, "accepted", acceptedAt, null, timeoutMs));
-        pendingReplies.add(new PendingReply(new PulseMessage(
+        enqueuePending(new PendingReply(new PulseMessage(
                 "reply-task-accepted-" + agentId + "-" + taskId,
                 "reply.task_accepted",
                 1,
@@ -239,7 +250,7 @@ public class AgentTaskRunner {
         long started = clock.millis();
         runningTasks.computeIfPresent(taskId, (ignored, task) -> task.withRunning(started));
         Process process = null;
-        StringBuilder output = new StringBuilder();
+        BoundedOutput output = new BoundedOutput(maxOutputChars);
         Thread outputReader = null;
         try {
             if (!Files.isRegularFile(scriptPath)) {
@@ -268,7 +279,7 @@ public class AgentTaskRunner {
             if (!finished) {
                 process.destroyForcibly();
                 joinQuietly(outputReader);
-                String currentOutput = output.toString();
+                String currentOutput = output.snapshot();
                 enqueueResultMessages(resultMessages(
                         replyTo,
                         taskId,
@@ -284,7 +295,7 @@ public class AgentTaskRunner {
             }
             joinQuietly(outputReader);
             int exitCode = process.exitValue();
-            String finalOutput = output.toString();
+            String finalOutput = output.snapshot();
             enqueueResultMessages(resultMessages(
                     replyTo,
                     taskId,
@@ -306,7 +317,7 @@ public class AgentTaskRunner {
         }
     }
 
-    private void readOutput(String taskId, Process process, StringBuilder output) {
+    private void readOutput(String taskId, Process process, BoundedOutput output) {
         char[] buffer = new char[STREAM_CHUNK_CHARS];
         try (java.io.Reader reader = new java.io.InputStreamReader(process.getInputStream(), java.nio.charset.StandardCharsets.UTF_8)) {
             int read;
@@ -346,7 +357,7 @@ public class AgentTaskRunner {
             OutputChunk chunk;
             while (drained < MAX_STREAM_CHUNKS_PER_DRAIN && (chunk = task.pollOutput()) != null) {
                 drained++;
-                pendingReplies.add(new PendingReply(streamMessage(task, chunk), REPLY_REPLAY_SENDS));
+                enqueuePending(new PendingReply(streamMessage(task, chunk), REPLY_REPLAY_SENDS));
             }
         }
     }
@@ -375,7 +386,7 @@ public class AgentTaskRunner {
     }
 
     private void enqueueResultMessages(List<PulseMessage> messages) {
-        messages.forEach(message -> pendingReplies.add(new PendingReply(message, REPLY_REPLAY_SENDS)));
+        messages.forEach(message -> enqueuePending(new PendingReply(message, REPLY_REPLAY_SENDS)));
     }
 
     private List<PulseMessage> resultMessages(
@@ -482,7 +493,7 @@ public class AgentTaskRunner {
             String contentSha256,
             long contentBytes,
             String error) {
-        pendingReplies.add(new PendingReply(new PulseMessage(
+        enqueuePending(new PendingReply(new PulseMessage(
                 "reply-file-received-" + agentId + "-" + fileId,
                 "reply.file_received",
                 1,
@@ -607,9 +618,69 @@ public class AgentTaskRunner {
         return value.chars().filter(ch -> ch == '\n').count() + (value.endsWith("\n") ? 0 : 1);
     }
 
+    private boolean enqueuePending(PendingReply reply) {
+        while (true) {
+            int current = pendingReplyCount.get();
+            if (current >= maxPendingReplies) {
+                return false;
+            }
+            if (pendingReplyCount.compareAndSet(current, current + 1)) {
+                pendingReplies.add(reply);
+                return true;
+            }
+        }
+    }
+
+    private static int envInt(String key, int fallback) {
+        String value = System.getenv(key);
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
     private record PendingReply(PulseMessage message, int remainingSends) {}
 
     private record ReceivedFile(String fileId, String taskId, Path path, String sha256, long bytes, boolean executable) {}
+
+    static final class BoundedOutput {
+        private final int maxChars;
+        private final StringBuilder value;
+        private long droppedChars;
+
+        BoundedOutput(int maxChars) {
+            this.maxChars = Math.max(1, maxChars);
+            this.value = new StringBuilder(Math.min(this.maxChars, 8 * 1024));
+        }
+
+        synchronized void append(String chunk) {
+            if (chunk == null || chunk.isEmpty()) {
+                return;
+            }
+            int remaining = maxChars - value.length();
+            if (remaining <= 0) {
+                droppedChars += chunk.length();
+                return;
+            }
+            if (chunk.length() <= remaining) {
+                value.append(chunk);
+                return;
+            }
+            value.append(chunk, 0, remaining);
+            droppedChars += chunk.length() - remaining;
+        }
+
+        synchronized String snapshot() {
+            if (droppedChars <= 0) {
+                return value.toString();
+            }
+            return value + "\n[pulse output truncated dropped_chars=" + droppedChars + "]\n";
+        }
+    }
 
     private static final class RunningTask {
         private final String taskId;

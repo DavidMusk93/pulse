@@ -102,6 +102,31 @@ class AgentTaskRunnerTest {
         assertEquals("ARG_COUNT:0\n", result.payload().get("output"));
     }
 
+    @Test
+    void capsFinalTaskOutputInMemory() throws Exception {
+        Path script = taskDir.resolve("prepare-disk-layout.sh");
+        Files.writeString(script, "python3 - <<'PY'\nprint('x' * 10000)\nPY\n");
+        AgentTaskRunner runner = new AgentTaskRunner("agent-1", fixedClock(), taskDir.toString(), 1, 64, 128);
+
+        runner.handleMessages(List.of(command("task-1", "prepare_disk_layout_dry_run", script.toString(), List.of())));
+
+        PulseMessage result = awaitResult(runner);
+        String output = result.payload().get("output").toString();
+        assertEquals("completed", result.payload().get("status"));
+        assertTrue(output.length() < 9_000);
+    }
+
+    @Test
+    void boundedOutputMarksDroppedChars() {
+        AgentTaskRunner.BoundedOutput output = new AgentTaskRunner.BoundedOutput(4);
+
+        output.append("abcdef");
+
+        String snapshot = output.snapshot();
+        assertTrue(snapshot.startsWith("abcd"));
+        assertTrue(snapshot.contains("pulse output truncated"));
+    }
+
     private static PulseMessage command(String taskId, String taskType, String scriptPath, List<String> args) {
         return new PulseMessage(
                 "cmd-" + taskId,

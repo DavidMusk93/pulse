@@ -303,6 +303,98 @@ CREATE INDEX IF NOT EXISTS idx_group_leader_agent_time
 - `leader_collect_ms` 和 `group_latency_ms` 是否抵消了批量上报带来的降压收益。
 - 哪些 cluster/area 更容易出现 `partial` 或 `fallback`。
 
+### Schema 对心跳设计问题的诊断能力
+
+本地 SQLite 的价值不只是“保存历史曲线”，更重要的是把心跳协议的设计假设变成可验证的 SQL 问题。当前 schema 已经能发现一部分心跳设计问题，但如果目标是评估 group heartbeat、agent 低资源采样和 coordinator 降压效果，还需要补充少量字段。
+
+当前 schema 已能回答的问题：
+
+- Agent 是否稳定按周期上报：`heartbeat_sample.arrival_gap_ms` 可发现 agent 卡顿、JVM stall、网络抖动或 coordinator 处理阻塞。
+- Agent 与 coordinator 时钟/链路是否异常：`latency_ms = observed_at_ms - agent_sent_at_ms` 可发现时钟偏移或传输排队。
+- Coordinator 处理是否成为瓶颈：`coordinator_process_ms`、`request_bytes`、`response_bytes`、`message_count` 可关联请求大小和处理耗时。
+- Group heartbeat 是否真的降压：`group_leader_sample.submitted_agent_count` 与 `member_count` 可估算 fan-in 覆盖率。
+- Leader 方案是否稳定：`leader_agent_id`、`arrival_gap_ms`、`missing_member_count`、`stale_member_count` 可发现 leader 切换、旧 plan 和 follower 缺口。
+- Follower 是否频繁回退 direct：`direct_fallback_count` 可衡量 group 机制是否退化成 direct heartbeat。
+- Tide worker 采样是否过重或不稳定：`tide_worker_sample.thread_count`、`cpu_pct`、`rss_kb` 可观察 worker 资源趋势，但不能直接度量 agent 采样成本。
+
+当前 schema 还不足以回答的问题：
+
+- 请求数是否从 `host_count` 精确收敛到 `group_count`：需要同时记录 direct heartbeat 和 group heartbeat 的请求类型，否则只能近似。
+- Heartbeat seq 是否丢失或乱序：只有 `heartbeat_seq`，缺少 `seq_gap`、`duplicate_seq`、`out_of_order` 结构化字段。
+- Group plan 是否滞后：有 `group_generation`，但缺少 agent 上报的 `agent_plan_generation` 和 coordinator 当前 `expected_generation` 对比。
+- Leader 拒绝 follower 的原因：只有 `rejected_agent_count` 和 `debug_json`，应结构化记录 `reject_reason` 计数。
+- Agent 心跳自身采样成本是否过高：缺少 agent 上报的 `agent_collect_ms`、`agent_encode_ms`、`agent_send_ms`、`agent_thread_count`、`agent_rss_kb`。
+- SSE 与查询是否反向压垮 coordinator：storage schema 记录写入健康，但缺少 query/SSE 的成本表。
+
+建议补充的结构化字段：
+
+```sql
+ALTER TABLE heartbeat_sample ADD COLUMN heartbeat_path TEXT;
+ALTER TABLE heartbeat_sample ADD COLUMN seq_gap INTEGER;
+ALTER TABLE heartbeat_sample ADD COLUMN duplicate_seq INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE heartbeat_sample ADD COLUMN out_of_order INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE heartbeat_sample ADD COLUMN agent_collect_ms INTEGER;
+ALTER TABLE heartbeat_sample ADD COLUMN agent_encode_ms INTEGER;
+ALTER TABLE heartbeat_sample ADD COLUMN agent_send_ms INTEGER;
+ALTER TABLE heartbeat_sample ADD COLUMN agent_thread_count INTEGER;
+ALTER TABLE heartbeat_sample ADD COLUMN agent_rss_kb INTEGER;
+
+ALTER TABLE group_leader_sample ADD COLUMN agent_plan_generation INTEGER;
+ALTER TABLE group_leader_sample ADD COLUMN expected_generation INTEGER;
+ALTER TABLE group_leader_sample ADD COLUMN plan_lag INTEGER;
+ALTER TABLE group_leader_sample ADD COLUMN reject_reason_json TEXT;
+```
+
+字段语义：
+
+- `heartbeat_path`：`direct`、`group_leader_batch`、`group_follower_to_leader`、`fallback_direct`，用于精确评估心跳降压路径。
+- `seq_gap`：本次 seq 与上次 seq 的差值减 1，正数表示丢样或处理缺口。
+- `duplicate_seq`：同一 agent 重复 seq，说明重试、重复处理或 agent epoch/seq 管理异常。
+- `out_of_order`：seq 小于历史最大 seq，说明乱序、旧请求到达或 agent 重启未换 epoch。
+- `agent_collect_ms`：agent 构造 heartbeat payload 的本地采样耗时，直接衡量 agent 采样是否违背低资源目标。
+- `agent_encode_ms`：JSON 编码耗时，衡量 payload 过大带来的 CPU 成本。
+- `agent_send_ms`：agent 侧 HTTP send 耗时，辅助区分网络慢和 coordinator 慢。
+- `agent_thread_count`、`agent_rss_kb`：agent 自身资源占用，而不是 tide_worker 资源占用。
+- `plan_lag = expected_generation - agent_plan_generation`：用于定位 follower 使用旧 plan、leader 切换传播慢的问题。
+- `reject_reason_json`：按 reason 聚合的拒绝计数，如 `stale_generation`、`not_member`、`leader_mismatch`、`expired_epoch`。
+
+对应 SQL 诊断示例：
+
+```sql
+-- direct/fallback 是否过多，group 降压是否失效
+SELECT heartbeat_path, COUNT(*) AS requests
+FROM heartbeat_sample
+WHERE observed_at_ms BETWEEN :from_ms AND :to_ms
+GROUP BY heartbeat_path;
+
+-- seq gap 与 arrival gap 是否同时出现，判断 agent 卡顿还是网络/处理丢样
+SELECT agent_id, MAX(seq_gap) AS max_seq_gap, MAX(arrival_gap_ms) AS max_gap_ms
+FROM heartbeat_sample
+WHERE observed_at_ms BETWEEN :from_ms AND :to_ms
+GROUP BY agent_id
+HAVING max_seq_gap > 0 OR max_gap_ms > :gap_threshold_ms;
+
+-- group plan 传播是否滞后
+SELECT group_id, MAX(plan_lag) AS max_plan_lag, SUM(stale_member_count) AS stale_members
+FROM group_leader_sample
+WHERE observed_at_ms BETWEEN :from_ms AND :to_ms
+GROUP BY group_id
+HAVING max_plan_lag > 0 OR stale_members > 0;
+
+-- agent 采样成本是否接近或超过 heartbeat interval 的预算
+SELECT agent_id, MAX(agent_collect_ms) AS max_collect_ms, AVG(agent_collect_ms) AS avg_collect_ms
+FROM heartbeat_sample
+WHERE observed_at_ms BETWEEN :from_ms AND :to_ms
+GROUP BY agent_id
+HAVING max_collect_ms > :collect_budget_ms;
+```
+
+结论：
+
+- 现有 schema 能发现“心跳是否抖动、group 是否覆盖、leader 是否稳定”。
+- 要发现“心跳设计是否低资源、是否真的降压、是否存在 plan/seq 协议缺陷”，需要把 request path、seq gap、agent 自身采样成本和 plan generation 差值结构化。
+- `debug_json` 只能作为兜底，不应承载高频诊断字段；凡是要画图、聚合、报警的字段都必须结构化。
+
 ### 事件表：`host_event`
 
 保存稀疏事件，避免将异常文本塞进样本表。
@@ -608,11 +700,17 @@ GET /api/metrics/query_range?metric=heartbeat.latency_ms&from=1710000000000&to=1
 
 ```json
 {
+  "query_id": "q-1710003600000-00042",
   "metric": "heartbeat.latency_ms",
   "unit": "ms",
   "from": 1710000000000,
   "to": 1710003600000,
   "step": 10000,
+  "sample_policy": "avg",
+  "truncated": false,
+  "suggested_step": 10000,
+  "series_limit": 50,
+  "point_limit": 20000,
   "series": [
     {
       "agent_id": "fdbd:dc05:11:634::45",
@@ -634,6 +732,12 @@ GET /api/metrics/query_range?metric=heartbeat.latency_ms&from=1710000000000&to=1
 - `step` 必填或由服务端自动计算。
 - 最大返回点数默认 20000，超过则服务端自动增大 step。
 - host 数过多时，默认返回 top N 异常 host，并提供聚合线。
+- `query_id` 必须回传，前端用它做 request tracing 和 data inspector 展示。
+- `sample_policy` 必须说明该值是 `raw`、`avg`、`max`、`p95` 还是 `lttb` 等策略。
+- `truncated=true` 时表示服务端因点数或 series 预算截断了结果，前端必须展示提示。
+- `suggested_step` 表示服务端认为更合适的 step；前端后续相同 range 应直接采用。
+- 如果服务端自动增大 step，响应中的 `step` 必须是实际使用的 step，而不是请求 step。
+- 对同一 query，series 顺序必须稳定：先按 severity/topN 排序，再按 normalized label 排序。
 
 ### 查询 tide_worker 进程时序
 
@@ -830,7 +934,20 @@ type MetricPanelState = {
 
 ### 图表组件选择
 
-推荐第一版使用 Apache ECharts：
+当前前端已经使用 Ant Design。第一版不应该重新发明 dashboard UI 组件，而应继续用 Ant Design 承担页面结构、表单、反馈和交互一致性：
+
+- `Layout` / `Card` / `Row` / `Col` / `Space`：页面骨架、面板网格和间距。
+- `Tabs` / `Segmented` / `Radio.Group`：视图切换、time range 快捷选择。
+- `Select` / `TreeSelect` / `AutoComplete`：cluster、area、host、group、metric 过滤。
+- `DatePicker.RangePicker`：自定义绝对时间范围。
+- `Table` / `List` / `Descriptions`：事件列表、series inspector、storage health。
+- `Tag` / `Badge` / `Alert` / `Tooltip` / `Popover`：状态、降级提示、解释性信息。
+- `Drawer` / `Modal`：host drilldown、annotation 详情、data inspector。
+- `Spin` / `Skeleton` / `Empty` / `Result`：loading、empty、error、disabled 状态。
+
+Ant Design 负责“操作界面和状态表达”，时序图渲染库负责“高密度数值可视化”。两者边界必须清晰，避免用图表库实现表单/布局，也避免用 Ant Design 组件硬画大规模时序点。
+
+推荐第一版在 Ant Design 面板内嵌 Apache ECharts：
 
 - 支持大点数折线、tooltip、legend、dataZoom、markLine/markArea。
 - 比手写 SVG 成本低，比重型 Grafana embed 更容易内嵌当前 React 页面。
@@ -843,9 +960,213 @@ type MetricPanelState = {
 
 第一版建议：
 
-- Cluster overview 使用 ECharts。
-- Host detail 小图可以使用 ECharts sparkline 或 uPlot。
+- 页面结构、过滤器、状态提示、事件列表、详情抽屉统一使用 Ant Design。
+- Cluster overview 的图表区域使用 ECharts。
+- Host detail 小图可以使用 ECharts sparkline 或 uPlot，但容器仍使用 Ant Design `Card` / `Descriptions`。
 - 避免引入完整 Grafana iframe 或外部服务。
+
+### 前端第一性原理
+
+前端的第一性原理不是“功能多”或“组件炫”，而是帮助操作者在最短时间内形成正确判断，并且在数据缺失、延迟、降级时不误导用户。
+
+核心目标：
+
+- 正确性优先：展示的每个点必须能解释来源、时间范围、step、聚合策略和是否截断。
+- 认知负担最小：默认展示最有诊断价值的 Top N 和聚合线，不把 500 条 host 线一次性扔给用户。
+- 快速反馈：交互必须在 100ms 级给出视觉反馈；重查询可以异步完成，但 UI 状态不能卡住。
+- 渐进披露：概览只回答“哪里异常”，drilldown 再回答“为什么异常”。
+- 状态诚实：loading、stale、degraded、partial、truncated、missing 必须明确表达，不能假装数据完整。
+- 可恢复：SSE 断线、请求失败、storage degraded 时保留已知好数据，并提供 retry/补偿路径。
+- 可分享：用户定位问题后，time range、filters、panel、legend selection 必须能通过 URL 复现。
+- 可观测：前端自身的 query/normalize/render 成本要可见，否则图表卡顿无法诊断。
+
+Ant Design 在这些原则中的角色：
+
+- 用一致的控件减少学习成本，而不是自定义一套 filter/time range/empty/error 组件。
+- 用 `Alert`、`Badge`、`Tag` 明确表达数据状态，避免把状态藏在图表细节里。
+- 用 `Drawer`/`Modal` 做渐进披露，避免概览页面堆满调试字段。
+- 用 `Table`/`Descriptions` 承载精确文本和元数据，图表只负责趋势和对比。
+
+图表层在这些原则中的角色：
+
+- 用稳定、可解释的时间序列表达趋势、异常、缺口和发布前后变化。
+- 用 tooltip/annotation/threshold 把“异常点”连接到事件和原因。
+- 用点数预算、降采样和可见性调度保证流畅。
+- 不承担全局状态管理、表单、布局和通用反馈组件。
+
+### 前端时序图渲染架构
+
+实现前端时序图时，目标不是“把接口返回点画成折线”，也不是全自研 dashboard，而是在 Ant Design 页面框架内建立一个可退化、可增量、可解释的 metrics rendering pipeline。建议拆成五层：
+
+```text
+AntD MetricPanel(Card/Form/Alert/Drawer)
+  -> QueryController
+  -> SeriesStore
+  -> RenderScheduler
+  -> ChartAdapter(ECharts/uPlot)
+```
+
+职责划分：
+
+| 层 | 职责 | 不能做 |
+| --- | --- | --- |
+| `MetricPanel` | 管理面板配置、用户交互、loading/error/empty/degraded 状态 | 不直接拼接时序点 |
+| `QueryController` | 计算 range/step、发起 query_range、取消过期请求、合并 SSE invalidation | 不持有 DOM/chart instance |
+| `SeriesStore` | 规范化 series、去重、排序、补洞、增量 merge、保留窗口裁剪 | 不执行网络请求 |
+| `RenderScheduler` | 使用 `requestAnimationFrame`、debounce、可见性判断调度 setOption | 不做业务聚合 |
+| `ChartAdapter` | 将 `MetricSeries` 转为图表库 option，处理 tooltip/legend/zoom/annotation | 不修改原始 store |
+
+关键原则：
+
+- 图表组件只订阅已经规范化的 `SeriesStore` 快照。
+- 所有接口响应都带 `query_id` 或本地 `request_seq`；过期响应必须丢弃，避免慢请求覆盖新图。
+- 每个 panel 持有一个 `AbortController`；range、filter、metric 变化时立即 abort 旧请求。
+- SSE invalidation 不直接触发重绘，而是先合并 invalidated range，再由 `QueryController` 做补偿查询。
+- `setOption` 需要批量调度，避免一次 SSE batch 导致多个 panel 连续同步重绘。
+
+### 数据规范化与健壮性
+
+前端收到任何时序数据后，必须先进入规范化阶段：
+
+```ts
+type NormalizedPoint = {
+  ts: number;
+  value: number | null;
+};
+
+type NormalizedSeries = {
+  id: string;
+  labels: Record<string, string>;
+  points: NormalizedPoint[];
+  stats: {
+    pointCount: number;
+    nullCount: number;
+    min?: number;
+    max?: number;
+    last?: number;
+  };
+};
+```
+
+规范化规则：
+
+- `series.id` 必须由 metric + stable labels 生成，例如 `metric|agent_id|pid|group_id`，不能用数组下标。
+- 点按 `ts` 升序排序；同一 `ts` 多点时以后到数据覆盖，或按服务端返回的 `sample_policy` 处理。
+- 非有限数字如 `NaN`、`Infinity`、字符串数字解析失败都转为 `null`。
+- `null` 表示缺样本，必须断线；不能自动插值成 0。
+- 超出当前 visible range 的点在 store 层裁剪，避免长时间 live 运行导致浏览器 heap 增长。
+- 如果服务端返回点数超过前端预算，前端必须显示 degraded 提示，并请求更大 step，而不是强行渲染。
+- label 文本需要长度限制和 HTML escape；tooltip 不信任服务端字符串。
+
+缺数据表达：
+
+- 整个 query 无 series：显示 empty state，如“该时间范围无历史数据”。
+- 部分 bucket 为 `null`：图表断线，同时 tooltip 显示 `missing`。
+- SSE 断线：live badge 变黄，但历史图保持可读。
+- storage degraded：面板顶部显示轻量告警，不遮挡已加载数据。
+- 查询失败：保留上一版数据，显示 stale 状态和 retry 按钮。
+
+### 流畅渲染策略
+
+大窗口、多 host、多 pid 的时序图容易卡顿，前端必须把“点数预算”作为一等约束：
+
+```text
+panel_point_budget = min(panel_width_px * 2, 2000)
+dashboard_point_budget = 60000
+series_budget_per_panel = 50
+```
+
+渲染预算策略：
+
+- 首屏 dashboard 默认只画 top N 异常 series 和聚合线，不默认画全部 host。
+- 单 panel 超过 `series_budget_per_panel` 时，进入聚合/TopN 模式，legend 提示“仅展示 Top N”。
+- 单 panel 预估点数超过预算时，前端增大 step 并重新 query。
+- dashboard 总点数超过预算时，低优先级 panel 延迟渲染或显示 collapsed placeholder。
+- 不可见 panel 不执行 `setOption`；进入视口后再补偿查询和渲染。
+- resize、brush、legend toggle 使用 debounce；live 更新使用 `requestAnimationFrame` 合并。
+- ECharts 使用 `notMerge=false` 更新数据，避免销毁重建整个图实例；metric/axis 类型变化时才重建。
+- 对 sparkline 禁用复杂 tooltip、symbol 和 animation；对大点数图默认 `showSymbol=false`、`animation=false`。
+
+建议默认配置：
+
+```ts
+const chartDefaults = {
+  animation: false,
+  sampling: 'lttb',
+  showSymbol: false,
+  progressive: 5000,
+  progressiveThreshold: 10000,
+  tooltipTrigger: 'axis',
+};
+```
+
+注意事项：
+
+- ECharts `sampling` 是渲染层优化，不替代服务端 downsample。
+- 不要在 React render 中构造大数组 option；使用 memoized selector 或 worker-side transform。
+- 多面板同时刷新时，优先更新当前 hover/expanded panel，其余 panel 延迟到下一帧。
+- 图表实例必须在 unmount 时 dispose，防止 canvas 和事件监听泄漏。
+
+### 增量合并与 SSE 刷新
+
+SSE 只传 invalidation，不直接传大批点，因此前端需要补偿查询合并逻辑：
+
+```text
+on metric.invalidate:
+  if panel query overlaps event range:
+    panel.invalidatedRange = union(panel.invalidatedRange, event.range)
+    schedule compensation query after debounce(250ms)
+
+on compensation response:
+  normalize points
+  merge by series.id + ts
+  trim to visible range + lookback padding
+  schedule render
+```
+
+合并规则：
+
+- 对 live range，如 last 15m，`to` 随时间滑动；store 只保留 `from - oneStep` 到 `now`。
+- 对 paused/absolute range，不自动补偿 SSE，只显示“有新数据”提示。
+- 多个 invalidation 事件合并成一个最小查询窗口，避免每个 heartbeat 触发 HTTP 请求。
+- 补偿查询窗口至少覆盖 `last_successful_query_to - step`，防止边界 bucket 被漏掉。
+- 如果 SSE 断线超过事件缓存窗口，前端必须对可见 panel 执行全窗口 query，而不是只查断线期间。
+
+### 丰富交互能力
+
+第一版图表能力应覆盖诊断常用路径，而不是只支持看趋势：
+
+- Legend：支持搜索、只看某 host/pid/group、隐藏 noisy series、保留选择状态。
+- Tooltip：显示时间、值、单位、agent、pid、group、版本、status、缺样原因和事件 annotation。
+- Brush zoom：支持拖拽缩放，缩放后更新 URL query，便于分享。
+- Compare：支持与前 1h/24h 同窗口对比，可用于发布前后资源趋势比较。
+- Threshold：支持 latency、arrival gap、CPU、RSS 的 warn/error 阈值线和 markArea。
+- Annotation：展示 offline、pid changed、leader changed、fallback、storage degraded 等事件。
+- Drilldown：点击 series 可跳转 host detail；点击 annotation 可打开事件详情。
+- Data inspector：提供当前 panel 的 raw series/labels/SQL query id/debug 信息，便于排障。
+- Export：支持当前图 PNG、CSV、JSON 导出，并标注 coordinator id、range、step、filters。
+- Share link：time range、filters、panel、legend selection 写入 URL，方便协作排查。
+
+### 图表降级与保护
+
+前端必须优先保护页面可用性：
+
+- 单次 query 超过超时时间，保留旧数据并进入 stale 状态。
+- 单 panel 连续失败 3 次，暂停 live 补偿，等待用户手动 retry。
+- 浏览器 tab hidden 时，暂停非关键 panel 补偿，只保留 SSE 连接或降低刷新频率。
+- 内存压力或页面长时间运行时，按 panel LRU 释放不可见图表实例和旧 series。
+- storage disabled/degraded 时，图表区域展示降级说明，同时保持 `/api/hosts` 当前态可用。
+- 如果 query 返回 `suggested_step` 或 `truncated=true`，前端必须显示“已自动降采样/截断”的明确提示。
+
+### 前端可观测性
+
+图表系统本身也需要可观测：
+
+- 记录每个 panel 的 `query_ms`、`normalize_ms`、`render_ms`、`point_count`、`series_count`。
+- 开发模式显示 panel debug overlay，生产模式可在 data inspector 中查看。
+- 对 `render_ms > 100ms`、`point_count > budget`、`dropped_invalidation > 0` 生成前端 debug event。
+- SSE 状态需要展示：connected、reconnecting、stale、paused、last event age。
+- 所有前端错误按 panel 隔离，单个图表失败不能拖垮整个 dashboard。
 
 ### 下采样策略
 
@@ -1133,6 +1454,8 @@ CREATE TABLE IF NOT EXISTS schema_version (
 - 增加 `LocalMetricStorage`、`MetricIngressThread`、`SpscMetricRingBuffer`、`SqliteMetricWriter`、`MetricSampleExtractor`。
 - 明确 SQLite write connection、transaction、prepared statement 只归 `SqliteMetricWriter` 所有。
 - 写入 `host_dimension`、`heartbeat_sample`、`tide_worker_sample`、`group_leader_sample`。
+- 为心跳设计诊断补齐结构化字段：`heartbeat_path`、`seq_gap`、`duplicate_seq`、`out_of_order`、agent 侧采样/编码/发送耗时、agent 自身线程数/RSS。
+- 为 group plan 诊断补齐结构化字段：`agent_plan_generation`、`expected_generation`、`plan_lag`、`reject_reason_json`。
 - 增加 TTL 清理和 storage health。
 
 ### Phase 2：查询 API 与 SSE
@@ -1146,11 +1469,16 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 ### Phase 3：前端图表
 
-- 引入 ECharts。
-- 增加 time range bar 和 metric panel。
+- 沿用 Ant Design 作为页面、表单、反馈、详情抽屉和状态表达的基础组件库。
+- 在 Ant Design `Card` / `Drawer` / `Form` / `Alert` 容器中引入 ECharts 图表区域。
+- 增加 `QueryController`、`SeriesStore`、`RenderScheduler`、`ChartAdapter`，不要让 React/AntD 组件直接拼接点数组。
+- 使用 Ant Design 组件实现 time range bar、metric panel、filter、empty/error/degraded/stale 状态。
 - 增加 `EventSource` 客户端、`Last-Event-ID` 恢复、可见 panel invalidation 合并。
+- 增加 request abort、过期响应丢弃、series 去重排序、缺点补洞、可见窗口裁剪。
+- 增加图表点数预算、series 预算、不可见 panel 延迟渲染和 resize/live 更新 debounce。
 - 支持 heartbeat latency、arrival gap、tide_worker CPU/RSS、group leader coverage/latency/fallback。
-- 支持 host 卡片联动和 annotation。
+- 支持 host 卡片联动、annotation、threshold、legend 搜索、brush zoom、data inspector 和 share link。
+- 增加前端 metrics debug：`query_ms`、`normalize_ms`、`render_ms`、`point_count`、`series_count`。
 
 ### Phase 4：聚合与优化
 

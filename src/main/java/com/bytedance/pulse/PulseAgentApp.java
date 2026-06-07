@@ -16,6 +16,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class PulseAgentApp {
     private PulseAgentApp() {}
@@ -109,6 +111,7 @@ public final class PulseAgentApp {
         GroupHeartbeatReceiver receiver = new GroupHeartbeatReceiver(bindHost, port, collector);
         receiver.start();
         AgentGroupPlan currentPlan = AgentGroupPlan.direct("unknown");
+        FollowerLeaderClientCache followerLeaderClients = new FollowerLeaderClientCache(client.timeout);
         System.out.printf("Pulse dynamic group receiver started port=%d%n", port);
         while (!Thread.currentThread().isInterrupted()) {
             HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat(taskRunner.drainReplies(), taskRunner.runningTasks());
@@ -131,8 +134,9 @@ public final class PulseAgentApp {
                     currentPlan = planFromMessages(heartbeat.agentId(), selfMessages).orElse(currentPlan);
                 }
             } else if ("follower".equalsIgnoreCase(mode) && !currentPlan.leaderUrl().isBlank()) {
-                HeartbeatClient leaderClient = new HeartbeatClient(List.of(currentPlan.leaderUrl()), client.timeout);
-                HeartbeatResponse response = leaderClient.sendForResponse("/group/heartbeat", heartbeat);
+                HeartbeatResponse response = followerLeaderClients
+                        .clientFor(currentPlan.leaderUrl())
+                        .sendForResponse("/group/heartbeat", heartbeat);
                 if (response == null) {
                     response = client.sendForResponse("/heartbeat", heartbeat);
                 }
@@ -205,12 +209,32 @@ public final class PulseAgentApp {
                 .toList();
     }
 
+    static final class FollowerLeaderClientCache {
+        private final Duration timeout;
+        private String leaderUrl = "";
+        private HeartbeatClient leaderClient;
+
+        FollowerLeaderClientCache(Duration timeout) {
+            this.timeout = timeout;
+        }
+
+        HeartbeatClient clientFor(String nextLeaderUrl) {
+            if (leaderClient == null || !nextLeaderUrl.equals(leaderUrl)) {
+                leaderUrl = nextLeaderUrl;
+                leaderClient = new HeartbeatClient(List.of(leaderUrl), timeout);
+            }
+            return leaderClient;
+        }
+    }
+
     static final class HeartbeatClient {
         private final List<String> coordinatorUrls;
         private final Duration timeout;
         private final HttpClient httpClient = HttpClient.newHttpClient();
         private final ObjectMapper mapper = JsonSupport.objectMapper();
+        private final int successLogEvery;
         private int nextCoordinatorIndex;
+        private long successCount;
 
         HeartbeatClient(List<String> coordinatorUrls, Duration timeout) {
             if (coordinatorUrls.isEmpty()) {
@@ -218,6 +242,7 @@ public final class PulseAgentApp {
             }
             this.coordinatorUrls = List.copyOf(coordinatorUrls);
             this.timeout = timeout;
+            this.successLogEvery = Math.max(1, intEnv("PULSE_HEARTBEAT_SUCCESS_LOG_EVERY", 12));
         }
 
         boolean send(String path, HeartbeatRequest heartbeat) {
@@ -236,17 +261,22 @@ public final class PulseAgentApp {
                     HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
                     if (response.statusCode() >= 200 && response.statusCode() < 300) {
                         nextCoordinatorIndex = (nextCoordinatorIndex + attempt + 1) % coordinatorUrls.size();
-                        if (heartbeat.isBatch()) {
-                            System.out.printf(
-                                    "heartbeat status=ok target=%s group=%s agents=%d%n",
-                                    baseUrl,
-                                    heartbeat.groupId(),
-                                    heartbeat.agents().size());
-                        } else {
-                            System.out.printf(
-                                    "heartbeat status=ok target=%s seq=%d%n",
-                                    baseUrl,
-                                    heartbeat.seq());
+                        successCount++;
+                        if (successCount == 1 || successCount % successLogEvery == 0) {
+                            if (heartbeat.isBatch()) {
+                                System.out.printf(
+                                        "heartbeat status=ok target=%s group=%s agents=%d sampled_count=%d%n",
+                                        baseUrl,
+                                        heartbeat.groupId(),
+                                        heartbeat.agents().size(),
+                                        successCount);
+                            } else {
+                                System.out.printf(
+                                        "heartbeat status=ok target=%s seq=%d sampled_count=%d%n",
+                                        baseUrl,
+                                        heartbeat.seq(),
+                                        successCount);
+                            }
                         }
                         return mapper.readValue(response.body(), HeartbeatResponse.class);
                     }
@@ -267,17 +297,36 @@ public final class PulseAgentApp {
 
     }
 
+    private static int intEnv(String key, int fallback) {
+        String value = System.getenv(key);
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
     static final class GroupHeartbeatReceiver {
         private final HttpServer server;
         private final GroupHeartbeatCollector collector;
         private final ObjectMapper mapper = JsonSupport.objectMapper();
+        private final ExecutorService executor;
         private final Map<String, List<PulseMessage>> planMessages = new ConcurrentHashMap<>();
         private volatile boolean acceptingFollowers;
         private volatile Set<String> acceptedMembers = Set.of();
 
         GroupHeartbeatReceiver(String bindHost, int port, GroupHeartbeatCollector collector) throws IOException {
             this.collector = collector;
+            this.executor = Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "pulse-group-receiver");
+                thread.setDaemon(true);
+                return thread;
+            });
             this.server = HttpServer.create(new InetSocketAddress(bindHost, port), 0);
+            this.server.setExecutor(executor);
             this.server.createContext("/group/heartbeat", this::handleHeartbeat);
         }
 
@@ -287,6 +336,7 @@ public final class PulseAgentApp {
 
         void stop() {
             server.stop(0);
+            executor.shutdownNow();
         }
 
         int port() {

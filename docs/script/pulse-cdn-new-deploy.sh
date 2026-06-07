@@ -253,6 +253,11 @@ PULSE_GROUP_LEADER_URL=${group_leader_url}
 PULSE_GROUP_MEMBERS=${group_members}
 PULSE_GROUP_PORT=9977
 PULSE_TASK_DIR=${install_root}/tasks
+PULSE_TIDE_DISCOVERY_INTERVAL_MS=60000
+PULSE_HEARTBEAT_SUCCESS_LOG_EVERY=12
+PULSE_TASK_OUTPUT_MAX_CHARS=262144
+PULSE_AGENT_PENDING_REPLY_MAX=512
+PULSE_AGENT_JAVA_OPTS=-XX:+UseSerialGC -XX:ActiveProcessorCount=2 -XX:CICompilerCount=2
 ENV
 
 cat > "$install_root/etc/pulse-coordinator.env" <<ENV
@@ -320,7 +325,7 @@ WantedBy=default.target
 UNIT
 }
 
-agent_exec="${java_bin} -cp ${install_root}/bin/pulse.jar com.bytedance.pulse.PulseAgentApp"
+agent_exec="${java_bin} \$PULSE_AGENT_JAVA_OPTS -cp ${install_root}/bin/pulse.jar com.bytedance.pulse.PulseAgentApp"
 coordinator_exec="${java_bin} -jar ${install_root}/bin/pulse.jar"
 
 if [ "$(id -u)" -eq 0 ]; then

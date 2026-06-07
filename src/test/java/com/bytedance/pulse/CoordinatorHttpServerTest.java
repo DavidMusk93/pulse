@@ -2,6 +2,8 @@ package com.bytedance.pulse;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -193,6 +195,9 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("队列中"));
         assertTrue(js.body().contains("KiB"));
         assertTrue(js.body().contains("Trace"));
+        assertTrue(js.body().contains("centered:!0"));
+        assertTrue(js.body().contains("width:`min(61.8vw"));
+        assertTrue(!js.body().contains("min(1480px"));
         assertTrue(!js.body().contains("status-led"));
         assertTrue(!js.body().contains("tile-seen"));
         assertTrue(!js.body().contains("PlayCircleOutlined"));
@@ -203,9 +208,12 @@ class CoordinatorHttpServerTest {
         HttpResponse<String> css = get("/assets/pulse-hosts.css");
         assertEquals(200, css.statusCode());
         assertTrue(css.body().contains("aspect-ratio:1"));
-        assertTrue(css.body().contains("grid-template-columns:minmax(300px,1fr) minmax(0,1.618fr)"));
-        assertTrue(css.body().contains("height:min(820px,calc(100vh - 124px))")
-                || css.body().contains("height:min(820px,100vh - 124px)"));
+        assertTrue(css.body().contains("top:auto!important"));
+        assertTrue(css.body().contains("grid-template-columns:minmax(300px,.618fr) minmax(0,1fr)"));
+        assertTrue(css.body().contains("height:min(61.8vh,calc(100vh - 148px))")
+                || css.body().contains("height:min(61.8vh,100vh - 148px)"));
+        assertTrue(!css.body().contains("height:min(920px"));
+        assertTrue(!css.body().contains("minmax(340px"));
         assertTrue(css.body().contains(".task-modal .ant-modal-content"));
         assertTrue(css.body().contains("minmax(244px,1fr)"));
         assertTrue(css.body().contains("white-space:nowrap"));
@@ -543,6 +551,19 @@ class CoordinatorHttpServerTest {
             first.stop(0);
             second.stop(0);
         }
+    }
+
+    @Test
+    void dynamicFollowerReusesLeaderHeartbeatClient() {
+        PulseAgentApp.FollowerLeaderClientCache cache =
+                new PulseAgentApp.FollowerLeaderClientCache(Duration.ofSeconds(1));
+
+        PulseAgentApp.HeartbeatClient first = cache.clientFor("http://127.0.0.1:9977");
+        PulseAgentApp.HeartbeatClient second = cache.clientFor("http://127.0.0.1:9977");
+        PulseAgentApp.HeartbeatClient changed = cache.clientFor("http://127.0.0.1:9978");
+
+        assertSame(first, second);
+        assertNotSame(first, changed);
     }
 
     @Test

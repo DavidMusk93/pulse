@@ -1154,7 +1154,7 @@ function TaskModal(props: {
       setArgsUnlocked(true);
     }
   }
-  return <Modal open={props.open} onCancel={props.onClose} footer={null} width="min(1480px, calc(100vw - 32px))" className={`task-modal ${isClusterRun ? 'cluster-run-modal' : ''}`} title={null} closeIcon={<span className="mac-close" />}>
+  return <Modal centered open={props.open} onCancel={props.onClose} footer={null} width="min(61.8vw, calc(100vw - 32px))" className={`task-modal ${isClusterRun ? 'cluster-run-modal' : ''}`} title={null} closeIcon={<span className="mac-close" />}>
     <div className="task-shell">
       <div className="task-sidebar">
         <Card className="task-hero" variant="outlined">

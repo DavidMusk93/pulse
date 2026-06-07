@@ -8,10 +8,12 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
@@ -29,7 +31,12 @@ public class AgentHeartbeatFactory {
     private final Clock clock;
     private final AtomicLong seq = new AtomicLong();
     private final Map<Long, ProcessSample> tideSamples = new ConcurrentHashMap<>();
+    private final Map<Long, TideWorkerRef> tideWorkerRefs = new ConcurrentHashMap<>();
     private final long clockTickPerSecond = clockTickPerSecond();
+    private final Path procDir;
+    private final long tideDiscoveryIntervalMs;
+    private final long memTotalKb;
+    private volatile long nextTideDiscoveryAtMs;
 
     public AgentHeartbeatFactory(
             String agentId,
@@ -42,6 +49,34 @@ public class AgentHeartbeatFactory {
             long epoch,
             long ttlMs,
             Clock clock) {
+        this(
+                agentId,
+                host,
+                ip,
+                cluster,
+                area,
+                zone,
+                role,
+                epoch,
+                ttlMs,
+                clock,
+                Path.of("/proc"),
+                Long.parseLong(env("PULSE_TIDE_DISCOVERY_INTERVAL_MS", "60000")));
+    }
+
+    AgentHeartbeatFactory(
+            String agentId,
+            String host,
+            String ip,
+            String cluster,
+            String area,
+            String zone,
+            String role,
+            long epoch,
+            long ttlMs,
+            Clock clock,
+            Path procDir,
+            long tideDiscoveryIntervalMs) {
         this.agentId = agentId;
         this.host = host;
         this.ip = ip;
@@ -52,6 +87,9 @@ public class AgentHeartbeatFactory {
         this.epoch = epoch;
         this.ttlMs = ttlMs;
         this.clock = clock;
+        this.procDir = procDir;
+        this.tideDiscoveryIntervalMs = Math.max(5_000, tideDiscoveryIntervalMs);
+        this.memTotalKb = memTotalKb(procDir);
     }
 
     public HeartbeatRequest nextHeartbeat() {
@@ -154,54 +192,83 @@ public class AgentHeartbeatFactory {
     }
 
     private List<Map<String, Object>> tideWorkers() {
-        Path proc = Path.of("/proc");
-        if (!Files.isDirectory(proc)) {
+        if (!Files.isDirectory(procDir)) {
             return List.of();
         }
         long now = clock.millis();
-        long memTotalKb = memTotalKb();
+        refreshTideWorkerRefs(now);
         List<Map<String, Object>> workers = new ArrayList<>();
-        try (Stream<Path> entries = Files.list(proc)) {
-            entries.filter(Files::isDirectory)
-                    .filter(path -> path.getFileName().toString().chars().allMatch(Character::isDigit))
-                    .sorted(Comparator.comparing(path -> Long.parseLong(path.getFileName().toString())))
-                    .forEach(path -> readTideWorker(path, now, memTotalKb).ifPresent(workers::add));
-        } catch (Exception ignored) {
-            return List.of();
-        }
+        tideWorkerRefs.values().stream()
+                .sorted(Comparator.comparingLong(TideWorkerRef::pid))
+                .forEach(ref -> readTideWorker(ref, now).ifPresentOrElse(
+                        workers::add,
+                        () -> {
+                            tideWorkerRefs.remove(ref.pid());
+                            tideSamples.remove(ref.pid());
+                        }));
         return workers;
     }
 
-    private Optional<Map<String, Object>> readTideWorker(Path procDir, long now, long memTotalKb) {
+    private void refreshTideWorkerRefs(long now) {
+        if (!tideWorkerRefs.isEmpty() && now < nextTideDiscoveryAtMs) {
+            return;
+        }
+        Set<Long> discovered = new HashSet<>();
+        try (Stream<Path> entries = Files.list(procDir)) {
+            entries.filter(Files::isDirectory)
+                    .filter(path -> path.getFileName().toString().chars().allMatch(Character::isDigit))
+                    .forEach(path -> discoverTideWorker(path).ifPresent(ref -> {
+                        discovered.add(ref.pid());
+                        tideWorkerRefs.put(ref.pid(), ref);
+                    }));
+            tideWorkerRefs.keySet().removeIf(pid -> !discovered.contains(pid));
+            tideSamples.keySet().removeIf(pid -> !discovered.contains(pid));
+        } catch (Exception ignored) {
+            // Keep the previous cache; this avoids turning a transient /proc read failure into missing heartbeat state.
+        }
+        nextTideDiscoveryAtMs = now + tideDiscoveryIntervalMs;
+    }
+
+    private Optional<TideWorkerRef> discoverTideWorker(Path workerProcDir) {
         long pid;
         try {
-            pid = Long.parseLong(procDir.getFileName().toString());
+            pid = Long.parseLong(workerProcDir.getFileName().toString());
         } catch (NumberFormatException ignored) {
             return Optional.empty();
         }
-        String cmdline = readString(procDir.resolve("cmdline")).replace('\0', ' ').trim();
+        String cmdline = readString(workerProcDir.resolve("cmdline")).replace('\0', ' ').trim();
         if (!cmdline.contains("tide_worker")) {
             return Optional.empty();
         }
+        Map<String, String> env = readEnviron(workerProcDir.resolve("environ"));
+        return Optional.of(new TideWorkerRef(
+                pid,
+                env.getOrDefault("PORT1", ""),
+                env.getOrDefault("TIDELET_COMPONENT_VERSION", "")));
+    }
 
-        Map<String, String> env = readEnviron(procDir.resolve("environ"));
-        ProcessTicks cpuTicks = processCpuTicks(procDir.resolve("stat")).orElse(new ProcessTicks(0, 0));
-        String status = readString(procDir.resolve("status"));
+    private Optional<Map<String, Object>> readTideWorker(TideWorkerRef ref, long now) {
+        Path workerProcDir = procDir.resolve(String.valueOf(ref.pid()));
+        if (!Files.isDirectory(workerProcDir)) {
+            return Optional.empty();
+        }
+        ProcessTicks cpuTicks = processCpuTicks(workerProcDir.resolve("stat")).orElse(new ProcessTicks(0, 0));
+        String status = readString(workerProcDir.resolve("status"));
         long rssKb = statusNumber(status, "VmRSS:").orElse(0L);
         long threads = statusNumber(status, "Threads:").orElse(0L);
-        CpuPercent cpuPercent = cpuPercent(pid, cpuTicks, now);
+        CpuPercent cpuPercent = cpuPercent(ref.pid(), cpuTicks, now);
         double memPercent = memTotalKb <= 0 ? 0 : rssKb * 100.0 / memTotalKb;
 
         Map<String, Object> worker = new LinkedHashMap<>();
-        worker.put("pid", pid);
+        worker.put("pid", ref.pid());
         worker.put("cpu_percent", formatPercent(cpuPercent.total()));
         worker.put("user_cpu_percent", formatPercent(cpuPercent.user()));
         worker.put("sys_cpu_percent", formatPercent(cpuPercent.system()));
         worker.put("rss_kb", rssKb);
         worker.put("mem_percent", formatPercent(memPercent));
         worker.put("threads", threads);
-        worker.put("port1", env.getOrDefault("PORT1", ""));
-        worker.put("component_version", env.getOrDefault("TIDELET_COMPONENT_VERSION", ""));
+        worker.put("port1", ref.port1());
+        worker.put("component_version", ref.componentVersion());
         return Optional.of(worker);
     }
 
@@ -250,8 +317,8 @@ public class AgentHeartbeatFactory {
                 .flatMap(AgentHeartbeatFactory::firstNumber);
     }
 
-    private static long memTotalKb() {
-        return readString(Path.of("/proc/meminfo")).lines()
+    private static long memTotalKb(Path procDir) {
+        return readString(procDir.resolve("meminfo")).lines()
                 .filter(line -> line.startsWith("MemTotal:"))
                 .findFirst()
                 .flatMap(AgentHeartbeatFactory::firstNumber)
@@ -316,6 +383,8 @@ public class AgentHeartbeatFactory {
     }
 
     private record ProcessTicks(long userTicks, long systemTicks) {}
+
+    private record TideWorkerRef(long pid, String port1, String componentVersion) {}
 
     private record CpuPercent(double user, double system) {
         double total() {
