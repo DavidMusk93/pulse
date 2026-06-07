@@ -167,7 +167,15 @@ class CoordinatorServiceTest {
                     null,
                     List.of(),
                     group.members().stream()
-                            .map(agentId -> agent(agentId, 1, 20, "host-" + agentId, "10.0.0." + agentId.replace("agent-", "")))
+                            .map(agentId -> agentId.equals(group.leaderAgentId())
+                                    ? agentWithState(
+                                            agentId,
+                                            1,
+                                            20,
+                                            "host-" + agentId,
+                                            "10.0.0." + agentId.replace("agent-", ""),
+                                            Map.of("leader_collect_ms", 7L, "group_sent_at_ms", 1_710_000_009_992L))
+                                    : agent(agentId, 1, 20, "host-" + agentId, "10.0.0." + agentId.replace("agent-", "")))
                             .toList()));
 
             MetricQueryResult result = storage.queryRange(new MetricQuery(
@@ -181,6 +189,23 @@ class CoordinatorServiceTest {
             assertEquals(1, result.series().size());
             assertEquals(group.groupId(), result.series().get(0).labels().get("group_id"));
             assertEquals((double) group.members().size(), result.series().get(0).points().get(0).value());
+
+            MetricQueryResult collect = storage.queryRange(new MetricQuery(
+                    "group.leader_collect_ms",
+                    List.of(),
+                    1_710_000_010_000L,
+                    1_710_000_010_000L,
+                    1_000,
+                    10));
+            MetricQueryResult latency = storage.queryRange(new MetricQuery(
+                    "group.group_latency_ms",
+                    List.of(),
+                    1_710_000_010_000L,
+                    1_710_000_010_000L,
+                    1_000,
+                    10));
+            assertEquals(7.0, collect.series().get(0).points().get(0).value());
+            assertEquals(8.0, latency.series().get(0).points().get(0).value());
         }
     }
 
@@ -725,6 +750,25 @@ class CoordinatorServiceTest {
     }
 
     private static AgentHeartbeat agent(String agentId, long epoch, long seq, String host, String ip, String area) {
+        return agentWithState(agentId, epoch, seq, host, ip, Map.of(), area);
+    }
+
+    private static AgentHeartbeat agentWithState(
+            String agentId, long epoch, long seq, String host, String ip, Map<String, Object> extraState) {
+        return agentWithState(agentId, epoch, seq, host, ip, extraState, "area-a");
+    }
+
+    private static AgentHeartbeat agentWithState(
+            String agentId, long epoch, long seq, String host, String ip, Map<String, Object> extraState, String area) {
+        Map<String, Object> state = new java.util.LinkedHashMap<>();
+        state.put("host", host);
+        state.put("ip", ip);
+        state.put("cluster", "cluster-a");
+        state.put("area", area);
+        state.put("zone", "az-a");
+        state.put("role", "worker");
+        state.put("load", "0.42");
+        state.putAll(extraState);
         return new AgentHeartbeat(
                 agentId,
                 epoch,
@@ -736,14 +780,7 @@ class CoordinatorServiceTest {
                         1,
                         null,
                         null,
-                        Map.of(
-                                "host", host,
-                                "ip", ip,
-                                "cluster", "cluster-a",
-                                "area", area,
-                                "zone", "az-a",
-                                "role", "worker",
-                                "load", "0.42"))));
+                        state)));
     }
 
     private static PulseMessage chunk(PulseMessage command, int index, String payload, String fullOutput) {

@@ -72,7 +72,7 @@ public final class PulseAgentApp {
         System.out.printf("Pulse group leader started group_id=%s port=%d%n", groupId, port);
         while (!Thread.currentThread().isInterrupted()) {
             HeartbeatRequest leaderHeartbeat = heartbeatFactory.nextHeartbeat(taskRunner.drainReplies(), taskRunner.runningTasks());
-            HeartbeatRequest batch = collector.batch(groupId, leaderHeartbeat, Clock.systemUTC().millis(), Integer.MAX_VALUE);
+            HeartbeatRequest batch = timedBatch(collector, groupId, leaderHeartbeat, Integer.MAX_VALUE);
             HeartbeatResponse response = client.sendForResponse("/heartbeat", batch);
             if (response != null) {
                 receiver.updatePlans(response);
@@ -121,7 +121,7 @@ public final class PulseAgentApp {
             String mode = currentPlan.groupMode();
             receiver.setAcceptingFollowers("leader".equalsIgnoreCase(mode), Set.copyOf(currentPlan.members()));
             if ("leader".equalsIgnoreCase(mode)) {
-                HeartbeatRequest batch = collector.batch(currentPlan.groupId(), heartbeat, Clock.systemUTC().millis(), currentPlan.sizeLimit());
+                HeartbeatRequest batch = timedBatch(collector, currentPlan.groupId(), heartbeat, currentPlan.sizeLimit());
                 HeartbeatResponse response = client.sendForResponse("/heartbeat", batch);
                 if (response != null) {
                     receiver.updatePlans(response);
@@ -162,6 +162,42 @@ public final class PulseAgentApp {
                 .filter(payload -> payload != null)
                 .findFirst()
                 .map(payload -> planFromPayload(agentId, payload));
+    }
+
+    private static HeartbeatRequest timedBatch(
+            GroupHeartbeatCollector collector, String groupId, HeartbeatRequest leaderHeartbeat, int sizeLimit) {
+        long nowMs = Clock.systemUTC().millis();
+        long startedNs = System.nanoTime();
+        HeartbeatRequest batch = collector.batch(groupId, leaderHeartbeat, nowMs, sizeLimit);
+        long collectMs = Math.max(0L, (System.nanoTime() - startedNs) / 1_000_000L);
+        stampStatePayloads(batch, leaderHeartbeat.agentId(), Map.of(
+                "leader_collect_ms", collectMs,
+                "group_sent_at_ms", Clock.systemUTC().millis()));
+        return batch;
+    }
+
+    private static void stampStatePayloads(HeartbeatRequest request, String agentId, Map<String, Object> values) {
+        if (request.isBatch()) {
+            request.agents().stream()
+                    .filter(agent -> agentId == null || agent.agentId().equals(agentId))
+                    .flatMap(agent -> agent.messages().stream())
+                    .forEach(message -> stampStatePayload(message, values));
+            return;
+        }
+        if (agentId == null || agentId.equals(request.agentId())) {
+            request.messages().forEach(message -> stampStatePayload(message, values));
+        }
+    }
+
+    private static void stampStatePayload(PulseMessage message, Map<String, Object> values) {
+        if (!message.isStateMessage() || message.payload() == null) {
+            return;
+        }
+        try {
+            message.payload().putAll(values);
+        } catch (UnsupportedOperationException ignored) {
+            // Test fixtures may use immutable maps; production heartbeat payloads are mutable.
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -235,6 +271,8 @@ public final class PulseAgentApp {
         private final int successLogEvery;
         private int nextCoordinatorIndex;
         private long successCount;
+        private long lastEncodeMs;
+        private long lastSendMs;
 
         HeartbeatClient(List<String> coordinatorUrls, Duration timeout) {
             if (coordinatorUrls.isEmpty()) {
@@ -253,12 +291,25 @@ public final class PulseAgentApp {
             for (int attempt = 0; attempt < coordinatorUrls.size(); attempt++) {
                 String baseUrl = coordinatorUrls.get((nextCoordinatorIndex + attempt) % coordinatorUrls.size());
                 try {
+                    String outboundAgentId = heartbeat.isBatch() && !heartbeat.agents().isEmpty()
+                            ? heartbeat.agents().get(0).agentId()
+                            : null;
+                    stampStatePayloads(heartbeat, outboundAgentId, Map.of(
+                            "agent_encode_ms", lastEncodeMs,
+                            "agent_send_ms", lastSendMs));
+                    long encodeStartedNs = System.nanoTime();
+                    String body = mapper.writeValueAsString(heartbeat);
+                    long encodeMs = Math.max(0L, (System.nanoTime() - encodeStartedNs) / 1_000_000L);
                     HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path))
                             .timeout(timeout)
                             .header("content-type", "application/json")
-                            .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(heartbeat)))
+                            .POST(HttpRequest.BodyPublishers.ofString(body))
                             .build();
+                    long sendStartedNs = System.nanoTime();
                     HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                    long sendMs = Math.max(0L, (System.nanoTime() - sendStartedNs) / 1_000_000L);
+                    lastEncodeMs = encodeMs;
+                    lastSendMs = sendMs;
                     if (response.statusCode() >= 200 && response.statusCode() < 300) {
                         nextCoordinatorIndex = (nextCoordinatorIndex + attempt + 1) % coordinatorUrls.size();
                         successCount++;

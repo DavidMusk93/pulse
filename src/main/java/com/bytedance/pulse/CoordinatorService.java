@@ -302,6 +302,8 @@ public class CoordinatorService {
                 .orElseGet(Map::of);
         Long previousObservedAt = groupMetricObservedAt.put(groupId, observedAtMs);
         long arrivalGapMs = previousObservedAt == null ? 0 : Math.max(0, observedAtMs - previousObservedAt);
+        long groupSentAtMs = longState(leaderState, "group_sent_at_ms");
+        long groupLatencyMs = groupSentAtMs <= 0 ? 0 : Math.max(0, observedAtMs - groupSentAtMs);
         String status = staleMembers > 0 ? "stale_plan" : missingMembers > 0 ? "partial" : "ok";
         try {
             metricStorage.writeGroupLeader(new GroupLeaderMetricSample(
@@ -319,8 +321,8 @@ public class CoordinatorService {
                     staleMembers,
                     missingMembers,
                     0,
-                    0,
-                    0,
+                    longState(leaderState, "leader_collect_ms"),
+                    groupLatencyMs,
                     arrivalGapMs,
                     status,
                     Map.of("leader_url", group == null ? "" : group.leaderUrl())));
