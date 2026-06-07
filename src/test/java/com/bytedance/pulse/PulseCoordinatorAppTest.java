@@ -19,7 +19,11 @@ class PulseCoordinatorAppTest {
     void opensMetricStorageWhenDatabasePathIsConfigured() throws Exception {
         Path db = tempDir.resolve("coordinator/metrics.db");
 
-        try (MetricStorage storage = PulseCoordinatorApp.metricStorageFromEnv(Map.of("PULSE_METRICS_DB", db.toString()))) {
+        try (MetricStorage storage = PulseCoordinatorApp.metricStorageFromEnv(Map.of(
+                "PULSE_METRICS_DB", db.toString(),
+                "PULSE_LOCAL_STORAGE_RETENTION_DAYS", "10000",
+                "PULSE_LOCAL_STORAGE_MAINTENANCE_INTERVAL_MS", "20",
+                "PULSE_LOCAL_STORAGE_CLEANUP_LIMIT", "100"))) {
             assertNotNull(storage);
             storage.writeHeartbeat(new HeartbeatMetricSample(
                     1_710_000_000_000L,
@@ -49,6 +53,7 @@ class PulseCoordinatorAppTest {
                     1_000,
                     10));
             assertEquals(9.0, result.series().get(0).points().get(0).value());
+            assertEquals("ok", storage.health().status());
         }
     }
 

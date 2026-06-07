@@ -129,7 +129,7 @@ public class CoordinatorService {
 
     public MetricStorageHealth metricStorageHealth() {
         if (metricStorage == null) {
-            return new MetricStorageHealth("disabled", 0, 0, 0, 0, 0, "metric storage is disabled");
+            return new MetricStorageHealth("disabled", 0, 0, 0, 0, 0, 0, 0, 0, "metric storage is disabled");
         }
         return metricStorage.health();
     }

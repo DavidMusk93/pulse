@@ -169,6 +169,12 @@ final class LocalMetricStorage implements MetricStorage {
                 + deleteExpired("host_event", cutoffMs, boundedLimit);
     }
 
+    public void checkpointWal() throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("PRAGMA wal_checkpoint(PASSIVE)");
+        }
+    }
+
     private int deleteExpired(String table, long cutoffMs, int limit) throws SQLException {
         String sql = """
                 DELETE FROM %s
@@ -268,7 +274,7 @@ final class LocalMetricStorage implements MetricStorage {
 
     @Override
     public MetricStorageHealth health() {
-        return new MetricStorageHealth("ok", 0, 0, 0, 0, 0, "");
+        return new MetricStorageHealth("ok", 0, 0, 0, 0, 0, 0, 0, 0, "");
     }
 
     private MetricQueryResult queryTideWorkerRange(MetricQuery query, MetricColumn metric) throws Exception {

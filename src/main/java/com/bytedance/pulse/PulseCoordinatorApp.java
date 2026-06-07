@@ -35,7 +35,10 @@ public final class PulseCoordinatorApp {
                 Path.of(dbPath),
                 positiveInt(env, "PULSE_LOCAL_STORAGE_QUEUE_SIZE", 20_000),
                 positiveInt(env, "PULSE_LOCAL_STORAGE_BATCH_SIZE", 500),
-                Duration.ofMillis(positiveLong(env, "PULSE_LOCAL_STORAGE_FLUSH_MS", 1_000)));
+                Duration.ofMillis(positiveLong(env, "PULSE_LOCAL_STORAGE_FLUSH_MS", 1_000)),
+                Duration.ofDays(positiveLong(env, "PULSE_LOCAL_STORAGE_RETENTION_DAYS", 7)),
+                Duration.ofMillis(positiveLong(env, "PULSE_LOCAL_STORAGE_MAINTENANCE_INTERVAL_MS", 300_000)),
+                positiveInt(env, "PULSE_LOCAL_STORAGE_CLEANUP_LIMIT", 10_000));
     }
 
     private static void closeQuietly(MetricStorage metricStorage) {

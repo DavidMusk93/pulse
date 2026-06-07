@@ -13,21 +13,47 @@ final class AsyncLocalMetricStorage implements MetricStorage {
     private final ArrayBlockingQueue<MetricWriteCommand> queue;
     private final int batchSize;
     private final Duration flushInterval;
+    private final Duration retention;
+    private final Duration maintenanceInterval;
+    private final int maintenanceDeleteLimit;
     private final AtomicLong acceptedCommands = new AtomicLong();
     private final AtomicLong writtenCommands = new AtomicLong();
     private final AtomicLong droppedCommands = new AtomicLong();
     private final AtomicLong failedCommands = new AtomicLong();
+    private final AtomicLong maintenanceCommands = new AtomicLong();
+    private final AtomicLong deletedSamples = new AtomicLong();
+    private final AtomicLong checkpointCommands = new AtomicLong();
     private final Thread writerThread;
     private volatile boolean running = true;
     private volatile String lastError = "";
+    private volatile long nextMaintenanceAtMs;
 
     private AsyncLocalMetricStorage(Path dbPath, int queueSize, int batchSize, Duration flushInterval) throws Exception {
+        this(dbPath, queueSize, batchSize, flushInterval, Duration.ofDays(7), Duration.ofMinutes(5), 10_000);
+    }
+
+    private AsyncLocalMetricStorage(
+            Path dbPath,
+            int queueSize,
+            int batchSize,
+            Duration flushInterval,
+            Duration retention,
+            Duration maintenanceInterval,
+            int maintenanceDeleteLimit) throws Exception {
         this.dbPath = dbPath;
         this.queue = new ArrayBlockingQueue<>(Math.max(1, queueSize));
         this.batchSize = Math.max(1, batchSize);
         this.flushInterval = flushInterval == null || flushInterval.isNegative() || flushInterval.isZero()
                 ? Duration.ofSeconds(1)
                 : flushInterval;
+        this.retention = retention == null || retention.isNegative() || retention.isZero()
+                ? Duration.ofDays(7)
+                : retention;
+        this.maintenanceInterval = maintenanceInterval == null || maintenanceInterval.isNegative() || maintenanceInterval.isZero()
+                ? Duration.ofMinutes(5)
+                : maintenanceInterval;
+        this.maintenanceDeleteLimit = Math.max(1, maintenanceDeleteLimit);
+        this.nextMaintenanceAtMs = System.currentTimeMillis() + this.maintenanceInterval.toMillis();
         // Initialize schema before accepting writes so startup fails early on bad storage paths.
         try (LocalMetricStorage ignored = LocalMetricStorage.open(dbPath)) {
             // schema initialized
@@ -39,6 +65,18 @@ final class AsyncLocalMetricStorage implements MetricStorage {
 
     static AsyncLocalMetricStorage open(Path dbPath, int queueSize, int batchSize, Duration flushInterval) throws Exception {
         return new AsyncLocalMetricStorage(dbPath, queueSize, batchSize, flushInterval);
+    }
+
+    static AsyncLocalMetricStorage open(
+            Path dbPath,
+            int queueSize,
+            int batchSize,
+            Duration flushInterval,
+            Duration retention,
+            Duration maintenanceInterval,
+            int maintenanceDeleteLimit) throws Exception {
+        return new AsyncLocalMetricStorage(
+                dbPath, queueSize, batchSize, flushInterval, retention, maintenanceInterval, maintenanceDeleteLimit);
     }
 
     @Override
@@ -89,6 +127,9 @@ final class AsyncLocalMetricStorage implements MetricStorage {
                 writtenCommands.get(),
                 droppedCommands.get(),
                 failedCommands.get(),
+                maintenanceCommands.get(),
+                deletedSamples.get(),
+                checkpointCommands.get(),
                 lastError);
     }
 
@@ -108,6 +149,7 @@ final class AsyncLocalMetricStorage implements MetricStorage {
             while (running || !queue.isEmpty()) {
                 MetricWriteCommand first = queue.poll(flushInterval.toMillis(), TimeUnit.MILLISECONDS);
                 if (first == null) {
+                    runMaintenanceIfDue(storage);
                     continue;
                 }
                 writeCommand(storage, first);
@@ -118,6 +160,7 @@ final class AsyncLocalMetricStorage implements MetricStorage {
                     }
                     writeCommand(storage, next);
                 }
+                runMaintenanceIfDue(storage);
             }
         } catch (Exception exception) {
             failedCommands.incrementAndGet();
@@ -133,6 +176,25 @@ final class AsyncLocalMetricStorage implements MetricStorage {
                 storage.writeGroupLeader(groupLeader.sample());
             }
             writtenCommands.incrementAndGet();
+        } catch (Exception exception) {
+            failedCommands.incrementAndGet();
+            lastError = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
+        }
+    }
+
+    private void runMaintenanceIfDue(LocalMetricStorage storage) {
+        long now = System.currentTimeMillis();
+        if (now < nextMaintenanceAtMs) {
+            return;
+        }
+        nextMaintenanceAtMs = now + maintenanceInterval.toMillis();
+        try {
+            long cutoffMs = now - retention.toMillis();
+            int deleted = storage.deleteExpiredSamples(cutoffMs, maintenanceDeleteLimit);
+            storage.checkpointWal();
+            maintenanceCommands.incrementAndGet();
+            deletedSamples.addAndGet(deleted);
+            checkpointCommands.incrementAndGet();
         } catch (Exception exception) {
             failedCommands.incrementAndGet();
             lastError = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
@@ -159,4 +221,7 @@ record MetricStorageHealth(
         long writtenCommands,
         long droppedCommands,
         long failedCommands,
+        long maintenanceCommands,
+        long deletedSamples,
+        long checkpointCommands,
         String lastError) {}
