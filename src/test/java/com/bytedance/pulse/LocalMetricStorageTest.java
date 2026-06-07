@@ -307,6 +307,37 @@ class LocalMetricStorageTest {
     }
 
     @Test
+    void queryRangeReturnsTopNSeriesByLargestObservedValue() throws Exception {
+        Path db = tempDir.resolve("pulse-metrics.db");
+        try (LocalMetricStorage storage = LocalMetricStorage.open(db)) {
+            storage.writeHeartbeat(new HeartbeatMetricSample(
+                    1_710_000_000_000L, "agent-low", "host-low", "cluster-a", "area-a", "direct", "direct",
+                    1, 1, 30_000, 0, 10, 0, 0, 0, 10, 1_000, Map.of()));
+            storage.writeHeartbeat(new HeartbeatMetricSample(
+                    1_710_000_000_000L, "agent-high", "host-high", "cluster-a", "area-a", "direct", "direct",
+                    1, 1, 30_000, 0, 80, 0, 0, 0, 10, 1_000, Map.of()));
+            storage.writeHeartbeat(new HeartbeatMetricSample(
+                    1_710_000_000_000L, "agent-mid", "host-mid", "cluster-a", "area-a", "direct", "direct",
+                    1, 1, 30_000, 0, 40, 0, 0, 0, 10, 1_000, Map.of()));
+
+            MetricQueryResult result = storage.queryRange(new MetricQuery(
+                    "heartbeat.arrival_gap_ms",
+                    List.of(),
+                    1_710_000_000_000L,
+                    1_710_000_000_000L,
+                    1_000,
+                    10,
+                    10,
+                    2));
+
+            assertTrue(result.truncated());
+            assertEquals(List.of("agent-high", "agent-mid"), result.series().stream()
+                    .map(series -> series.labels().get("agent_id"))
+                    .toList());
+        }
+    }
+
+    @Test
     void storesAndQueriesHostEventsForChartAnnotations() throws Exception {
         Path db = tempDir.resolve("pulse-metrics.db");
         try (LocalMetricStorage storage = LocalMetricStorage.open(db)) {

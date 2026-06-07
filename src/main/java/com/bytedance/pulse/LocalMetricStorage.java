@@ -11,6 +11,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -285,10 +286,9 @@ final class LocalMetricStorage implements MetricStorage {
         List<MetricSeries> series = pointsByAgent.entrySet().stream()
                 .map(entry -> new MetricSeries(Map.of("agent_id", entry.getKey()), List.copyOf(entry.getValue())))
                 .toList();
-        boolean seriesTruncated = query.agentIds().size() > seriesLimit || series.size() > seriesLimit;
-        if (series.size() > seriesLimit) {
-            series = List.copyOf(series.subList(0, seriesLimit));
-        }
+        SeriesBudgetResult budgeted = applySeriesBudget(series, query, seriesLimit);
+        series = budgeted.series();
+        boolean seriesTruncated = query.agentIds().size() > seriesLimit || budgeted.truncated();
         return new MetricQueryResult(
                 queryId(query),
                 query.metric(),
@@ -372,10 +372,9 @@ final class LocalMetricStorage implements MetricStorage {
         List<MetricSeries> series = pointsBySeries.entrySet().stream()
                 .map(entry -> new MetricSeries(labelsBySeries.get(entry.getKey()), List.copyOf(entry.getValue())))
                 .toList();
-        boolean seriesTruncated = query.agentIds().size() > seriesLimit || series.size() > seriesLimit;
-        if (series.size() > seriesLimit) {
-            series = List.copyOf(series.subList(0, seriesLimit));
-        }
+        SeriesBudgetResult budgeted = applySeriesBudget(series, query, seriesLimit);
+        series = budgeted.series();
+        boolean seriesTruncated = query.agentIds().size() > seriesLimit || budgeted.truncated();
         return new MetricQueryResult(
                 queryId(query),
                 query.metric(),
@@ -441,10 +440,9 @@ final class LocalMetricStorage implements MetricStorage {
         List<MetricSeries> series = pointsByGroup.entrySet().stream()
                 .map(entry -> new MetricSeries(labelsByGroup.get(entry.getKey()), List.copyOf(entry.getValue())))
                 .toList();
-        boolean seriesTruncated = series.size() > seriesLimit;
-        if (series.size() > seriesLimit) {
-            series = List.copyOf(series.subList(0, seriesLimit));
-        }
+        SeriesBudgetResult budgeted = applySeriesBudget(series, query, seriesLimit);
+        series = budgeted.series();
+        boolean seriesTruncated = budgeted.truncated();
         return new MetricQueryResult(
                 queryId(query),
                 query.metric(),
@@ -762,6 +760,34 @@ final class LocalMetricStorage implements MetricStorage {
         return List.copyOf(query.agentIds().subList(0, seriesLimit));
     }
 
+    private static SeriesBudgetResult applySeriesBudget(List<MetricSeries> series, MetricQuery query, int seriesLimit) {
+        int limit = Math.min(seriesLimit, query.topN() > 0 ? query.topN() : seriesLimit);
+        boolean truncated = series.size() > limit;
+        List<MetricSeries> ordered = query.topN() > 0
+                ? series.stream()
+                        .sorted(Comparator
+                                .comparingDouble(LocalMetricStorage::maxPointValue)
+                                .reversed()
+                                .thenComparing(LocalMetricStorage::stableLabelKey))
+                        .toList()
+                : series;
+        if (ordered.size() > limit) {
+            ordered = List.copyOf(ordered.subList(0, limit));
+        }
+        return new SeriesBudgetResult(ordered, truncated);
+    }
+
+    private static double maxPointValue(MetricSeries series) {
+        return series.points().stream().mapToDouble(MetricPoint::value).max().orElse(Double.NEGATIVE_INFINITY);
+    }
+
+    private static String stableLabelKey(MetricSeries series) {
+        return series.labels().entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .map(entry -> entry.getKey() + "=" + entry.getValue())
+                .reduce("", (left, right) -> left + "|" + right);
+    }
+
     private static String stringValue(Object value, String fallback) {
         if (value == null || value.toString().isBlank()) {
             return fallback;
@@ -862,6 +888,8 @@ final class LocalMetricStorage implements MetricStorage {
     }
 }
 
+record SeriesBudgetResult(List<MetricSeries> series, boolean truncated) {}
+
 record HeartbeatMetricSample(
         long observedAtMs,
         String agentId,
@@ -942,13 +970,19 @@ record MetricQuery(
         long endMs,
         long stepMs,
         int seriesLimit,
-        int pointLimit) {
+        int pointLimit,
+        int topN) {
+    MetricQuery(String metric, List<String> agentIds, long startMs, long endMs, long stepMs, int seriesLimit, int pointLimit) {
+        this(metric, agentIds, startMs, endMs, stepMs, seriesLimit, pointLimit, 0);
+    }
+
     MetricQuery(String metric, List<String> agentIds, long startMs, long endMs, long stepMs, int pointLimit) {
-        this(metric, agentIds, startMs, endMs, stepMs, LocalMetricStorage.DEFAULT_SERIES_LIMIT, pointLimit);
+        this(metric, agentIds, startMs, endMs, stepMs, LocalMetricStorage.DEFAULT_SERIES_LIMIT, pointLimit, 0);
     }
 
     MetricQuery {
         agentIds = agentIds == null ? List.of() : List.copyOf(agentIds);
+        topN = Math.max(0, topN);
     }
 }
 

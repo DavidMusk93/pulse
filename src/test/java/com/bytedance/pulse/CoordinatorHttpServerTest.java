@@ -163,6 +163,44 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
+    void metricsRangeQueryAcceptsTopNSeriesSelection() throws Exception {
+        postJson("/heartbeat", """
+                {
+                  "agent_id":"agent-low",
+                  "host":"host-low",
+                  "cluster":"cluster-a",
+                  "area":"area-a",
+                  "ip":"10.0.0.1",
+                  "epoch":1,
+                  "seq":1,
+                  "ttl_ms":30000,
+                  "state":{"agent_thread_count":10}
+                }
+                """);
+        postJson("/heartbeat", """
+                {
+                  "agent_id":"agent-high",
+                  "host":"host-high",
+                  "cluster":"cluster-a",
+                  "area":"area-a",
+                  "ip":"10.0.0.2",
+                  "epoch":1,
+                  "seq":1,
+                  "ttl_ms":30000,
+                  "state":{"agent_thread_count":90}
+                }
+                """);
+
+        HttpResponse<String> range = get("/api/metrics/query_range?metric=agent.thread_count&start_ms=0&end_ms=9999999999999&step_ms=1000&point_limit=100&series_limit=10&top_n=1");
+
+        assertEquals(200, range.statusCode());
+        JsonNode body = mapper.readTree(range.body());
+        assertEquals(true, body.get("truncated").asBoolean());
+        assertEquals(1, body.get("series").size());
+        assertEquals("agent-high", body.get("series").get(0).get("labels").get("agent_id").asText());
+    }
+
+    @Test
     void metricsStorageAndStreamExposeHealthAndInvalidationEvents() throws Exception {
         HttpResponse<String> storage = get("/api/metrics/storage");
         assertEquals(200, storage.statusCode());

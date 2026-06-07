@@ -4,7 +4,7 @@
 
 - 时间：2026-06-07
 - 最新已部署提交：`42d052e Add bounded periodic metrics stream`
-- 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget
+- 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection
 - 部署范围：`cdn_new` 50 台 agent 已完成 query budget rollout；3 台 coordinator 已完成 frontend Metrics Panel rollout
 - JAR SHA：`3961cfc7f4bd7e787f2caca012a091389fef2a55c37dd4a1b234712a5f8ca28d`
 - 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览。
@@ -54,6 +54,7 @@
 - 查询预算：
   - `/api/metrics/query_range` 已支持 `series_limit`，默认 50，最大 200。
   - `point_limit` 已服务端钳制到最大 20000。
+  - 已支持 `top_n` / `topN`，在未限定具体 series 时按每条 series 的最大观测值返回 Top N，并用 label key 保持稳定排序。
   - 响应已包含 `query_id`、`from`、`to`、`unit`、`sample_policy`、`truncated`、`suggested_step_ms`、`series_limit`、`point_limit`。
   - 查询默认保持请求 `step_ms`；只有结果被截断时才返回更大的 `suggested_step_ms`，避免稀疏样本被错误合并。
   - heartbeat、tide worker、group leader 已统一按请求 `step_ms` 分桶并使用 `AVG` 聚合。
@@ -76,7 +77,7 @@
 
 ## 测试
 
-- `mvn test`：`67` tests passed。
+- `mvn test`：`69` tests passed。
 - `bash .tmp/build_frontend.sh`：Vite build passed，产出 `pulse-hosts.js/css`。
 - 关键新增测试：
   - `AsyncLocalMetricStorageTest`
@@ -90,6 +91,8 @@
   - `LocalMetricStorageTest#queryRangeAggregatesGroupLeaderPointsByRequestedStep`
   - `CoordinatorHttpServerTest#metricsStorageAndStreamExposeHealthAndInvalidationEvents` 已覆盖 SSE `retry`、`Last-Event-ID` resume metadata 和 cache replay。
   - `CoordinatorHttpServerTest#metricsStreamProducesBoundedPeriodicInvalidations` 已覆盖 bounded long-running stream。
+  - `LocalMetricStorageTest#queryRangeReturnsTopNSeriesByLargestObservedValue` 已覆盖 storage 层 Top N series 选择。
+  - `CoordinatorHttpServerTest#metricsRangeQueryAcceptsTopNSeriesSelection` 已覆盖 HTTP `top_n` 参数。
   - `CoordinatorHttpServerTest#hostsPageRendersFlatSquareChineseHeartbeatConsole` 已断言 Metrics Panel 静态资源标记。
 
 ## 线上验证
@@ -232,8 +235,8 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
 
 - 查询预算仍可完善：
   - heartbeat、tide worker、group leader 已支持 `step_ms avg`。
-  - 已有 `series_limit`、`point_limit` 和截断后的 `suggested_step_ms`。
-  - 尚未实现 top N 异常 host 和服务端聚合线。
+  - 已有 `series_limit`、`point_limit`、`top_n` 和截断后的 `suggested_step_ms`。
+  - 尚未实现服务端聚合线。
 
 - 前端构建环境：
   - 当前 agent shell 全局仍找不到 `node`/`npm`。
@@ -243,6 +246,6 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
 ## 下一步
 
 1. 为 Metrics Panel 增加可见性暂停、absolute range pause、断线全窗口补偿和前端 render metrics。
-2. 为 tide worker 和 group leader query 补齐 topN。
+2. 为超出 series budget 的查询补服务端聚合线。
 3. 为 SSE 增加多订阅者独立 bounded outbound queue。
 4. 上线前端后继续用线上 SQLite 分析 group heartbeat 是否达到设计目标。
