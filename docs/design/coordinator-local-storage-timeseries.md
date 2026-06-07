@@ -365,6 +365,18 @@ CREATE INDEX IF NOT EXISTS idx_group_leader_agent_time
 - Follower 是否频繁回退 direct：`direct_fallback_count` 可衡量 group 机制是否退化成 direct heartbeat。
 - Tide worker 采样是否过重或不稳定：`tide_worker_sample.thread_count`、`cpu_pct`、`rss_kb` 可观察 worker 资源趋势，但不能直接度量 agent 采样成本。
 
+第一版必须把下列 health metric 暴露到 `/api/metrics/catalog`，让 UI 不只是画曲线，而是直接反馈心跳架构是否健壮、agent 采集是否新鲜：
+
+| 指标 | 含义 | 健康解释 |
+| --- | --- | --- |
+| `group.status_unhealthy` | `status != ok` 的 0/1 派生指标 | 直接反映 group fan-in 是否出现 `partial`、`stale_plan`、`fallback` |
+| `group.missing_member_count` | leader batch 缺失 follower 数 | 反映 follower 覆盖率和 group heartbeat 完整性 |
+| `group.stale_member_count` | batch 中旧 plan 成员数 | 反映 plan 收敛和 leader 切换抖动 |
+| `group.direct_fallback_count` | follower direct fallback 数 | 反映 group 机制是否退化成 direct heartbeat |
+| `heartbeat.agent_collect_ms` | agent 本地采集耗时 | 反映采集数据实效性和 agent 热路径负担 |
+| `heartbeat.agent_encode_ms` | heartbeat payload 编码耗时 | 反映协议编码成本 |
+| `heartbeat.agent_send_ms` | heartbeat HTTP 发送耗时 | 反映 agent 到 coordinator 链路新鲜度 |
+
 当前 schema 还不足以回答的问题：
 
 - 请求数是否从 `host_count` 精确收敛到 `group_count`：需要同时记录 direct heartbeat 和 group heartbeat 的请求类型，否则只能近似。
@@ -1041,6 +1053,16 @@ Ant Design 在这些原则中的角色：
 - 用 tooltip/annotation/threshold 把“异常点”连接到事件和原因。
 - 用点数预算、降采样和可见性调度保证流畅。
 - 不承担全局状态管理、表单、布局和通用反馈组件。
+
+第一版 Metrics Panel 需要内置诊断 preset，避免用户在 catalog 中手动猜指标：
+
+| Preset | 默认指标 | 查询策略 | 需要回答的问题 |
+| --- | --- | --- | --- |
+| 架构健康 | `group.status_unhealthy` | 全局 TopN + aggregate，15m | group fan-in 是否退化 |
+| 采集实效 | `heartbeat.agent_collect_ms` | 全局 TopN + aggregate，15m | agent 采集是否足够新鲜 |
+| 发送链路 | `heartbeat.agent_send_ms` | 全局 TopN + aggregate，15m | agent 到 coordinator 发送是否轻量 |
+
+Preset 面板必须用 Ant Design `Tag` 给出可读判定，例如“架构健康 / 架构退化”、“采集新鲜 / 采集偏慢”、“链路轻量 / 链路偏慢”，并保留原始 query id、series count、point count、`query_ms`、`render_ms` 作为证据。
 
 ### 前端时序图渲染架构
 
