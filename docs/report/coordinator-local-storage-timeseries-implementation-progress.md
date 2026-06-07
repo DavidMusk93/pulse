@@ -3,10 +3,10 @@
 ## 状态
 
 - 时间：2026-06-07
-- 最新已部署提交：`03b033d Add metric query budget controls`
+- 最新已部署提交：`6c9fbbe Add metrics panel frontend`
 - 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget
-- 部署范围：`cdn_new` 50 台 agent + 3 台 coordinator
-- JAR SHA：`1359662bddeff263596de4017897c5479461998179061a5602fbbc19388290fa`
+- 部署范围：`cdn_new` 50 台 agent 已完成 query budget rollout；3 台 coordinator 已完成 frontend Metrics Panel rollout
+- JAR SHA：`c6b0992c258b36b79bbafcebbcbd25f14db75706883ddf656afe53c7ef37c30c`
 - 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览。
 
 ## 已完成
@@ -85,6 +85,7 @@
 staged coordinator deploy: total=3 ok=3 failed=0
 full cdn_new deploy: total=50 ok=50 failed=0 elapsed=170s
 verify cdn_new: total=50 ok=50 failed=0
+frontend coordinator deploy: total=3 ok=3 failed=0 elapsed=23s
 ```
 
 最新 query budget 和 storage health 验证：
@@ -101,6 +102,25 @@ QUERY query_id=q-0-1-1086903931 metric=agent.thread_count from=0 to=1 unit=threa
 COORD fdbd:dc07:0:810::44
 STORAGE status=ok queue=0 written=2260 dropped=0 failed=0 maintenance=0 deleted=0 checkpoint=0 batches=443
 QUERY query_id=q-0-1-1086903931 metric=agent.thread_count from=0 to=1 unit=threads policy=avg truncated=False suggested_step_ms=1 series_limit=2 point_limit=20000
+```
+
+最新 frontend asset 验证：
+
+```text
+COORD fdbd:dc05:11:634::45
+ASSET /assets/pulse-hosts.js bytes=833747 missing=[]
+ASSET /assets/pulse-hosts.css bytes=23316 missing=[]
+STORAGE bytes=232 status_ok=True
+
+COORD fdbd:dc05:13:10c::40
+ASSET /assets/pulse-hosts.js bytes=833747 missing=[]
+ASSET /assets/pulse-hosts.css bytes=23316 missing=[]
+STORAGE bytes=232 status_ok=True
+
+COORD fdbd:dc07:0:810::44
+ASSET /assets/pulse-hosts.js bytes=833747 missing=[]
+ASSET /assets/pulse-hosts.css bytes=23316 missing=[]
+STORAGE bytes=232 status_ok=True
 ```
 
 历史 coordinator rollout：`3/3 ok`。
@@ -166,8 +186,7 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
 
 ## 下一步
 
-1. 部署前端 Metrics Panel 到 `cdn_new` coordinator 并用浏览器/API 验证。
-2. 将 Metrics Panel 拆分为 QueryController、SeriesStore、RenderScheduler、ChartAdapter。
-3. 为 tide worker 和 group leader query 补齐 step 聚合、series budget 和 topN。
-4. 为 SSE 增加 `Last-Event-ID`、事件缓存和 slow client bounded queue。
-5. 上线前端后继续用线上 SQLite 分析 group heartbeat 是否达到设计目标。
+1. 将 Metrics Panel 拆分为 QueryController、SeriesStore、RenderScheduler、ChartAdapter。
+2. 为 tide worker 和 group leader query 补齐 step 聚合、series budget 和 topN。
+3. 为 SSE 增加 `Last-Event-ID`、事件缓存和 slow client bounded queue。
+4. 上线前端后继续用线上 SQLite 分析 group heartbeat 是否达到设计目标。

@@ -18,6 +18,7 @@
 - For remote shell verification, create `.tmp/<name>.sh` and run `bash .tmp/<name>.sh`.
 - For auto-ops deploy commands, avoid same-line environment assignment when the value is also passed as an argument.
 - Always inspect clean stdout for semantic evidence, not only process exit code.
+- Keep Python verification print logic simple; compute booleans before formatting rather than embedding escaped strings inside f-string expressions.
 
 ## Anti-patterns
 
