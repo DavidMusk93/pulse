@@ -3,10 +3,10 @@
 ## 状态
 
 - 时间：2026-06-07
-- 最新已部署提交：`ef9ae66 Add metrics live compensation loop`
+- 最新已部署提交：`9150eba Aggregate tide and group metric queries`
 - 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget
 - 部署范围：`cdn_new` 50 台 agent 已完成 query budget rollout；3 台 coordinator 已完成 frontend Metrics Panel rollout
-- JAR SHA：`ae773e4523b38ff1962f714a90dcd6da20f8ed8e0b3829565c281a8a42c0e67d`
+- JAR SHA：`bb5959544c78ea964541f39cade5cb744c86bfc9219348f241bef739336b3617`
 - 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览。
 
 ## 已完成
@@ -93,6 +93,7 @@ verify cdn_new: total=50 ok=50 failed=0
 frontend coordinator deploy: total=3 ok=3 failed=0 elapsed=23s
 frontend data-layer deploy: total=3 ok=3 failed=0 elapsed=25s
 frontend live compensation deploy: total=3 ok=3 failed=0 elapsed=16s
+tide/group aggregation deploy: total=3 ok=3 failed=0 elapsed=18s
 ```
 
 最新 query budget 和 storage health 验证：
@@ -128,6 +129,22 @@ COORD fdbd:dc07:0:810::44
 ASSET /assets/pulse-hosts.js bytes=836794 missing=[]
 ASSET /assets/pulse-hosts.css bytes=23316 missing=[]
 STORAGE bytes=227 status_ok=True
+```
+
+最新 tide/group 聚合验证：
+
+```text
+COORD fdbd:dc05:11:634::45
+QUERY metric=tide_worker.rss_kb unit=KiB policy=avg truncated=True suggested_step_ms=60000 series_limit=12 point_limit=20000 series=12 points=612
+QUERY metric=group.submitted_agent_count unit=count policy=avg truncated=True suggested_step_ms=60000 series_limit=12 point_limit=20000 series=12 points=513
+
+COORD fdbd:dc05:13:10c::40
+QUERY metric=tide_worker.rss_kb unit=KiB policy=avg truncated=True suggested_step_ms=60000 series_limit=12 point_limit=20000 series=12 points=600
+QUERY metric=group.submitted_agent_count unit=count policy=avg truncated=True suggested_step_ms=60000 series_limit=12 point_limit=20000 series=12 points=502
+
+COORD fdbd:dc07:0:810::44
+QUERY metric=tide_worker.rss_kb unit=KiB policy=avg truncated=True suggested_step_ms=60000 series_limit=12 point_limit=20000 series=12 points=600
+QUERY metric=group.submitted_agent_count unit=count policy=avg truncated=True suggested_step_ms=60000 series_limit=12 point_limit=20000 series=12 points=453
 ```
 
 历史 coordinator rollout：`3/3 ok`。
