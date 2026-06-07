@@ -187,6 +187,31 @@ class LocalMetricStorageTest {
             assertEquals(1, result.series().size());
             assertEquals("cluster-a/area-a/001", result.series().get(0).labels().get("group_id"));
             assertEquals(10.0, result.series().get(0).points().get(0).value());
+
+            MetricQueryResult stale = storage.queryRange(new MetricQuery(
+                    "group.stale_member_count",
+                    List.of(),
+                    1_710_000_000_000L,
+                    1_710_000_000_000L,
+                    1_000,
+                    10));
+            MetricQueryResult directFallback = storage.queryRange(new MetricQuery(
+                    "group.direct_fallback_count",
+                    List.of(),
+                    1_710_000_000_000L,
+                    1_710_000_000_000L,
+                    1_000,
+                    10));
+            MetricQueryResult unhealthy = storage.queryRange(new MetricQuery(
+                    "group.status_unhealthy",
+                    List.of(),
+                    1_710_000_000_000L,
+                    1_710_000_000_000L,
+                    1_000,
+                    10));
+            assertEquals(1.0, stale.series().get(0).points().get(0).value());
+            assertEquals(0.0, directFallback.series().get(0).points().get(0).value());
+            assertEquals(1.0, unhealthy.series().get(0).points().get(0).value());
         }
     }
 

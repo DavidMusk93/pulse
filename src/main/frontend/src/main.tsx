@@ -1001,6 +1001,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const [storage, setStorage] = useState<MetricStorageHealth | null>(null);
   const [metric, setMetric] = useState('agent.thread_count');
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
+  const [fleetMode, setFleetMode] = useState(false);
   const [rangeMinutes, setRangeMinutes] = useState(30);
   const [result, setResult] = useState<MetricQueryResultView | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1026,16 +1027,25 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
     label: `${item.title} (${item.unit || '-'})`
   })), [catalog]);
   const activeMetric = catalog.find(item => item.metric === metric);
-  const visibleAgents = selectedAgents.length ? selectedAgents : agentOptions.slice(0, 3).map(option => option.value);
+  const visibleAgents = fleetMode ? [] : selectedAgents.length ? selectedAgents : agentOptions.slice(0, 3).map(option => option.value);
   const rangePaused = fixedRangeEndMs !== null;
   const livePaused = rangePaused || !pageVisible;
+  const storageStatus = storage?.status || 'unknown';
+  const assessment = metricAssessment(metric, result, storageStatus);
 
   async function loadMetrics(nextMetric = metric, nextAgents = visibleAgents, nextRangeMinutes = rangeMinutes, nextNowMs = fixedRangeEndMs ?? undefined) {
     const queryStart = performance.now();
     setLoading(true);
     setError('');
     try {
-      const data = await queryController.queryRange({ metric: nextMetric, agents: nextAgents, rangeMinutes: nextRangeMinutes, nowMs: nextNowMs });
+      const data = await queryController.queryRange({
+        metric: nextMetric,
+        agents: nextAgents,
+        rangeMinutes: nextRangeMinutes,
+        nowMs: nextNowMs,
+        topN: fleetMode ? 12 : undefined,
+        seriesLimit: 12
+      });
       const queryMs = Math.round(performance.now() - queryStart);
       const renderStart = performance.now();
       renderScheduler.schedule(() => {
@@ -1063,9 +1073,9 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   }, []);
 
   useEffect(() => {
-    if (selectedAgents.length || agentOptions.length === 0) return;
+    if (fleetMode || selectedAgents.length || agentOptions.length === 0) return;
     setSelectedAgents(agentOptions.slice(0, 3).map(option => option.value));
-  }, [agentOptions, selectedAgents.length]);
+  }, [agentOptions, selectedAgents.length, fleetMode]);
 
   useEffect(() => {
     if (!metric) return;
@@ -1074,7 +1084,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
       return;
     }
     loadMetrics(metric, visibleAgents, rangeMinutes, fixedRangeEndMs ?? undefined);
-  }, [metric, selectedAgents.join(','), rangeMinutes, pageVisible, fixedRangeEndMs]);
+  }, [metric, selectedAgents.join(','), rangeMinutes, pageVisible, fixedRangeEndMs, fleetMode]);
 
   useEffect(() => {
     const onVisibilityChange = () => setPageVisible(document.visibilityState !== 'hidden');
@@ -1132,6 +1142,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
           stepMs: 10_000,
           pointLimit: 20_000,
           seriesLimit: 12,
+          topN: fleetMode ? 12 : undefined,
           cache: false
         });
         renderScheduler.schedule(() => setResult(current => SeriesStore.merge(current, patch)));
@@ -1142,23 +1153,46 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
       }
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [invalidatedRange, metric, selectedAgents.join(','), rangeMinutes, livePaused]);
+  }, [invalidatedRange, metric, selectedAgents.join(','), rangeMinutes, livePaused, fleetMode]);
 
   const seriesStore = useMemo(() => new SeriesStore(result), [result]);
   const seriesCount = seriesStore.seriesCount();
   const pointCount = seriesStore.pointCount();
-  const storageStatus = storage?.status || 'unknown';
   const storageTone = storageStatus === 'ok' ? 'success' : storageStatus === 'disabled' ? 'default' : 'warning';
 
   return <Card id="metrics" className="metrics-panel" variant="outlined" title={<Space size={8}><span>时序洞察</span><Tag color={storageTone}>{storageStatus}</Tag><Tag>{liveStatus}</Tag>{livePaused && <Tag color="gold">live paused</Tag>}</Space>}>
     <div className="metrics-layout">
       <div className="metrics-control-grid">
+        <Segmented
+          value={metricPresetValue(metric)}
+          options={[
+            { label: '手动指标', value: 'manual' },
+            { label: '架构健康', value: 'heartbeat-architecture' },
+            { label: '采集实效', value: 'agent-freshness' },
+            { label: '发送链路', value: 'send-path' }
+          ]}
+          onChange={value => {
+            if (value === 'manual') {
+              setFleetMode(false);
+              return;
+            }
+            const preset = metricPreset(String(value));
+            if (!preset) return;
+            setMetric(preset.metric);
+            setRangeMinutes(preset.rangeMinutes);
+            setSelectedAgents([]);
+            setFleetMode(true);
+          }}
+        />
         <Select
           className="metrics-control"
           value={metric}
           options={metricOptions}
           loading={!catalog.length}
-          onChange={value => setMetric(value)}
+          onChange={value => {
+            setMetric(value);
+            setFleetMode(false);
+          }}
         />
         <Select
           mode="multiple"
@@ -1166,8 +1200,11 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
           maxTagCount="responsive"
           value={selectedAgents}
           options={agentOptions}
-          placeholder="默认选择前 3 台在线 host"
-          onChange={setSelectedAgents}
+          placeholder={fleetMode ? '全局 TopN + aggregate' : '默认选择前 3 台在线 host'}
+          onChange={values => {
+            setSelectedAgents(values);
+            setFleetMode(false);
+          }}
         />
         <Segmented
           value={rangeMinutes}
@@ -1197,6 +1234,8 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
         <div className="metrics-chart-head">
           <Space size={8} wrap>
             <Typography.Text strong>{activeMetric?.title || metric}</Typography.Text>
+            <Tag color={assessment.tone}>{assessment.label}</Tag>
+            {fleetMode && <Tag color="cyan">全局 TopN</Tag>}
             <Tag>{activeMetric?.unit || result?.unit || '-'}</Tag>
             <Tag>{seriesCount} series</Tag>
             <Tag>{pointCount} points</Tag>
@@ -1214,6 +1253,63 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
     </div>
   </Card>;
 });
+
+type MetricPreset = {
+  key: string;
+  metric: string;
+  rangeMinutes: number;
+};
+
+const metricPresets: MetricPreset[] = [
+  { key: 'heartbeat-architecture', metric: 'group.status_unhealthy', rangeMinutes: 15 },
+  { key: 'agent-freshness', metric: 'heartbeat.agent_collect_ms', rangeMinutes: 15 },
+  { key: 'send-path', metric: 'heartbeat.agent_send_ms', rangeMinutes: 15 }
+];
+
+function metricPreset(key: string) {
+  return metricPresets.find(preset => preset.key === key);
+}
+
+function metricPresetValue(metric: string) {
+  return metricPresets.find(preset => preset.metric === metric)?.key || 'manual';
+}
+
+function metricAssessment(metric: string, result: MetricQueryResultView | null, storageStatus: string) {
+  if (storageStatus !== 'ok') {
+    return { label: '存储降级', tone: 'warning' as const };
+  }
+  const max = maxMetricValue(result);
+  if (max === null) {
+    return { label: '等待样本', tone: 'default' as const };
+  }
+  if (metric === 'group.status_unhealthy') {
+    return max > 0 ? { label: '架构退化', tone: 'error' as const } : { label: '架构健康', tone: 'success' as const };
+  }
+  if (metric === 'group.missing_member_count' || metric === 'group.stale_member_count' || metric === 'group.direct_fallback_count') {
+    return max > 0 ? { label: 'group 有尾部', tone: 'warning' as const } : { label: 'group 稳定', tone: 'success' as const };
+  }
+  if (metric === 'heartbeat.arrival_gap_ms') {
+    return max > 30_000 ? { label: '超过 TTL', tone: 'error' as const } : max > 10_000 ? { label: '到达抖动', tone: 'warning' as const } : { label: '到达稳定', tone: 'success' as const };
+  }
+  if (metric === 'heartbeat.seq_gap') {
+    return max > 0 ? { label: '序列缺口', tone: 'warning' as const } : { label: '序列连续', tone: 'success' as const };
+  }
+  if (metric === 'heartbeat.agent_collect_ms') {
+    return max > 100 ? { label: '采集偏慢', tone: 'warning' as const } : { label: '采集新鲜', tone: 'success' as const };
+  }
+  if (metric === 'heartbeat.agent_encode_ms' || metric === 'heartbeat.agent_send_ms' || metric === 'group.group_latency_ms') {
+    return max > 100 ? { label: '链路偏慢', tone: 'warning' as const } : { label: '链路轻量', tone: 'success' as const };
+  }
+  return { label: '可观测', tone: 'processing' as const };
+}
+
+function maxMetricValue(result: MetricQueryResultView | null) {
+  const values = (result?.series || [])
+    .flatMap(series => series.points || [])
+    .map(point => Number(point.value))
+    .filter(Number.isFinite);
+  return values.length ? Math.max(...values) : null;
+}
 
 const MetricSparkline = memo(function MetricSparkline({ result }: { result: MetricQueryResultView | null }) {
   const adapter = useMemo(() => new SvgChartAdapter(), []);

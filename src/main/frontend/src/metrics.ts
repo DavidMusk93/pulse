@@ -59,6 +59,7 @@ export type MetricQueryRequest = {
   stepMs?: number;
   pointLimit?: number;
   seriesLimit?: number;
+  topN?: number;
   cache?: boolean;
 };
 
@@ -121,6 +122,9 @@ export class MetricQueryController {
       point_limit: String(request.pointLimit ?? 20_000),
       series_limit: String(request.seriesLimit ?? 12)
     });
+    if (request.topN && request.topN > 0) {
+      params.set('top_n', String(request.topN));
+    }
     if (request.agents.length) {
       params.set('agents', request.agents.join(','));
     }

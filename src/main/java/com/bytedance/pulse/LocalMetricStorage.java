@@ -72,6 +72,9 @@ final class LocalMetricStorage implements MetricStorage {
                 new MetricCatalogItem("group.submitted_agent_count", "Group submitted agents", "count"),
                 new MetricCatalogItem("group.accepted_agent_count", "Group accepted agents", "count"),
                 new MetricCatalogItem("group.missing_member_count", "Group missing members", "count"),
+                new MetricCatalogItem("group.stale_member_count", "Group stale members", "count"),
+                new MetricCatalogItem("group.direct_fallback_count", "Group direct fallback", "count"),
+                new MetricCatalogItem("group.status_unhealthy", "Group unhealthy status", "ratio"),
                 new MetricCatalogItem("group.leader_collect_ms", "Group leader collection time", "ms"),
                 new MetricCatalogItem("group.group_latency_ms", "Group latency", "ms"));
     }
@@ -870,6 +873,9 @@ final class LocalMetricStorage implements MetricStorage {
         GROUP_SUBMITTED("group.submitted_agent_count", "submitted_agent_count", "count", MetricSource.GROUP_LEADER),
         GROUP_ACCEPTED("group.accepted_agent_count", "accepted_agent_count", "count", MetricSource.GROUP_LEADER),
         GROUP_MISSING("group.missing_member_count", "missing_member_count", "count", MetricSource.GROUP_LEADER),
+        GROUP_STALE("group.stale_member_count", "stale_member_count", "count", MetricSource.GROUP_LEADER),
+        GROUP_DIRECT_FALLBACK("group.direct_fallback_count", "direct_fallback_count", "count", MetricSource.GROUP_LEADER),
+        GROUP_UNHEALTHY("group.status_unhealthy", "CASE WHEN status = 'ok' THEN 0 ELSE 1 END", "ratio", MetricSource.GROUP_LEADER),
         GROUP_COLLECT("group.leader_collect_ms", "leader_collect_ms", "ms", MetricSource.GROUP_LEADER),
         GROUP_LATENCY("group.group_latency_ms", "group_latency_ms", "ms", MetricSource.GROUP_LEADER);
 
