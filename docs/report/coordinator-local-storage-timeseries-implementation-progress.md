@@ -7,7 +7,7 @@
 - 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget
 - 部署范围：`cdn_new` 50 台 agent + 3 台 coordinator
 - JAR SHA：`1359662bddeff263596de4017897c5479461998179061a5602fbbc19388290fa`
-- 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板仍未完成。
+- 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览。
 
 ## 已完成
 
@@ -57,9 +57,16 @@
   - 响应已包含 `query_id`、`from`、`to`、`unit`、`sample_policy`、`truncated`、`suggested_step_ms`、`series_limit`、`point_limit`。
   - 查询默认保持请求 `step_ms`；只有结果被截断时才返回更大的 `suggested_step_ms`，避免稀疏样本被错误合并。
 
+- 前端时序面板：
+  - 已恢复本地 Node/npm 构建链路，使用 `.tmp/runtime/node-v22.12.0-darwin-arm64`。
+  - 已实现 Ant Design Metrics Panel 第一版，包含 storage health、metric selector、agent selector、range selector、query budget 状态和 SVG sparkline。
+  - 已接入 `/api/metrics/catalog`、`/api/metrics/storage`、`/api/metrics/query_range`、`/api/metrics/stream`。
+  - 已用 Vite 构建同步 `src/main/resources/static/pulse-hosts.js` 和 `pulse-hosts.css`。
+
 ## 测试
 
 - `mvn test`：`64` tests passed。
+- `bash .tmp/build_frontend.sh`：Vite build passed，产出 `pulse-hosts.js/css`。
 - 关键新增测试：
   - `AsyncLocalMetricStorageTest`
   - `LocalMetricStorageTest`
@@ -68,6 +75,7 @@
   - `CoordinatorHttpServerTest#metricsEventsEndpointReturnsHostEvents`
   - `CoordinatorHttpServerTest#metricsRangeQueryAppliesServerSideBudgets`
   - `LocalMetricStorageTest#queryRangeSuggestsLargerStepWhenRequestExceedsPointBudget`
+  - `CoordinatorHttpServerTest#hostsPageRendersFlatSquareChineseHeartbeatConsole` 已断言 Metrics Panel 静态资源标记。
 
 ## 线上验证
 
@@ -130,10 +138,10 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
 
 ## 与设计差距
 
-- 前端时序面板未完成：
-  - 未实现 Ant Design MetricPanel。
-  - 未实现 QueryController、SeriesStore、RenderScheduler、ChartAdapter。
-  - 未接入 ECharts/uPlot。
+- 前端时序面板仍需增强：
+  - 第一版已实现 Ant Design Metrics Panel 和 SVG 预览。
+  - 尚未实现 QueryController、SeriesStore、RenderScheduler、ChartAdapter 的完整分层。
+  - 尚未接入 ECharts/uPlot 高密度图表。
 
 - SSE 仍是轻量第一版：
   - 已有 `hello`、`storage.health`、`metric.invalidate`。
@@ -151,13 +159,15 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
   - 已有 `series_limit`、`point_limit` 和截断后的 `suggested_step_ms`。
   - 尚未实现 top N 异常 host、服务端聚合线和 tide/group 的 step 聚合。
 
-- 前端构建环境阻塞：
-  - 当前 agent shell 找不到 `node`/`npm`，无法运行 `src/main/frontend` 的 Vite build。
+- 前端构建环境：
+  - 当前 agent shell 全局仍找不到 `node`/`npm`。
+  - 已通过 `.tmp/runtime` 下载 Node `v22.12.0` 恢复构建。
   - 已记录到 `docs/debug/frontend-build-environment.md`。
 
 ## 下一步
 
-1. 恢复前端构建环境或生成稳定静态同步脚本，实现 Ant Design metrics panel。
-2. 为 tide worker 和 group leader query 补齐 step 聚合、series budget 和 topN。
-3. 为 SSE 增加 `Last-Event-ID`、事件缓存和 slow client bounded queue。
-4. 上线前端后继续用线上 SQLite 分析 group heartbeat 是否达到设计目标。
+1. 部署前端 Metrics Panel 到 `cdn_new` coordinator 并用浏览器/API 验证。
+2. 将 Metrics Panel 拆分为 QueryController、SeriesStore、RenderScheduler、ChartAdapter。
+3. 为 tide worker 和 group leader query 补齐 step 聚合、series budget 和 topN。
+4. 为 SSE 增加 `Last-Event-ID`、事件缓存和 slow client bounded queue。
+5. 上线前端后继续用线上 SQLite 分析 group heartbeat 是否达到设计目标。

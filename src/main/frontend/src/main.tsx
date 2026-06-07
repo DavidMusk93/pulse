@@ -74,6 +74,57 @@ type TaskSnapshot = {
   output_streams?: any[];
 };
 
+type MetricCatalogItem = {
+  metric: string;
+  title: string;
+  unit: string;
+};
+
+type MetricStorageHealth = {
+  status?: string;
+  queue_depth?: number;
+  accepted_commands?: number;
+  written_commands?: number;
+  dropped_commands?: number;
+  failed_commands?: number;
+  maintenance_commands?: number;
+  deleted_samples?: number;
+  checkpoint_commands?: number;
+  transaction_batches?: number;
+  last_error?: string;
+};
+
+type MetricPointView = {
+  timestamp_ms?: number;
+  timestampMs?: number;
+  value?: number;
+  metadata?: Record<string, any>;
+};
+
+type MetricSeriesView = {
+  labels?: Record<string, string>;
+  points?: MetricPointView[];
+};
+
+type MetricQueryResultView = {
+  query_id?: string;
+  queryId?: string;
+  metric?: string;
+  from?: number;
+  to?: number;
+  unit?: string;
+  sample_policy?: string;
+  samplePolicy?: string;
+  truncated?: boolean;
+  suggested_step_ms?: number;
+  suggestedStepMs?: number;
+  series_limit?: number;
+  seriesLimit?: number;
+  point_limit?: number;
+  pointLimit?: number;
+  series?: MetricSeriesView[];
+};
+
 const loadAverageWindowMs = 5 * 60 * 1000;
 const palette = [205, 188, 168, 146, 126, 95, 48, 215, 200, 178];
 const loadWindows = new Map<string, { windowStart: number; displayAvg: number; sampledAtMs: number }>();
@@ -617,6 +668,15 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json();
 }
 
+function metricPointTimestamp(point: MetricPointView) {
+  return point.timestamp_ms ?? point.timestampMs ?? 0;
+}
+
+function metricPointValue(point: MetricPointView) {
+  const value = Number(point.value);
+  return Number.isFinite(value) ? value : 0;
+}
+
 function parseTaskArgs(input: string) {
   return input.split(/\s+/).map(part => part.trim()).filter(Boolean);
 }
@@ -844,6 +904,7 @@ function App() {
           <Typography.Paragraph className="hero-subtitle">任务、资源、监控与告警，沿一条消息链自然流动。</Typography.Paragraph>
           <Space size="middle" wrap>
             <Button type="primary" shape="round" size="large" href="#clusters">主机</Button>
+            <Button shape="round" size="large" href="#metrics">时序</Button>
             <Button shape="round" size="large" href="#capability">能力</Button>
           </Space>
         </Card>
@@ -867,6 +928,8 @@ function App() {
       </section>
 
       {error && <Card className="error-card"><Typography.Text type="danger">{error}</Typography.Text></Card>}
+
+      <MetricsPanel hosts={hosts} />
 
       <section id="clusters" className="clusters">
         {groups.map(([cluster, clusterHosts], index) => <ClusterSection
@@ -980,6 +1043,191 @@ function App() {
     </main>
   </ConfigProvider>;
 }
+
+const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }) {
+  const [catalog, setCatalog] = useState<MetricCatalogItem[]>([]);
+  const [storage, setStorage] = useState<MetricStorageHealth | null>(null);
+  const [metric, setMetric] = useState('agent.thread_count');
+  const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
+  const [rangeMinutes, setRangeMinutes] = useState(30);
+  const [result, setResult] = useState<MetricQueryResultView | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [liveStatus, setLiveStatus] = useState('connecting');
+  const [lastInvalidateAt, setLastInvalidateAt] = useState<number | null>(null);
+  const agentOptions = useMemo(() => sortHosts(hosts)
+    .filter(host => host.status === 'alive')
+    .slice(0, 120)
+    .map(host => ({
+      value: agentId(host),
+      label: normalizeAddress(host.ip) === '-' ? agentId(host) : normalizeAddress(host.ip)
+    }))
+    .filter(option => option.value), [hosts]);
+  const metricOptions = useMemo(() => catalog.map(item => ({
+    value: item.metric,
+    label: `${item.title} (${item.unit || '-'})`
+  })), [catalog]);
+  const activeMetric = catalog.find(item => item.metric === metric);
+  const visibleAgents = selectedAgents.length ? selectedAgents : agentOptions.slice(0, 3).map(option => option.value);
+
+  async function loadMetrics(nextMetric = metric, nextAgents = visibleAgents, nextRangeMinutes = rangeMinutes) {
+    const end = Date.now();
+    const start = end - nextRangeMinutes * 60_000;
+    const params = new URLSearchParams({
+      metric: nextMetric,
+      start_ms: String(start),
+      end_ms: String(end),
+      step_ms: '10000',
+      point_limit: '20000',
+      series_limit: '12'
+    });
+    if (nextAgents.length) {
+      params.set('agents', nextAgents.join(','));
+    }
+    setLoading(true);
+    setError('');
+    try {
+      const data = await fetchJson<MetricQueryResultView>(`/api/metrics/query_range?${params.toString()}`);
+      setResult(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    fetchJson<MetricCatalogItem[]>('/api/metrics/catalog').then(items => {
+      setCatalog(items);
+      if (items.length && !items.some(item => item.metric === metric)) {
+        setMetric(items[0].metric);
+      }
+    }).catch(err => setError(err instanceof Error ? err.message : String(err)));
+    fetchJson<MetricStorageHealth>('/api/metrics/storage').then(setStorage).catch(err => setError(err instanceof Error ? err.message : String(err)));
+  }, []);
+
+  useEffect(() => {
+    if (selectedAgents.length || agentOptions.length === 0) return;
+    setSelectedAgents(agentOptions.slice(0, 3).map(option => option.value));
+  }, [agentOptions, selectedAgents.length]);
+
+  useEffect(() => {
+    if (!metric) return;
+    loadMetrics(metric, visibleAgents, rangeMinutes);
+  }, [metric, selectedAgents.join(','), rangeMinutes]);
+
+  useEffect(() => {
+    if (!('EventSource' in window)) {
+      setLiveStatus('fallback');
+      return;
+    }
+    const events = new EventSource('/api/metrics/stream');
+    events.onopen = () => setLiveStatus('connected');
+    events.addEventListener('storage.health', (event: MessageEvent<string>) => {
+      try {
+        setStorage(JSON.parse(event.data) as MetricStorageHealth);
+      } catch {
+        setLiveStatus('degraded');
+      }
+    });
+    events.addEventListener('metric.invalidate', () => {
+      setLastInvalidateAt(Date.now());
+    });
+    events.onerror = () => setLiveStatus('reconnecting');
+    return () => events.close();
+  }, []);
+
+  const seriesCount = result?.series?.length || 0;
+  const pointCount = result?.series?.reduce((sum, series) => sum + (series.points?.length || 0), 0) || 0;
+  const storageStatus = storage?.status || 'unknown';
+  const storageTone = storageStatus === 'ok' ? 'success' : storageStatus === 'disabled' ? 'default' : 'warning';
+
+  return <Card id="metrics" className="metrics-panel" variant="outlined" title={<Space size={8}><span>时序洞察</span><Tag color={storageTone}>{storageStatus}</Tag><Tag>{liveStatus}</Tag></Space>}>
+    <div className="metrics-layout">
+      <div className="metrics-control-grid">
+        <Select
+          className="metrics-control"
+          value={metric}
+          options={metricOptions}
+          loading={!catalog.length}
+          onChange={value => setMetric(value)}
+        />
+        <Select
+          mode="multiple"
+          className="metrics-control"
+          maxTagCount="responsive"
+          value={selectedAgents}
+          options={agentOptions}
+          placeholder="默认选择前 3 台在线 host"
+          onChange={setSelectedAgents}
+        />
+        <Segmented
+          value={rangeMinutes}
+          options={[
+            { label: '15m', value: 15 },
+            { label: '30m', value: 30 },
+            { label: '1h', value: 60 },
+            { label: '6h', value: 360 }
+          ]}
+          onChange={value => setRangeMinutes(Number(value))}
+        />
+        <Button type="primary" loading={loading} onClick={() => loadMetrics()}>刷新时序</Button>
+      </div>
+      <div className="metrics-health-grid">
+        <Statistic title="写入队列" value={storage?.queue_depth ?? 0} />
+        <Statistic title="已写入" value={storage?.written_commands ?? 0} />
+        <Statistic title="失败" value={storage?.failed_commands ?? 0} />
+        <Statistic title="事务批次" value={storage?.transaction_batches ?? 0} />
+      </div>
+      {error && <Typography.Text type="danger">{error}</Typography.Text>}
+      <div className="metrics-chart-card">
+        <div className="metrics-chart-head">
+          <Space size={8} wrap>
+            <Typography.Text strong>{activeMetric?.title || metric}</Typography.Text>
+            <Tag>{activeMetric?.unit || result?.unit || '-'}</Tag>
+            <Tag>{seriesCount} series</Tag>
+            <Tag>{pointCount} points</Tag>
+            {result?.truncated && <Tag color="warning">已截断，建议 step {result.suggested_step_ms ?? result.suggestedStepMs}ms</Tag>}
+            {lastInvalidateAt && <Tag color="blue">live {formatSeenTime(lastInvalidateAt)}</Tag>}
+          </Space>
+          <Typography.Text type="secondary">{result?.query_id || result?.queryId || '尚未查询'}</Typography.Text>
+        </div>
+        {seriesCount ? <MetricSparkline result={result} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无时序数据" />}
+      </div>
+    </div>
+  </Card>;
+});
+
+const MetricSparkline = memo(function MetricSparkline({ result }: { result: MetricQueryResultView | null }) {
+  const series = result?.series || [];
+  const points = series.flatMap(item => item.points || []);
+  if (!points.length) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有可绘制的数据点" />;
+  const timestamps = points.map(metricPointTimestamp);
+  const values = points.map(metricPointValue);
+  const minT = Math.min(...timestamps);
+  const maxT = Math.max(...timestamps);
+  const minV = Math.min(...values);
+  const maxV = Math.max(...values);
+  const spanT = Math.max(1, maxT - minT);
+  const spanV = Math.max(1, maxV - minV);
+  const width = 720;
+  const height = 220;
+  const palette = ['#2563eb', '#16a34a', '#dc2626', '#9333ea', '#ea580c', '#0891b2'];
+  const toX = (timestamp: number) => 28 + (timestamp - minT) * (width - 56) / spanT;
+  const toY = (value: number) => height - 26 - (value - minV) * (height - 52) / spanV;
+
+  return <svg className="metrics-sparkline" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="metrics sparkline">
+    <rect x="0" y="0" width={width} height={height} rx="18" />
+    <line x1="28" y1={height - 26} x2={width - 28} y2={height - 26} />
+    <line x1="28" y1="24" x2="28" y2={height - 26} />
+    {series.slice(0, 6).map((item, index) => {
+      const path = (item.points || []).map(point => `${toX(metricPointTimestamp(point)).toFixed(1)},${toY(metricPointValue(point)).toFixed(1)}`).join(' ');
+      return <polyline key={index} points={path} fill="none" stroke={palette[index % palette.length]} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />;
+    })}
+    <text x="34" y="20">{maxV.toFixed(1)}</text>
+    <text x="34" y={height - 8}>{minV.toFixed(1)}</text>
+  </svg>;
+});
 
 const ClusterSection = memo(function ClusterSection({
   cluster,

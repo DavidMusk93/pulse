@@ -263,6 +263,14 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("批任务"));
         assertTrue(js.body().contains("sampledAtMs"));
         assertTrue(js.body().contains("agent 执行中"));
+        assertTrue(js.body().contains("时序洞察"));
+        assertTrue(js.body().contains("/api/metrics/catalog"));
+        assertTrue(js.body().contains("/api/metrics/storage"));
+        assertTrue(js.body().contains("/api/metrics/query_range"));
+        assertTrue(js.body().contains("/api/metrics/stream"));
+        assertTrue(js.body().contains("metrics-sparkline"));
+        assertTrue(js.body().contains("series_limit"));
+        assertTrue(js.body().contains("point_limit"));
         assertTrue(js.body().contains("run-button"));
         assertTrue(js.body().contains("data-status"));
         assertTrue(js.body().contains("getFullYear"));
@@ -338,6 +346,9 @@ class CoordinatorHttpServerTest {
         assertTrue(css.body().contains(".hero-metrics"));
         assertTrue(css.body().contains(".hero-metrics>.ant-card"));
         assertTrue(css.body().contains(".hero-metrics .ant-statistic"));
+        assertTrue(css.body().contains(".metrics-panel"));
+        assertTrue(css.body().contains(".metrics-control-grid"));
+        assertTrue(css.body().contains(".metrics-sparkline"));
         assertTrue(css.body().contains(".cluster-toggle-button"));
         assertTrue(css.body().contains(".cluster-run-button"));
         assertTrue(css.body().contains(".cluster-section.cluster-section-collapsed"));
