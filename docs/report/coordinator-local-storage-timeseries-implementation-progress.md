@@ -3,10 +3,10 @@
 ## 状态
 
 - 时间：2026-06-07
-- 最新已部署提交：`9150eba Aggregate tide and group metric queries`
+- 最新已部署提交：`7c0628e Add metrics SSE resume metadata`
 - 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget
 - 部署范围：`cdn_new` 50 台 agent 已完成 query budget rollout；3 台 coordinator 已完成 frontend Metrics Panel rollout
-- JAR SHA：`bb5959544c78ea964541f39cade5cb744c86bfc9219348f241bef739336b3617`
+- JAR SHA：`fda3161bd4ece0e72a9323a15403e401237208487d29955b28447efc9fae203e`
 - 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览。
 
 ## 已完成
@@ -100,6 +100,7 @@ frontend coordinator deploy: total=3 ok=3 failed=0 elapsed=23s
 frontend data-layer deploy: total=3 ok=3 failed=0 elapsed=25s
 frontend live compensation deploy: total=3 ok=3 failed=0 elapsed=16s
 tide/group aggregation deploy: total=3 ok=3 failed=0 elapsed=18s
+SSE resume metadata deploy: total=3 ok=3 failed=0 elapsed=18s
 ```
 
 最新 query budget 和 storage health 验证：
@@ -151,6 +152,14 @@ QUERY metric=group.submitted_agent_count unit=count policy=avg truncated=True su
 COORD fdbd:dc07:0:810::44
 QUERY metric=tide_worker.rss_kb unit=KiB policy=avg truncated=True suggested_step_ms=60000 series_limit=12 point_limit=20000 series=12 points=600
 QUERY metric=group.submitted_agent_count unit=count policy=avg truncated=True suggested_step_ms=60000 series_limit=12 point_limit=20000 series=12 points=453
+```
+
+最新 SSE resume 验证：
+
+```text
+COORD fdbd:dc05:11:634::45 bytes=734 missing=[]
+COORD fdbd:dc05:13:10c::40 bytes=731 missing=[]
+COORD fdbd:dc07:0:810::44 bytes=730 missing=[]
 ```
 
 历史 coordinator rollout：`3/3 ok`。
