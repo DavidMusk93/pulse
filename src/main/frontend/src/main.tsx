@@ -1333,7 +1333,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
             {lastInvalidateAt && <Tag color="blue">live {formatSeenTime(lastInvalidateAt)}</Tag>}
             {rangePaused && <Tag color="purple">窗口固定 {formatSeenTime(fixedRangeEndMs ?? undefined)}</Tag>}
           </Space>
-          <Typography.Text type="secondary">{result?.query_id || result?.queryId || '尚未查询'}</Typography.Text>
+          <Typography.Text type="secondary">{result ? `已更新 ${formatSeenTime(result.to ?? undefined)}` : '尚未查询'}</Typography.Text>
         </div>
         {seriesCount ? <MetricInsightChart metric={metric} result={result} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无时序数据" />}
       </div>
