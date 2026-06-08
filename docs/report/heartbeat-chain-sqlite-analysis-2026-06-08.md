@@ -146,3 +146,22 @@ Implementation correction after the metrics review:
 - Kept `group.plan_lag` as a compatibility metric, but it now follows bounded mismatch semantics (`0/1`) instead of subtracting unsigned hash values.
 - Updated the Metrics Panel “计划收敛” preset to query `group.plan_mismatch`.
 - Verified the correction with `mvn test -Dtest=LocalMetricStorageTest,CoordinatorServiceTest,CoordinatorHttpServerTest`.
+
+## Additional Defects From Current Metrics
+
+Latest 60-minute metrics feedback shows the main heartbeat chain is healthy, but exposes two more design defects:
+
+- `heartbeat_path` is overloaded with concrete group ids such as `tlblog_stream_olap_separate/lq/004` and `cdn2/hl/001`. This prevents direct aggregation of `direct` / `fallback_direct` / `group_leader_batch` and makes architecture health depend on parsing labels.
+- `unknown/unknown/*` group paths are visible, which means agents without reliable cluster metadata can be grouped. Grouping unknown-cluster hosts is unsafe because the planner cannot prove those hosts belong to the same scheduling domain.
+
+Current evidence:
+
+- All three coordinators show `471` heartbeat agents, zero `seq_gap > 1`, and all group samples are `ok` in the latest window.
+- `cdn2` is clean: `50/50` agents, `group_status=ok`, `direct_fallback_count=0`, and `plan_lag=0`.
+- The remaining huge global `plan_lag` comes from non-`cdn2` groups with `agent_plan_generation=0` and `status=ok`, confirming an observability/version-mixing problem rather than fan-in failure.
+
+Implementation correction:
+
+- Normalize heartbeat sample `heartbeat_path` to categorical values: `direct`, `fallback_direct`, `group_leader_batch`, or `unknown`.
+- Preserve the original group id in metadata as `source_group_id`, and preserve expected group details as `expected_group_id` / `expected_group_mode`.
+- Exclude `cluster=unknown` from group planning; unknown-cluster agents stay direct until metadata is available.

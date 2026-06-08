@@ -256,6 +256,7 @@ public class CoordinatorService {
         }
         Map<String, Object> state = NodeState.extractState(messages);
         AgentGroupPlan plan = groupPlans.getOrDefault(heartbeat.agentId(), AgentGroupPlan.direct(heartbeat.agentId()));
+        Map<String, Object> metricState = metricState(state, source, plan);
         long arrivalGapMs = previous == null ? 0 : Math.max(0, observedAtMs - previous.observedAtMs);
         long seqGap = previous == null || previous.epoch != heartbeat.epoch()
                 ? 0
@@ -267,7 +268,7 @@ public class CoordinatorService {
                     stringState(state, "host", heartbeat.agentId()),
                     stringState(state, "cluster", "unknown"),
                     stringState(state, "area", "unknown"),
-                    source == null || source.isBlank() ? "unknown" : source,
+                    metricHeartbeatPath(source, plan),
                     plan.groupMode(),
                     heartbeat.epoch(),
                     heartbeat.seq(),
@@ -279,10 +280,32 @@ public class CoordinatorService {
                     longState(state, "agent_send_ms"),
                     longState(state, "agent_thread_count"),
                     longState(state, "agent_rss_kb"),
-                    state));
+                    metricState));
         } catch (Exception exception) {
             System.err.printf("metric_write status=failed agent_id=%s error=%s%n", heartbeat.agentId(), exception.getMessage());
         }
+    }
+
+    private static String metricHeartbeatPath(String source, AgentGroupPlan plan) {
+        if (source == null || source.isBlank()) {
+            return "unknown";
+        }
+        if ("direct".equals(source)) {
+            return plan == null || "direct".equals(plan.groupMode()) ? "direct" : "fallback_direct";
+        }
+        return "group_leader_batch";
+    }
+
+    private static Map<String, Object> metricState(Map<String, Object> state, String source, AgentGroupPlan plan) {
+        Map<String, Object> metricState = new LinkedHashMap<>(state);
+        if (source != null && !source.isBlank() && !"direct".equals(source)) {
+            metricState.put("source_group_id", source);
+        }
+        if (plan != null && !"direct".equals(plan.groupMode())) {
+            metricState.put("expected_group_id", plan.groupId());
+            metricState.put("expected_group_mode", plan.groupMode());
+        }
+        return metricState;
     }
 
     private void writeGroupLeaderMetric(HeartbeatRequest request, String groupId, long observedAtMs, int accepted) {
@@ -430,6 +453,9 @@ public class CoordinatorService {
                 continue;
             }
             String cluster = blankToUnknown(host.cluster());
+            if ("unknown".equals(cluster)) {
+                continue;
+            }
             buckets.computeIfAbsent(cluster, ignored -> new ArrayList<>()).add(host);
         }
 

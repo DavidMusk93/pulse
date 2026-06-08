@@ -240,6 +240,22 @@ class CoordinatorServiceTest {
                     10));
             assertEquals(0.0, planMismatch.series().get(0).points().get(0).value());
             assertEquals(0.0, planLag.series().get(0).points().get(0).value());
+
+            MetricQueryResult heartbeatPaths = storage.queryRange(new MetricQuery(
+                    "heartbeat.arrival_gap_ms",
+                    group.members(),
+                    1_710_000_010_000L,
+                    1_710_000_010_000L,
+                    1_000,
+                    20));
+            assertTrue(heartbeatPaths.series().stream()
+                    .flatMap(series -> series.points().stream())
+                    .anyMatch(point -> "group_leader_batch".equals(point.metadata().get("heartbeat_path"))
+                            && group.groupId().equals(point.metadata().get("source_group_id"))));
+            assertTrue(heartbeatPaths.series().stream()
+                    .flatMap(series -> series.points().stream())
+                    .anyMatch(point -> "fallback_direct".equals(point.metadata().get("heartbeat_path"))
+                            && group.groupId().equals(point.metadata().get("expected_group_id"))));
         }
     }
 
@@ -268,6 +284,17 @@ class CoordinatorServiceTest {
         CoordinatorService service = new CoordinatorService("coordinator-a", clock);
         for (int i = 1; i <= 4; i++) {
             confirmAlive(service, "agent-" + i, "host-" + i, "10.0.0." + i);
+        }
+
+        assertEquals(0, service.groups().size());
+        assertEquals("direct", planPayload(service, "agent-1").get("group_mode"));
+    }
+
+    @Test
+    void unknownClusterAgentsStayDirect() {
+        CoordinatorService service = new CoordinatorService("coordinator-a", clock);
+        for (int i = 1; i <= 8; i++) {
+            confirmAliveUnknownCluster(service, "agent-" + i, "host-" + i, "10.0.0." + i);
         }
 
         assertEquals(0, service.groups().size());
@@ -673,6 +700,19 @@ class CoordinatorServiceTest {
                 List.of());
     }
 
+    private static HeartbeatRequest singleHeartbeatWithState(
+            String agentId, long epoch, long seq, String host, String ip, Map<String, Object> extraState) {
+        AgentHeartbeat heartbeat = agentWithState(agentId, epoch, seq, host, ip, extraState);
+        return new HeartbeatRequest(
+                null,
+                heartbeat.agentId(),
+                heartbeat.epoch(),
+                heartbeat.seq(),
+                heartbeat.ttlMs(),
+                heartbeat.messages(),
+                List.of());
+    }
+
     private static void confirmAlive(CoordinatorService service, String agentId, String host, String ip) {
         service.handleHeartbeat(singleHeartbeat(agentId, 1, 1, host, ip));
         service.handleHeartbeat(singleHeartbeat(agentId, 1, 2, host, ip));
@@ -689,6 +729,12 @@ class CoordinatorServiceTest {
         service.handleHeartbeat(singleHeartbeat(agentId, 1, firstSeq, host, ip));
         service.handleHeartbeat(singleHeartbeat(agentId, 1, firstSeq + 1, host, ip));
         service.handleHeartbeat(singleHeartbeat(agentId, 1, firstSeq + 2, host, ip));
+    }
+
+    private static void confirmAliveUnknownCluster(CoordinatorService service, String agentId, String host, String ip) {
+        service.handleHeartbeat(singleHeartbeatWithState(agentId, 1, 1, host, ip, Map.of("cluster", "unknown")));
+        service.handleHeartbeat(singleHeartbeatWithState(agentId, 1, 2, host, ip, Map.of("cluster", "unknown")));
+        service.handleHeartbeat(singleHeartbeatWithState(agentId, 1, 3, host, ip, Map.of("cluster", "unknown")));
     }
 
     private static PulseMessage taskCommand(CoordinatorService service, String agentId, long seq) {

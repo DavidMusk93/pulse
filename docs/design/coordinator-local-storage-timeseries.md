@@ -120,6 +120,8 @@ flowchart LR
 
 - `Follower agent -> Group leader -> Coordinator` 是正常低请求数路径，group leader 只做批量转发和轻量统计，不承载唯一事实源。
 - `Follower agent -> Coordinator` 的 direct fallback 是架构级安全阀，必须保留并结构化记录；它的健康判断不能只看平均值，要看 p95/p99 和 max。
+- `heartbeat_path` 只能表达链路类别，如 `direct`、`fallback_direct`、`group_leader_batch`；具体 `group_id` 必须进入独立 label 或 metadata，不能污染 path 维度，否则无法聚合判断架构是否退化。
+- `cluster=unknown` 的 agent 不能进入 group leader 规划，只能保持 direct；缺失 cluster 元数据时做 group fan-in 可能把不相关 host 编入同一个 group。
 - `Group plan builder -> Agent` 是控制面，`expected_generation` 与 agent 上报的 `agent_plan_generation` 必须用可解释语义比较，不能让观测指标依赖不可排序的 hash。
 - `Metric sample extractor -> SQLite writer` 是观测面，写入异步化是硬边界；任何 SQLite busy、checkpoint、cleanup 都不能反压 heartbeat handler。
 - `SQLite -> Metrics API/SSE -> MetricsPanel` 是反馈面，preset 必须直接回答“架构是否退化、plan 是否收敛、agent 采集是否新鲜、发送链路是否轻量”。
@@ -134,6 +136,8 @@ flowchart LR
 - `partial`、`stale_plan` 和少量 `seq_gap` 仍存在尾部样本，因此 UI 必须展示 TopN、p99/max 和事件，不允许只用平均值表达健康。
 - `group.direct_fallback_count` p95/p99 大多为 `0`，但 `cdn2` 单窗口 max 可达 `5-10`，说明 direct fallback 是低频尾部事件，必须作为退化信号保留。
 - `group.plan_lag` 当前语义存在设计/实现缺陷：如果 `plan_generation` 是 unsigned hash，则只有相等/不相等语义，不能执行 `expected_generation - agent_plan_generation`；当前线上出现数十亿级 `plan_lag`，更像指标语义错误或冷启动混入，而不是实际传播延迟。
+- 当前线上 `heartbeat_path` 出现大量具体 group id，说明实现把 source group id 写进了 path 字段；这会让“direct/fallback/group batch”健康判断依赖字符串解析，必须修正为类别维度。
+- 当前线上仍出现 `unknown/unknown/*` group path，说明缺失 cluster 元数据的 agent 被 group 化；这属于安全边界缺陷，应让 unknown cluster 保持 direct，直到元数据补齐。
 
 因此 `group.plan_lag` 不能继续作为 hash 差值使用，健康 preset 应优先使用 `group.plan_mismatch`：
 
