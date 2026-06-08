@@ -164,6 +164,9 @@ COORD fdbd:dc07:0:810::44 missing_catalog=[] missing_asset=[] metrics=[group.sta
 - 2026-06-08 运行时复查：过去 24h/7d 三台 coordinator 的 `group.group_latency_ms` p99 为 `2-3ms`，max 小于 `314ms`；约 15s 来自 `group.arrival_gap_ms`，根因是 agent 成功后轮询 3 个 coordinator。
 - 已修复 agent coordinator 选择策略：成功路径改为 stable sticky target，失败时才 failover；跨 coordinator 最终一致性继续由 `/heartbeat_fwd` 负责。
 - 已更新 Metrics UI 对 `group.arrival_gap_ms` 的解释：不再把 “3 节点轮询约 15s” 作为正常解释，改为提示 sticky 后应接近心跳间隔。
+- sticky 修复已部署到 `cdn_new` 全量 50 台，最终 SHA 校验 `50/50` 通过，JAR SHA 为 `6b22032bc2742df0e25a5971522e5b862ab74b74718afa28a2f275c2e762149d`。
+- 部署后 `cdn2` 3 分钟 SQLite 短窗口：三台 coordinator 的 `group.arrival_gap_ms` p95 为 `5044-5057ms`，p99 为 `5051-5066ms`，`>=14000ms` 为 `0`；`group.group_latency_ms` p99 为 `3-5ms`。
+- 部署后 Metrics API 3 分钟短窗口：`group.arrival_gap_ms` max 为 `5048-5064ms`，`group.group_latency_ms` max 为 `3.0-4.5ms`，说明 15s group 到达间隔已消失。
 
 最新 query budget 和 storage health 验证：
 
