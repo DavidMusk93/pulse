@@ -76,7 +76,8 @@ final class LocalMetricStorage implements MetricStorage {
                 new MetricCatalogItem("group.direct_fallback_count", "Group direct fallback", "count"),
                 new MetricCatalogItem("group.status_unhealthy", "Group unhealthy status", "ratio"),
                 new MetricCatalogItem("group.plan_generation", "Group plan generation", "generation"),
-                new MetricCatalogItem("group.plan_lag", "Group plan lag", "generation"),
+                new MetricCatalogItem("group.plan_mismatch", "Group plan generation mismatch", "ratio"),
+                new MetricCatalogItem("group.plan_lag", "Group plan mismatch compatibility", "ratio"),
                 new MetricCatalogItem("group.leader_collect_ms", "Group leader collection time", "ms"),
                 new MetricCatalogItem("group.group_latency_ms", "Group latency", "ms"));
     }
@@ -879,7 +880,8 @@ final class LocalMetricStorage implements MetricStorage {
         GROUP_DIRECT_FALLBACK("group.direct_fallback_count", "direct_fallback_count", "count", MetricSource.GROUP_LEADER),
         GROUP_UNHEALTHY("group.status_unhealthy", "CASE WHEN status = 'ok' THEN 0 ELSE 1 END", "ratio", MetricSource.GROUP_LEADER),
         GROUP_GENERATION("group.plan_generation", "group_generation", "generation", MetricSource.GROUP_LEADER),
-        GROUP_PLAN_LAG("group.plan_lag", "COALESCE(CAST(json_extract(debug_json, '$.plan_lag') AS INTEGER), 0)", "generation", MetricSource.GROUP_LEADER),
+        GROUP_PLAN_MISMATCH("group.plan_mismatch", "COALESCE(CAST(json_extract(debug_json, '$.plan_mismatch') AS INTEGER), 0)", "ratio", MetricSource.GROUP_LEADER),
+        GROUP_PLAN_LAG("group.plan_lag", "COALESCE(CAST(json_extract(debug_json, '$.plan_lag') AS INTEGER), COALESCE(CAST(json_extract(debug_json, '$.plan_mismatch') AS INTEGER), 0))", "ratio", MetricSource.GROUP_LEADER),
         GROUP_COLLECT("group.leader_collect_ms", "leader_collect_ms", "ms", MetricSource.GROUP_LEADER),
         GROUP_LATENCY("group.group_latency_ms", "group_latency_ms", "ms", MetricSource.GROUP_LEADER);
 

@@ -110,7 +110,7 @@ flowchart LR
     API --> UI
     SSE --> UI
     UI -->|架构健康| GH["group.status_unhealthy<br/>partial / stale_plan"]
-    UI -->|计划收敛| PL["group.plan_lag<br/>generation mismatch"]
+    UI -->|计划收敛| PL["group.plan_mismatch<br/>generation mismatch"]
     UI -->|采集实效| AC["heartbeat.agent_collect_ms<br/>hot-path cost"]
     UI -->|发送链路| AS["heartbeat.agent_send_ms<br/>agent to coordinator"]
   end
@@ -135,9 +135,9 @@ flowchart LR
 - `group.direct_fallback_count` p95/p99 大多为 `0`，但 `cdn2` 单窗口 max 可达 `5-10`，说明 direct fallback 是低频尾部事件，必须作为退化信号保留。
 - `group.plan_lag` 当前语义存在设计/实现缺陷：如果 `plan_generation` 是 unsigned hash，则只有相等/不相等语义，不能执行 `expected_generation - agent_plan_generation`；当前线上出现数十亿级 `plan_lag`，更像指标语义错误或冷启动混入，而不是实际传播延迟。
 
-因此 `group.plan_lag` 需要按以下规则修正后才能作为健康 preset 的强结论：
+因此 `group.plan_lag` 不能继续作为 hash 差值使用，健康 preset 应优先使用 `group.plan_mismatch`：
 
-- 如果 generation 继续使用 hash，指标应改为 `group.plan_mismatch` 或 `group.generation_mismatch`，值为 `0/1` 或按成员数计数。
+- 如果 generation 继续使用 hash，指标使用 `group.plan_mismatch`，值为 `0/1` 或按成员数计数。
 - 如果需要表达“滞后多少代”，generation 必须改为 coordinator 侧单调递增版本，并带上 cluster/area/group 作用域和 rollout epoch。
 - `agent_plan_generation` 为 `0` 或缺失时应标记为 `unknown/cold_start`，不能参与 lag 数值聚合。
 - `expected_generation`、`agent_plan_generation`、`plan_lag`、`reject_reason_json` 应从 `debug_json` 升级为结构化列，避免 health preset 依赖 JSON extraction。
@@ -446,7 +446,8 @@ CREATE INDEX IF NOT EXISTS idx_group_leader_agent_time
 | `group.stale_member_count` | batch 中旧 plan 成员数 | 反映 plan 收敛和 leader 切换抖动 |
 | `group.direct_fallback_count` | follower direct fallback 数 | 反映 group 机制是否退化成 direct heartbeat |
 | `group.plan_generation` | coordinator 当前期望 plan generation | 反映 group plan 是否发生切换 |
-| `group.plan_lag` | expected generation 与 leader 上报 generation 的差值 | 直接定位 `stale_plan` 是否来自 plan 收敛滞后 |
+| `group.plan_mismatch` | `expected_generation` 与 `agent_plan_generation` 是否不一致 | 在 hash generation 语义下可信地定位 plan 未收敛 |
+| `group.plan_lag` | `group.plan_mismatch` 的兼容别名，或未来 monotonic generation 的差值 | 当前不能再用 hash 差值表达 lag，避免数十亿级误导值 |
 | `heartbeat.agent_collect_ms` | agent 本地采集耗时 | 反映采集数据实效性和 agent 热路径负担 |
 | `heartbeat.agent_encode_ms` | heartbeat payload 编码耗时 | 反映协议编码成本 |
 | `heartbeat.agent_send_ms` | heartbeat HTTP 发送耗时 | 反映 agent 到 coordinator 链路新鲜度 |
@@ -1133,7 +1134,7 @@ Ant Design 在这些原则中的角色：
 | Preset | 默认指标 | 查询策略 | 需要回答的问题 |
 | --- | --- | --- | --- |
 | 架构健康 | `group.status_unhealthy` | 全局 TopN + aggregate，15m | group fan-in 是否退化 |
-| 计划收敛 | `group.plan_lag` | 全局 TopN + aggregate，15m | `stale_plan` 是否来自 generation 滞后 |
+| 计划收敛 | `group.plan_mismatch` | 全局 TopN + aggregate，15m | `stale_plan` 是否来自 generation 不一致 |
 | 采集实效 | `heartbeat.agent_collect_ms` | 全局 TopN + aggregate，15m | agent 采集是否足够新鲜 |
 | 发送链路 | `heartbeat.agent_send_ms` | 全局 TopN + aggregate，15m | agent 到 coordinator 发送是否轻量 |
 

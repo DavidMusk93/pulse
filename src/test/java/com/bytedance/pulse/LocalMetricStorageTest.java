@@ -174,7 +174,7 @@ class LocalMetricStorageTest {
                     2,
                     12,
                     "partial",
-                    Map.of("leader_url", "http://[fd00::1]:9977", "plan_lag", 2)));
+                    Map.of("leader_url", "http://[fd00::1]:9977", "plan_mismatch", 1, "plan_lag", 1)));
 
             MetricQueryResult result = storage.queryRange(new MetricQuery(
                     "group.submitted_agent_count",
@@ -223,11 +223,19 @@ class LocalMetricStorageTest {
                     1_710_000_000_000L,
                     1_000,
                     10));
+            MetricQueryResult planMismatch = storage.queryRange(new MetricQuery(
+                    "group.plan_mismatch",
+                    List.of(),
+                    1_710_000_000_000L,
+                    1_710_000_000_000L,
+                    1_000,
+                    10));
             assertEquals(1.0, stale.series().get(0).points().get(0).value());
             assertEquals(0.0, directFallback.series().get(0).points().get(0).value());
             assertEquals(1.0, unhealthy.series().get(0).points().get(0).value());
             assertEquals(7.0, generation.series().get(0).points().get(0).value());
-            assertEquals(2.0, planLag.series().get(0).points().get(0).value());
+            assertEquals(1.0, planMismatch.series().get(0).points().get(0).value());
+            assertEquals(1.0, planLag.series().get(0).points().get(0).value());
         }
     }
 

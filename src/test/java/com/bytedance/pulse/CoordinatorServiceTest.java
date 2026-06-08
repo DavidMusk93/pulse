@@ -224,6 +224,22 @@ class CoordinatorServiceTest {
                     1_000,
                     10));
             assertEquals(1.0, directFallback.series().get(0).points().get(0).value());
+            MetricQueryResult planMismatch = storage.queryRange(new MetricQuery(
+                    "group.plan_mismatch",
+                    List.of(),
+                    1_710_000_010_000L,
+                    1_710_000_010_000L,
+                    1_000,
+                    10));
+            MetricQueryResult planLag = storage.queryRange(new MetricQuery(
+                    "group.plan_lag",
+                    List.of(),
+                    1_710_000_010_000L,
+                    1_710_000_010_000L,
+                    1_000,
+                    10));
+            assertEquals(0.0, planMismatch.series().get(0).points().get(0).value());
+            assertEquals(0.0, planLag.series().get(0).points().get(0).value());
         }
     }
 

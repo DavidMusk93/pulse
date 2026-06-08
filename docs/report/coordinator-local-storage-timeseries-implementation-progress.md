@@ -4,7 +4,7 @@
 
 - 时间：2026-06-08
 - 最新已部署提交：`fc8c7e4 Count group direct fallback metrics`
-- 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection、aggregate series、frontend visibility/range pause、frontend render metrics、heartbeat timing instrumentation、heartbeat health presets、group plan convergence metrics、direct fallback metrics
+- 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection、aggregate series、frontend visibility/range pause、frontend render metrics、heartbeat timing instrumentation、heartbeat health presets、group plan mismatch metrics、direct fallback metrics
 - 部署范围：`cdn_new` 50 台 agent 与 3 台 coordinator/group leader 已完成最新版本全量 rollout
 - JAR SHA：`35d5d9fa66ca6b2eece9d8dc4b8c616d385dbe798114971a604c2de5fa055e84`
 - 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览；Metrics Panel 已能通过 health presets 反馈心跳架构健壮性、plan 收敛状态和 agent 采集数据实效性。
@@ -28,7 +28,7 @@
   - heartbeat payload 中的 `tide_workers` 抽取到 `tide_worker_sample`。
   - batch heartbeat 写入 `group_leader_sample`，包含 member/submitted/accepted/missing/stale/arrival/status。
   - agent outbound 已写入上一轮真实 `agent_encode_ms` / `agent_send_ms`；group leader 已写入 `leader_collect_ms` 并由 coordinator 计算 `group_latency_ms`。
-  - coordinator 已下发稳定 `plan_generation`，agent 已回传 `agent_plan_generation`，group metrics 已暴露 `group.plan_lag`。
+  - coordinator 已下发稳定 `plan_generation`，agent 已回传 `agent_plan_generation`，group metrics 已暴露 `group.plan_mismatch`；`group.plan_lag` 保留为 0/1 兼容别名，避免 hash generation 相减产生误导值。
   - `group.direct_fallback_count` 已按 group 期望成员的最新 direct source 真实计数，不再恒为 0。
   - host 维度写入 `host_dimension`。
 
@@ -72,7 +72,7 @@
   - 已实现 `metric.invalidate` 合并、range cache、500ms debounce 补偿查询和 `SeriesStore.merge` 点去重。
   - 已实现页面不可见时暂停补偿查询，以及“暂停窗口/跟随最新”的固定时间窗口查看模式。
   - 已在面板中暴露 `query_ms` 和 `render_ms`，辅助判断查询与渲染是否流畅。
-  - 已新增“架构健康 / 计划收敛 / 采集实效 / 发送链路” preset，默认执行全局 TopN + aggregate 查询并用 Tag 给出健康判定。
+  - 已新增“架构健康 / 计划收敛 / 采集实效 / 发送链路” preset，默认执行全局 TopN + aggregate 查询并用 Tag 给出健康判定；“计划收敛”使用 `group.plan_mismatch`。
 
 - SSE 重连补偿：
   - `/api/metrics/stream` 已读取 `Last-Event-ID`。
@@ -101,7 +101,8 @@
   - `LocalMetricStorageTest#queryRangeReturnsTopNSeriesByLargestObservedValue` 已覆盖 storage 层 Top N series 选择、aggregate series 追加与 `series_count` metadata。
   - `CoordinatorHttpServerTest#metricsRangeQueryAcceptsTopNSeriesSelection` 已覆盖 HTTP `top_n` 参数和 aggregate series numeric value。
   - `LocalMetricStorageTest#storesAndQueriesGroupLeaderSamples` 已覆盖 `group.stale_member_count`、`group.direct_fallback_count`、`group.status_unhealthy`。
-  - `LocalMetricStorageTest#storesAndQueriesGroupLeaderSamples` 已覆盖 `group.plan_generation` 和 `group.plan_lag`。
+  - `LocalMetricStorageTest#storesAndQueriesGroupLeaderSamples` 已覆盖 `group.plan_generation`、`group.plan_mismatch` 和 `group.plan_lag` 兼容语义。
+  - `CoordinatorServiceTest#batchHeartbeatWritesGroupLeaderMetricSample` 已覆盖 cold-start/unknown `agent_plan_generation` 不产生巨大 lag。
   - `CoordinatorHttpServerTest#hostsPageRendersFlatSquareChineseHeartbeatConsole` 已断言 Metrics Panel 静态资源、live pause、fixed range、frontend metrics 和 heartbeat health preset markers。
 
 ## 线上验证

@@ -309,7 +309,7 @@ public class CoordinatorService {
         long groupLatencyMs = groupSentAtMs <= 0 ? 0 : Math.max(0, observedAtMs - groupSentAtMs);
         long expectedGeneration = groupPlans.getOrDefault(leaderAgentId, AgentGroupPlan.direct(leaderAgentId)).generation();
         long agentPlanGeneration = longState(leaderState, "agent_plan_generation");
-        long planLag = Math.max(0, expectedGeneration - agentPlanGeneration);
+        long planMismatch = agentPlanGeneration <= 0 ? 0 : expectedGeneration == agentPlanGeneration ? 0 : 1;
         long directFallbackCount = directFallbackCount(expectedMembers, leaderAgentId);
         String status = staleMembers > 0 ? "stale_plan" : missingMembers > 0 ? "partial" : "ok";
         try {
@@ -336,7 +336,9 @@ public class CoordinatorService {
                             "leader_url", group == null ? "" : group.leaderUrl(),
                             "expected_generation", expectedGeneration,
                             "agent_plan_generation", agentPlanGeneration,
-                            "plan_lag", planLag)));
+                            "plan_generation_known", agentPlanGeneration > 0,
+                            "plan_mismatch", planMismatch,
+                            "plan_lag", planMismatch)));
         } catch (Exception exception) {
             System.err.printf("metric_group_write status=failed group_id=%s error=%s%n", groupId, exception.getMessage());
         }

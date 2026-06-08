@@ -136,3 +136,13 @@ Required design correction:
 - Treat `group.plan_lag` as experimental until generation semantics are fixed.
 - Prefer `group.plan_mismatch` or `group.generation_mismatch` when generation is hash-like and only equality is meaningful.
 - If operators need “lag” severity, replace hash generation with a monotonic plan version scoped by coordinator, cluster, area, and group, and include an epoch to distinguish rollout/cold-start from true delayed convergence.
+
+## Plan Metric Correction
+
+Implementation correction after the metrics review:
+
+- Added `group.plan_mismatch` as the primary health metric for plan convergence while generation is hash-based.
+- Changed coordinator group debug output so `agent_plan_generation <= 0` is treated as `unknown/cold_start`, not as a huge lag.
+- Kept `group.plan_lag` as a compatibility metric, but it now follows bounded mismatch semantics (`0/1`) instead of subtracting unsigned hash values.
+- Updated the Metrics Panel “计划收敛” preset to query `group.plan_mismatch`.
+- Verified the correction with `mvn test -Dtest=LocalMetricStorageTest,CoordinatorServiceTest,CoordinatorHttpServerTest`.
