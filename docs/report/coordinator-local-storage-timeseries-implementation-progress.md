@@ -79,7 +79,7 @@
   - 已按 Apple 风格重构 Metrics UI：大圆角玻璃卡片、顶部健康概览、统一控件高度、分区对齐、响应式布局和集群分析入口。
   - 已新增“分析范围”集群选择，切换后自动进入当前集群 TopN + aggregate，并将 `cluster` 下推到 metrics query。
   - 已用按需导入的 Apache ECharts 替换手写 SVG sparkline，图表内置 tooltip、legend、时间轴、阈值线、峰值标注，并在图表上方给出状态/当前值/峰值/范围解释。
-  - 已为 `group.arrival_gap_ms` 加入单 coordinator 视角说明，避免将 3 coordinator 轮询导致的约 15s 本地间隔误判为发送延迟。
+  - 已为 `group.arrival_gap_ms` 加入单 coordinator 视角说明，并明确 sticky 后应接近心跳间隔，避免继续把 3 coordinator 成功轮询导致的约 15s 误判为合理状态。
 
 - SSE 重连补偿：
   - `/api/metrics/stream` 已读取 `Last-Event-ID`。
@@ -163,6 +163,7 @@ COORD fdbd:dc07:0:810::44 missing_catalog=[] missing_asset=[] metrics=[group.sta
 - post-fix：`cdn2` 短窗口 3 台 coordinator 均为 `50/50` agents，`seq_gap=0`。
 - 2026-06-08 运行时复查：过去 24h/7d 三台 coordinator 的 `group.group_latency_ms` p99 为 `2-3ms`，max 小于 `314ms`；约 15s 来自 `group.arrival_gap_ms`，根因是 agent 成功后轮询 3 个 coordinator。
 - 已修复 agent coordinator 选择策略：成功路径改为 stable sticky target，失败时才 failover；跨 coordinator 最终一致性继续由 `/heartbeat_fwd` 负责。
+- 已更新 Metrics UI 对 `group.arrival_gap_ms` 的解释：不再把 “3 节点轮询约 15s” 作为正常解释，改为提示 sticky 后应接近心跳间隔。
 
 最新 query budget 和 storage health 验证：
 
