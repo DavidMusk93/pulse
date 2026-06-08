@@ -275,12 +275,20 @@ class LocalMetricStorageTest {
                     1_710_000_000_000L,
                     1_000,
                     10));
+            MetricQueryResult groupArrival = storage.queryRange(new MetricQuery(
+                    "group.arrival_gap_ms",
+                    List.of(),
+                    1_710_000_000_000L,
+                    1_710_000_000_000L,
+                    1_000,
+                    10));
             assertEquals(1.0, stale.series().get(0).points().get(0).value());
             assertEquals(0.0, directFallback.series().get(0).points().get(0).value());
             assertEquals(1.0, unhealthy.series().get(0).points().get(0).value());
             assertEquals(7.0, generation.series().get(0).points().get(0).value());
             assertEquals(1.0, planMismatch.series().get(0).points().get(0).value());
             assertEquals(1.0, planLag.series().get(0).points().get(0).value());
+            assertEquals(12.0, groupArrival.series().get(0).points().get(0).value());
         }
     }
 

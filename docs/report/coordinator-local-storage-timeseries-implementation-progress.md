@@ -29,6 +29,7 @@
   - heartbeat payload 中的 `tide_workers` 抽取到 `tide_worker_sample`。
   - batch heartbeat 写入 `group_leader_sample`，包含 member/submitted/accepted/missing/stale/arrival/status。
   - agent outbound 已写入上一轮真实 `agent_encode_ms` / `agent_send_ms`；group leader 已写入 `leader_collect_ms` 并由 coordinator 计算 `group_latency_ms`。
+  - `group.arrival_gap_ms` 已作为独立 group 指标暴露，避免把单 coordinator 本地观察间隔误读为 `group.group_latency_ms` 链路延迟。
   - coordinator 已下发稳定 `plan_generation`，agent 已回传 `agent_plan_generation`，group metrics 已暴露 `group.plan_mismatch`；`group.plan_lag` 保留为 0/1 兼容别名，避免 hash generation 相减产生误导值。
   - `group.direct_fallback_count` 已按 group 期望成员的最新 direct source 真实计数，不再恒为 0。
   - host 维度写入 `host_dimension`。
@@ -78,6 +79,7 @@
   - 已按 Apple 风格重构 Metrics UI：大圆角玻璃卡片、顶部健康概览、统一控件高度、分区对齐、响应式布局和集群分析入口。
   - 已新增“分析范围”集群选择，切换后自动进入当前集群 TopN + aggregate，并将 `cluster` 下推到 metrics query。
   - 已用按需导入的 Apache ECharts 替换手写 SVG sparkline，图表内置 tooltip、legend、时间轴、阈值线、峰值标注，并在图表上方给出状态/当前值/峰值/范围解释。
+  - 已为 `group.arrival_gap_ms` 加入单 coordinator 视角说明，避免将 3 coordinator 轮询导致的约 15s 本地间隔误判为发送延迟。
 
 - SSE 重连补偿：
   - `/api/metrics/stream` 已读取 `Last-Event-ID`。
@@ -159,6 +161,8 @@ COORD fdbd:dc07:0:810::44 missing_catalog=[] missing_asset=[] metrics=[group.sta
 - `cdn2` group status：`ok` 约 `98.3%-98.6%`，仍有低量 `partial` / `stale_plan`。
 - post-fix：`agent_encode_ms` p99 `1ms`，`agent_send_ms` p95 `3ms`，`leader_collect_ms` p95 `1ms`，`group_latency_ms` p95 `2ms`。
 - post-fix：`cdn2` 短窗口 3 台 coordinator 均为 `50/50` agents，`seq_gap=0`。
+- 2026-06-08 运行时复查：过去 24h/7d 三台 coordinator 的 `group.group_latency_ms` p99 为 `2-3ms`，max 小于 `314ms`；约 15s 来自 `group.arrival_gap_ms`，根因是 agent 成功后轮询 3 个 coordinator。
+- 已修复 agent coordinator 选择策略：成功路径改为 stable sticky target，失败时才 failover；跨 coordinator 最终一致性继续由 `/heartbeat_fwd` 负责。
 
 最新 query budget 和 storage health 验证：
 
@@ -271,13 +275,12 @@ dc07-p0-t810-n044 TOTAL=471 CDN=50 STATUS={'alive': 50}
 ## 与设计差距
 
 - 前端时序面板仍需增强：
-  - 第一版已实现 Ant Design Metrics Panel 和 SVG 预览。
-  - 已有 QueryController、SeriesStore、RenderScheduler、ChartAdapter 骨架。
+  - 已实现 Ant Design Metrics Panel 和按需 ECharts 专业图表。
+  - 已有 QueryController、SeriesStore、RenderScheduler 数据层。
   - 已有 live invalidation merge、range cache 和补偿查询第一版。
   - 已有可见性暂停和 fixed range pause。
   - 已有 `query_ms` / `render_ms` 前端性能指标。
   - 仍需把断线全窗口补偿补齐。
-  - 尚未接入 ECharts/uPlot 高密度图表。
 
 - SSE 仍是轻量第一版：
   - 已有 `hello`、`storage.health`、`metric.invalidate`。

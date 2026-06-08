@@ -1382,6 +1382,9 @@ function metricAssessment(metric: string, result: MetricQueryResultView | null, 
   if (metric === 'heartbeat.arrival_gap_ms') {
     return max > 30_000 ? { label: '超过 TTL', tone: 'error' as const } : max > 10_000 ? { label: '到达抖动', tone: 'warning' as const } : { label: '到达稳定', tone: 'success' as const };
   }
+  if (metric === 'group.arrival_gap_ms') {
+    return max > 20_000 ? { label: 'group 到达稀疏', tone: 'warning' as const } : { label: '本地轮询正常', tone: 'success' as const };
+  }
   if (metric === 'heartbeat.seq_gap') {
     return max > 0 ? { label: '序列缺口', tone: 'warning' as const } : { label: '序列连续', tone: 'success' as const };
   }
@@ -1443,7 +1446,7 @@ const MetricInsightChart = memo(function MetricInsightChart({ metric, result }: 
       <div className={`metrics-insight-card metrics-insight-card-${summary.tone}`}>
         <span>状态</span>
         <b>{summary.label}</b>
-        <em>{threshold ? `阈值 ${formatMetricValue(threshold.value, unit)}` : '观察趋势'}</em>
+        <em>{metricThresholdHint(metric, threshold, unit)}</em>
       </div>
       <div className="metrics-insight-card">
         <span>当前</span>
@@ -1579,10 +1582,20 @@ function metricThreshold(metric: string): MetricThreshold | null {
   if (metric === 'heartbeat.arrival_gap_ms') {
     return { value: 10_000, label: '到达抖动', severity: 'warning' };
   }
+  if (metric === 'group.arrival_gap_ms') {
+    return { value: 20_000, label: '本地间隔过大', severity: 'warning' };
+  }
   if (metric === 'heartbeat.agent_collect_ms' || metric === 'heartbeat.agent_encode_ms' || metric === 'heartbeat.agent_send_ms' || metric === 'group.group_latency_ms') {
     return { value: 100, label: '链路偏慢', severity: 'warning' };
   }
   return null;
+}
+
+function metricThresholdHint(metric: string, threshold: MetricThreshold | null, unit: string) {
+  if (metric === 'group.arrival_gap_ms') {
+    return '单 coordinator 视角，3 节点轮询约 15s';
+  }
+  return threshold ? `阈值 ${formatMetricValue(threshold.value, unit)}` : '观察趋势';
 }
 
 function formatMetricValue(value: number, unit: string) {

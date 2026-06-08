@@ -298,6 +298,7 @@ public final class PulseAgentApp {
         private final ObjectMapper mapper = JsonSupport.objectMapper();
         private final int successLogEvery;
         private int nextCoordinatorIndex;
+        private boolean coordinatorIndexInitialized;
         private long successCount;
         private long lastEncodeMs;
         private long lastSendMs;
@@ -316,6 +317,10 @@ public final class PulseAgentApp {
         }
 
         HeartbeatResponse sendForResponse(String path, HeartbeatRequest heartbeat) {
+            if (!coordinatorIndexInitialized) {
+                nextCoordinatorIndex = preferredCoordinatorIndex(heartbeat);
+                coordinatorIndexInitialized = true;
+            }
             for (int attempt = 0; attempt < coordinatorUrls.size(); attempt++) {
                 String baseUrl = coordinatorUrls.get((nextCoordinatorIndex + attempt) % coordinatorUrls.size());
                 try {
@@ -339,7 +344,7 @@ public final class PulseAgentApp {
                     lastEncodeMs = encodeMs;
                     lastSendMs = sendMs;
                     if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                        nextCoordinatorIndex = (nextCoordinatorIndex + attempt + 1) % coordinatorUrls.size();
+                        nextCoordinatorIndex = (nextCoordinatorIndex + attempt) % coordinatorUrls.size();
                         successCount++;
                         if (successCount == 1 || successCount % successLogEvery == 0) {
                             if (heartbeat.isBatch()) {
@@ -374,7 +379,21 @@ public final class PulseAgentApp {
             return null;
         }
 
+        private int preferredCoordinatorIndex(HeartbeatRequest heartbeat) {
+            if (coordinatorUrls.size() == 1) {
+                return 0;
+            }
+            String agentId = heartbeat.isBatch() && !heartbeat.agents().isEmpty()
+                    ? heartbeat.agents().get(0).agentId()
+                    : heartbeat.agentId();
+            if (agentId == null || agentId.isBlank()) {
+                return 0;
+            }
+            return Math.floorMod(agentId.hashCode(), coordinatorUrls.size());
+        }
+
     }
+
 
     private static long elapsedMsSince(long startedNs) {
         long elapsedNs = Math.max(0L, System.nanoTime() - startedNs);

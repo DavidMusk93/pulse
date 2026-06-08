@@ -133,6 +133,9 @@ flowchart LR
 - 心跳可见性符合预期：三个 coordinator 在 1 小时窗口均观察到 `471` 个 agent，`cdn2` 均为 `50/50`，说明当前链路没有整体不可见问题。
 - 到达间隔符合 5s heartbeat 设计：整体 arrival p95 约 `5.1s`，`cdn2` p95 约 `5.0s`，p99 低于 10s，说明低资源路径没有明显牺牲数据新鲜度。
 - agent 发送与 group leader 链路成本较低：`heartbeat.agent_send_ms` p95 约 `2ms`，`group.group_latency_ms` p95 约 `1-2ms`，说明热路径 timing instrumentation 已能验证轻量化目标。
+- `group.group_latency_ms` 与 `group.arrival_gap_ms` 必须拆开解释：前者是 leader batch 发送到 coordinator 的链路耗时；后者是单 coordinator 本地观察到同一 group 的样本间隔。
+- group leader 不应通过成功后轮询多个 coordinator 来制造本地样本覆盖；coordinator 之间已有 `/heartbeat_fwd` 做最终一致性，agent/coordinator 发送应使用稳定 sticky target，只有失败时 failover。
+- 在 3 coordinator、5s heartbeat 下，如果客户端成功后轮询，单 coordinator 的 `group.arrival_gap_ms` 会稳定接近 15s；这是发送策略与指标语义的设计缺陷，不是 group 链路真实延迟。
 - `partial`、`stale_plan` 和少量 `seq_gap` 仍存在尾部样本，因此 UI 必须展示 TopN、p99/max 和事件，不允许只用平均值表达健康。
 - `group.direct_fallback_count` p95/p99 大多为 `0`，但 `cdn2` 单窗口 max 可达 `5-10`，说明 direct fallback 是低频尾部事件，必须作为退化信号保留。
 - `group.plan_lag` 当前语义存在设计/实现缺陷：如果 `plan_generation` 是 unsigned hash，则只有相等/不相等语义，不能执行 `expected_generation - agent_plan_generation`；当前线上出现数十亿级 `plan_lag`，更像指标语义错误或冷启动混入，而不是实际传播延迟。

@@ -79,7 +79,8 @@ final class LocalMetricStorage implements MetricStorage {
                 new MetricCatalogItem("group.plan_mismatch", "Group plan generation mismatch", "ratio"),
                 new MetricCatalogItem("group.plan_lag", "Group plan mismatch compatibility", "ratio"),
                 new MetricCatalogItem("group.leader_collect_ms", "Group leader collection time", "ms"),
-                new MetricCatalogItem("group.group_latency_ms", "Group latency", "ms"));
+                new MetricCatalogItem("group.group_latency_ms", "Group send latency", "ms"),
+                new MetricCatalogItem("group.arrival_gap_ms", "Group local arrival gap", "ms"));
     }
 
     @Override
@@ -900,7 +901,8 @@ final class LocalMetricStorage implements MetricStorage {
         GROUP_PLAN_MISMATCH("group.plan_mismatch", "COALESCE(CAST(json_extract(debug_json, '$.plan_mismatch') AS INTEGER), 0)", "ratio", MetricSource.GROUP_LEADER),
         GROUP_PLAN_LAG("group.plan_lag", "COALESCE(CAST(json_extract(debug_json, '$.plan_lag') AS INTEGER), COALESCE(CAST(json_extract(debug_json, '$.plan_mismatch') AS INTEGER), 0))", "ratio", MetricSource.GROUP_LEADER),
         GROUP_COLLECT("group.leader_collect_ms", "leader_collect_ms", "ms", MetricSource.GROUP_LEADER),
-        GROUP_LATENCY("group.group_latency_ms", "group_latency_ms", "ms", MetricSource.GROUP_LEADER);
+        GROUP_LATENCY("group.group_latency_ms", "group_latency_ms", "ms", MetricSource.GROUP_LEADER),
+        GROUP_ARRIVAL_GAP("group.arrival_gap_ms", "arrival_gap_ms", "ms", MetricSource.GROUP_LEADER);
 
         private final String name;
         private final String column;

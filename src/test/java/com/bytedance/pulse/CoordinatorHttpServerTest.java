@@ -138,6 +138,7 @@ class CoordinatorHttpServerTest {
         assertTrue(catalog.body().contains("group.direct_fallback_count"));
         assertTrue(catalog.body().contains("group.plan_mismatch"));
         assertTrue(catalog.body().contains("group.plan_lag"));
+        assertTrue(catalog.body().contains("group.arrival_gap_ms"));
 
         HttpResponse<String> range = get("/api/metrics/query_range?metric=agent.thread_count&agents=agent-1&start_ms=1710000000000&end_ms=1710000000000&step_ms=1000&point_limit=10");
         assertEquals(200, range.statusCode());
@@ -768,7 +769,7 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
-    void agentHeartbeatClientWritesOnlyOneCoordinator() throws Exception {
+    void agentHeartbeatClientSticksToOneCoordinator() throws Exception {
         AtomicInteger firstHits = new AtomicInteger();
         AtomicInteger secondHits = new AtomicInteger();
         HttpServer first = heartbeatStub(firstHits);
@@ -785,9 +786,15 @@ class CoordinatorHttpServerTest {
             HeartbeatResponse response = heartbeatClient.sendForResponse(
                     "/heartbeat",
                     new HeartbeatRequest(null, "agent-1", 1L, 42L, 15_000L, List.of(), List.of()));
+            HeartbeatResponse secondResponse = heartbeatClient.sendForResponse(
+                    "/heartbeat",
+                    new HeartbeatRequest(null, "agent-1", 1L, 43L, 15_000L, List.of(), List.of()));
 
             assertTrue(response.ok());
-            assertEquals(1, firstHits.get() + secondHits.get());
+            assertTrue(secondResponse.ok());
+            assertEquals(2, firstHits.get() + secondHits.get());
+            assertEquals(2, Math.max(firstHits.get(), secondHits.get()));
+            assertEquals(0, Math.min(firstHits.get(), secondHits.get()));
         } finally {
             first.stop(0);
             second.stop(0);
