@@ -360,22 +360,69 @@ body {
   align-items: flex-start;
   gap: 12px;
 }
-.metrics-sparkline {
-  width: 100%;
-  min-height: 220px;
-  display: block;
+.metrics-insight-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
-.metrics-sparkline rect {
-  fill: #f8fafc;
+.metrics-insight-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
 }
-.metrics-sparkline line {
-  stroke: rgba(15, 23, 42, .16);
-  stroke-width: 1;
+.metrics-insight-card {
+  min-width: 0;
+  min-height: 76px;
+  padding: 12px 14px;
+  border: 1px solid rgba(29, 29, 31, .07);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, .66);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
 }
-.metrics-sparkline text {
-  fill: #64748b;
+.metrics-insight-card span {
+  color: #86868b;
   font-size: 11px;
+  font-weight: 650;
+}
+.metrics-insight-card b {
+  color: #1d1d1f;
+  font-size: 22px;
+  line-height: 1.05;
+  letter-spacing: -.035em;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.metrics-insight-card em {
+  color: #6e6e73;
+  font-size: 12px;
+  font-style: normal;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.metrics-insight-card-success {
+  background: rgba(232, 247, 239, .76);
+  border-color: rgba(31, 157, 98, .22);
+}
+.metrics-insight-card-warning {
+  background: rgba(255, 244, 216, .82);
+  border-color: rgba(183, 121, 31, .24);
+}
+.metrics-insight-card-error {
+  background: rgba(254, 226, 226, .82);
+  border-color: rgba(220, 38, 38, .24);
+}
+.metrics-echart {
+  width: 100%;
+  height: 340px;
+  border: 1px solid rgba(29, 29, 31, .07);
+  border-radius: 20px;
+  background: #fff;
 }
 .clusters {
   display: flex;
@@ -1362,7 +1409,8 @@ body {
   }
   .metrics-topline,
   .metrics-control-grid,
-  .metrics-health-grid {
+  .metrics-health-grid,
+  .metrics-insight-grid {
     grid-template-columns: 1fr;
   }
   .metrics-preset-card .ant-segmented-group {

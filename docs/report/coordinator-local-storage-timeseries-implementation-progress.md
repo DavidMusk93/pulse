@@ -67,16 +67,17 @@
 
 - 前端时序面板：
   - 已恢复本地 Node/npm 构建链路，使用 `.tmp/runtime/node-v22.12.0-darwin-arm64`。
-  - 已实现 Ant Design Metrics Panel 第一版，包含 storage health、metric selector、agent selector、range selector、query budget 状态和 SVG sparkline。
+  - 已实现 Ant Design Metrics Panel，包含 storage health、metric selector、agent selector、range selector、query budget 状态和专业时序图。
   - 已接入 `/api/metrics/catalog`、`/api/metrics/storage`、`/api/metrics/query_range`、`/api/metrics/stream`。
   - 已用 Vite 构建同步 `src/main/resources/static/pulse-hosts.js` 和 `pulse-hosts.css`。
-  - 已新增 `src/main/frontend/src/metrics.ts`，拆出 `MetricQueryController`、`SeriesStore`、`RenderScheduler`、`SvgChartAdapter` 的第一版骨架。
+  - 已新增 `src/main/frontend/src/metrics.ts`，拆出 `MetricQueryController`、`SeriesStore`、`RenderScheduler` 的数据层骨架。
   - 已实现 `metric.invalidate` 合并、range cache、500ms debounce 补偿查询和 `SeriesStore.merge` 点去重。
   - 已实现页面不可见时暂停补偿查询，以及“暂停窗口/跟随最新”的固定时间窗口查看模式。
   - 已在面板中暴露 `query_ms` 和 `render_ms`，辅助判断查询与渲染是否流畅。
   - 已新增“架构健康 / 计划收敛 / 采集实效 / 发送链路” preset，默认执行全局 TopN + aggregate 查询并用 Tag 给出健康判定；“计划收敛”使用 `group.plan_mismatch`。
   - 已按 Apple 风格重构 Metrics UI：大圆角玻璃卡片、顶部健康概览、统一控件高度、分区对齐、响应式布局和集群分析入口。
   - 已新增“分析范围”集群选择，切换后自动进入当前集群 TopN + aggregate，并将 `cluster` 下推到 metrics query。
+  - 已用按需导入的 Apache ECharts 替换手写 SVG sparkline，图表内置 tooltip、legend、时间轴、阈值线、峰值标注，并在图表上方给出状态/当前值/峰值/范围解释。
 
 - SSE 重连补偿：
   - `/api/metrics/stream` 已读取 `Last-Event-ID`。

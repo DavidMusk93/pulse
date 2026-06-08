@@ -3,13 +3,13 @@
     "build": "vite build"
   },
   "dependencies": {
+    "@ant-design/icons": "latest",
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
+    "antd": "latest",
+    "echarts": "^5.6.0",
     "react": "latest",
     "react-dom": "latest",
-    "antd": "latest",
-    "@ant-design/icons": "latest"
-  },
-  "devDependencies": {}
+    "typescript": "latest",
+    "vite": "latest"
+  }
 }

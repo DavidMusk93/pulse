@@ -1,5 +1,9 @@
 import React, { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { init, use, type EChartsOption } from 'echarts/core';
+import { LineChart } from 'echarts/charts';
+import { GridComponent, LegendComponent, MarkLineComponent, MarkPointComponent, TooltipComponent } from 'echarts/components';
+import { CanvasRenderer } from 'echarts/renderers';
 import {
   Badge,
   Button,
@@ -27,8 +31,9 @@ import {
   MetricQueryController,
   RenderScheduler,
   SeriesStore,
-  SvgChartAdapter,
   mergeInvalidation,
+  metricPointTimestamp,
+  metricPointValue,
   parseInvalidation,
   type MetricInvalidation,
   type MetricCatalogItem,
@@ -37,6 +42,8 @@ import {
 } from './metrics';
 import 'antd/dist/reset.css';
 import './style.css';
+
+use([LineChart, GridComponent, LegendComponent, MarkLineComponent, MarkPointComponent, TooltipComponent, CanvasRenderer]);
 
 type HostView = {
   agent_id?: string;
@@ -1328,7 +1335,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
           </Space>
           <Typography.Text type="secondary">{result?.query_id || result?.queryId || '尚未查询'}</Typography.Text>
         </div>
-        {seriesCount ? <MetricSparkline result={result} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无时序数据" />}
+        {seriesCount ? <MetricInsightChart metric={metric} result={result} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无时序数据" />}
       </div>
     </div>
   </Card>;
@@ -1395,21 +1402,203 @@ function maxMetricValue(result: MetricQueryResultView | null) {
   return values.length ? Math.max(...values) : null;
 }
 
-const MetricSparkline = memo(function MetricSparkline({ result }: { result: MetricQueryResultView | null }) {
-  const adapter = useMemo(() => new SvgChartAdapter(), []);
-  const model = useMemo(() => adapter.model(result), [adapter, result]);
-  if (!model) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有可绘制的数据点" />;
-  const palette = ['#2563eb', '#16a34a', '#dc2626', '#9333ea', '#ea580c', '#0891b2'];
+type MetricChartPoint = {
+  seriesName: string;
+  timestamp: number;
+  value: number;
+};
 
-  return <svg className="metrics-sparkline" viewBox={`0 0 ${model.width} ${model.height}`} role="img" aria-label="metrics sparkline">
-    <rect x="0" y="0" width={model.width} height={model.height} rx="18" />
-    <line x1="28" y1={model.height - 26} x2={model.width - 28} y2={model.height - 26} />
-    <line x1="28" y1="24" x2="28" y2={model.height - 26} />
-    {model.series.map((path, index) => <polyline key={index} points={path} fill="none" stroke={palette[index % palette.length]} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />)}
-    <text x="34" y="20">{model.maxValue.toFixed(1)}</text>
-    <text x="34" y={model.height - 8}>{model.minValue.toFixed(1)}</text>
-  </svg>;
+type MetricThreshold = {
+  value: number;
+  label: string;
+  severity: 'warning' | 'error';
+};
+
+const MetricInsightChart = memo(function MetricInsightChart({ metric, result }: { metric: string; result: MetricQueryResultView | null }) {
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const unit = result?.unit || '';
+  const threshold = metricThreshold(metric);
+  const points = useMemo(() => metricChartPoints(result), [result]);
+  const summary = useMemo(() => metricChartSummary(points, threshold), [points, threshold]);
+  const option = useMemo(() => metricChartOption(metric, result, threshold), [metric, result, threshold]);
+
+  useEffect(() => {
+    if (!chartRef.current || !option) return;
+    const chart = init(chartRef.current, undefined, { renderer: 'canvas' });
+    chart.setOption(option);
+    const observer = new ResizeObserver(() => chart.resize());
+    observer.observe(chartRef.current);
+    return () => {
+      observer.disconnect();
+      chart.dispose();
+    };
+  }, [option]);
+
+  if (!points.length || !summary || !option) {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有可解释的数据点" />;
+  }
+
+  return <div className="metrics-insight-chart">
+    <div className="metrics-insight-grid">
+      <div className={`metrics-insight-card metrics-insight-card-${summary.tone}`}>
+        <span>状态</span>
+        <b>{summary.label}</b>
+        <em>{threshold ? `阈值 ${formatMetricValue(threshold.value, unit)}` : '观察趋势'}</em>
+      </div>
+      <div className="metrics-insight-card">
+        <span>当前</span>
+        <b>{formatMetricValue(summary.latest.value, unit)}</b>
+        <em>{summary.latest.seriesName}</em>
+      </div>
+      <div className="metrics-insight-card">
+        <span>峰值</span>
+        <b>{formatMetricValue(summary.max.value, unit)}</b>
+        <em>{formatChartTime(summary.max.timestamp)}</em>
+      </div>
+      <div className="metrics-insight-card">
+        <span>范围</span>
+        <b>{summary.seriesCount}</b>
+        <em>{summary.pointCount} points</em>
+      </div>
+    </div>
+    <div ref={chartRef} className="metrics-echart" role="img" aria-label="metrics insight chart" />
+  </div>;
 });
+
+function metricChartPoints(result: MetricQueryResultView | null): MetricChartPoint[] {
+  return (result?.series || [])
+    .flatMap(series => {
+      const name = metricSeriesName(series.labels || {});
+      return (series.points || []).map(point => ({
+        seriesName: name,
+        timestamp: metricPointTimestamp(point),
+        value: metricPointValue(point)
+      }));
+    })
+    .filter(point => point.timestamp > 0 && Number.isFinite(point.value));
+}
+
+function metricChartSummary(points: MetricChartPoint[], threshold: MetricThreshold | null) {
+  if (!points.length) return null;
+  const sorted = [...points].sort((left, right) => left.timestamp - right.timestamp);
+  const latest = sorted[sorted.length - 1];
+  const max = points.reduce((current, point) => point.value > current.value ? point : current, points[0]);
+  const seriesCount = new Set(points.map(point => point.seriesName)).size;
+  const breached = threshold ? max.value > threshold.value : false;
+  return {
+    latest,
+    max,
+    seriesCount,
+    pointCount: points.length,
+    label: breached ? (threshold?.severity === 'error' ? '异常' : '需关注') : '正常',
+    tone: breached ? (threshold?.severity === 'error' ? 'error' : 'warning') : 'success'
+  };
+}
+
+function metricChartOption(metric: string, result: MetricQueryResultView | null, threshold: MetricThreshold | null): EChartsOption | null {
+  const series = result?.series || [];
+  if (!series.some(item => item.points?.length)) return null;
+  const unit = result?.unit || '';
+  const palette = ['#2563eb', '#0891b2', '#7c3aed', '#dc2626', '#ea580c', '#16a34a', '#475569'];
+  return {
+    animation: false,
+    color: palette,
+    grid: { left: 54, right: 24, top: 58, bottom: 42 },
+    legend: {
+      type: 'scroll',
+      top: 8,
+      left: 8,
+      right: 8,
+      itemWidth: 14,
+      itemHeight: 8,
+      textStyle: { color: '#475569', fontSize: 12 }
+    },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'line' },
+      valueFormatter: (value: number) => formatMetricValue(Number(value), unit)
+    },
+    xAxis: {
+      type: 'time',
+      axisLabel: { color: '#64748b', formatter: (value: number) => formatChartTime(value) },
+      axisLine: { lineStyle: { color: '#cbd5e1' } },
+      splitLine: { show: false }
+    },
+    yAxis: {
+      type: 'value',
+      name: unit || metric,
+      nameTextStyle: { color: '#64748b', padding: [0, 0, 0, 6] },
+      axisLabel: { color: '#64748b', formatter: (value: number) => shortMetricValue(value) },
+      splitLine: { lineStyle: { color: '#e2e8f0' } }
+    },
+    series: series.slice(0, 12).map((item, index) => {
+      const data = (item.points || [])
+        .map(point => [metricPointTimestamp(point), metricPointValue(point)])
+        .filter(([timestamp, value]) => Number(timestamp) > 0 && Number.isFinite(Number(value)));
+      const maxPoint = data.reduce<[number, number] | null>((current, point) => {
+        if (!current) return point as [number, number];
+        return Number(point[1]) > current[1] ? point as [number, number] : current;
+      }, null);
+      return {
+        name: metricSeriesName(item.labels || {}),
+        type: 'line',
+        data,
+        showSymbol: false,
+        smooth: false,
+        sampling: 'lttb',
+        lineStyle: { width: index === 0 ? 2.8 : 2 },
+        emphasis: { focus: 'series' },
+        markPoint: maxPoint ? {
+          symbolSize: 42,
+          label: { formatter: '峰值', fontSize: 11 },
+          data: [{ coord: maxPoint, value: maxPoint[1] }]
+        } : undefined,
+        markLine: threshold && index === 0 ? {
+          symbol: 'none',
+          lineStyle: { color: threshold.severity === 'error' ? '#dc2626' : '#d97706', type: 'dashed', width: 1.4 },
+          label: { formatter: threshold.label, color: threshold.severity === 'error' ? '#dc2626' : '#d97706' },
+          data: [{ yAxis: threshold.value }]
+        } : undefined
+      };
+    })
+  };
+}
+
+function metricSeriesName(labels: Record<string, string>) {
+  if (labels.series_role === 'aggregate') return '整体平均';
+  return labels.agent_id || labels.group_id || labels.pid || labels.cluster || Object.values(labels).filter(Boolean).slice(0, 2).join(' / ') || 'series';
+}
+
+function metricThreshold(metric: string): MetricThreshold | null {
+  if (metric === 'group.status_unhealthy' || metric === 'group.plan_mismatch' || metric === 'group.plan_lag' || metric === 'heartbeat.seq_gap') {
+    return { value: 0, label: '必须为 0', severity: 'warning' };
+  }
+  if (metric === 'group.missing_member_count' || metric === 'group.stale_member_count' || metric === 'group.direct_fallback_count') {
+    return { value: 0, label: '存在尾部', severity: 'warning' };
+  }
+  if (metric === 'heartbeat.arrival_gap_ms') {
+    return { value: 10_000, label: '到达抖动', severity: 'warning' };
+  }
+  if (metric === 'heartbeat.agent_collect_ms' || metric === 'heartbeat.agent_encode_ms' || metric === 'heartbeat.agent_send_ms' || metric === 'group.group_latency_ms') {
+    return { value: 100, label: '链路偏慢', severity: 'warning' };
+  }
+  return null;
+}
+
+function formatMetricValue(value: number, unit: string) {
+  const formatted = Math.abs(value) >= 1000 ? Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(value) : Number(value.toFixed(value % 1 === 0 ? 0 : 1)).toString();
+  return unit ? `${formatted} ${unit}` : formatted;
+}
+
+function shortMetricValue(value: number) {
+  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
+  if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return Number(value.toFixed(value % 1 === 0 ? 0 : 1)).toString();
+}
+
+function formatChartTime(timestamp: number) {
+  return new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
 
 const ClusterSection = memo(function ClusterSection({
   cluster,
