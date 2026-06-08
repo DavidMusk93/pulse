@@ -249,6 +249,9 @@ final class LocalMetricStorage implements MetricStorage {
             sql.setLength(sql.length() - 1);
             sql.append(")");
         }
+        if (!query.cluster().isBlank()) {
+            sql.append(" AND cluster = ?");
+        }
         sql.append(" GROUP BY agent_id, (observed_at_ms / ?) ORDER BY agent_id ASC, observed_at_ms ASC LIMIT ?");
 
         Map<String, List<MetricPoint>> pointsByAgent = new LinkedHashMap<>();
@@ -261,6 +264,9 @@ final class LocalMetricStorage implements MetricStorage {
             statement.setLong(index++, query.endMs());
             for (String agentId : agentIds) {
                 statement.setString(index++, agentId);
+            }
+            if (!query.cluster().isBlank()) {
+                statement.setString(index++, query.cluster());
             }
             statement.setLong(index++, stepMs);
             statement.setInt(index, pointLimit + 1);
@@ -336,6 +342,9 @@ final class LocalMetricStorage implements MetricStorage {
             sql.setLength(sql.length() - 1);
             sql.append(")");
         }
+        if (!query.cluster().isBlank()) {
+            sql.append(" AND agent_id IN (SELECT agent_id FROM host_dimension WHERE cluster = ?)");
+        }
         sql.append("""
                  GROUP BY agent_id, pid, (observed_at_ms / ?)
                  ORDER BY agent_id ASC, pid ASC, observed_at_ms ASC LIMIT ?
@@ -352,6 +361,9 @@ final class LocalMetricStorage implements MetricStorage {
             statement.setLong(index++, query.endMs());
             for (String agentId : agentIds) {
                 statement.setString(index++, agentId);
+            }
+            if (!query.cluster().isBlank()) {
+                statement.setString(index++, query.cluster());
             }
             statement.setLong(index++, stepMs);
             statement.setInt(index, pointLimit + 1);
@@ -410,9 +422,10 @@ final class LocalMetricStorage implements MetricStorage {
                     AVG(%s) AS metric_value
                 FROM group_leader_sample
                 WHERE observed_at_ms >= ? AND observed_at_ms <= ?
+                %s
                 GROUP BY group_id, (observed_at_ms / ?)
                 ORDER BY group_id ASC, observed_at_ms ASC LIMIT ?
-                """.formatted(metric.column());
+                """.formatted(metric.column(), query.cluster().isBlank() ? "" : "AND cluster = ?");
         Map<String, List<MetricPoint>> pointsByGroup = new LinkedHashMap<>();
         Map<String, Map<String, String>> labelsByGroup = new LinkedHashMap<>();
         boolean truncated;
@@ -421,8 +434,12 @@ final class LocalMetricStorage implements MetricStorage {
             statement.setLong(2, stepMs);
             statement.setLong(3, query.startMs());
             statement.setLong(4, query.endMs());
-            statement.setLong(5, stepMs);
-            statement.setInt(6, pointLimit + 1);
+            int index = 5;
+            if (!query.cluster().isBlank()) {
+                statement.setString(index++, query.cluster());
+            }
+            statement.setLong(index++, stepMs);
+            statement.setInt(index, pointLimit + 1);
             try (ResultSet resultSet = statement.executeQuery()) {
                 int rows = 0;
                 while (resultSet.next()) {
@@ -852,7 +869,7 @@ final class LocalMetricStorage implements MetricStorage {
     }
 
     private static String queryId(MetricQuery query) {
-        int hash = Math.abs((query.metric() + query.agentIds()).hashCode());
+        int hash = Math.abs((query.metric() + query.agentIds() + query.cluster()).hashCode());
         return "q-" + query.startMs() + "-" + query.endMs() + "-" + hash;
     }
 
@@ -1023,18 +1040,24 @@ record MetricQuery(
         long stepMs,
         int seriesLimit,
         int pointLimit,
-        int topN) {
+        int topN,
+        String cluster) {
     MetricQuery(String metric, List<String> agentIds, long startMs, long endMs, long stepMs, int seriesLimit, int pointLimit) {
-        this(metric, agentIds, startMs, endMs, stepMs, seriesLimit, pointLimit, 0);
+        this(metric, agentIds, startMs, endMs, stepMs, seriesLimit, pointLimit, 0, "");
     }
 
     MetricQuery(String metric, List<String> agentIds, long startMs, long endMs, long stepMs, int pointLimit) {
-        this(metric, agentIds, startMs, endMs, stepMs, LocalMetricStorage.DEFAULT_SERIES_LIMIT, pointLimit, 0);
+        this(metric, agentIds, startMs, endMs, stepMs, LocalMetricStorage.DEFAULT_SERIES_LIMIT, pointLimit, 0, "");
+    }
+
+    MetricQuery(String metric, List<String> agentIds, long startMs, long endMs, long stepMs, int seriesLimit, int pointLimit, int topN) {
+        this(metric, agentIds, startMs, endMs, stepMs, seriesLimit, pointLimit, topN, "");
     }
 
     MetricQuery {
         agentIds = agentIds == null ? List.of() : List.copyOf(agentIds);
         topN = Math.max(0, topN);
+        cluster = cluster == null || "all".equals(cluster) ? "" : cluster;
     }
 }
 

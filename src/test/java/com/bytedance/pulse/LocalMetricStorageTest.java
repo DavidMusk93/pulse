@@ -93,6 +93,18 @@ class LocalMetricStorageTest {
             assertEquals("agent-1", series.labels().get("agent_id"));
             assertEquals(List.of(12.0, 15.0), series.points().stream().map(MetricPoint::value).toList());
             assertEquals(List.of("direct", "group"), series.points().stream().map(point -> point.metadata().get("heartbeat_path")).toList());
+
+            MetricQueryResult clusterResult = storage.queryRange(new MetricQuery(
+                    "heartbeat.arrival_gap_ms",
+                    List.of(),
+                    1_710_000_000_000L,
+                    1_710_000_030_000L,
+                    1_000,
+                    10,
+                    100,
+                    0,
+                    "cluster-a"));
+            assertEquals(2, clusterResult.series().size());
         }
 
         assertTrue(db.toFile().length() > 0);
@@ -175,6 +187,26 @@ class LocalMetricStorageTest {
                     12,
                     "partial",
                     Map.of("leader_url", "http://[fd00::1]:9977", "plan_mismatch", 1, "plan_lag", 1)));
+            storage.writeGroupLeader(new GroupLeaderMetricSample(
+                    1_710_000_000_000L,
+                    "cluster-b/area-a/001",
+                    "agent-leader-b",
+                    "fd00::2",
+                    "cluster-b",
+                    "area-a",
+                    8,
+                    1,
+                    4,
+                    4,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1,
+                    1,
+                    7,
+                    "ok",
+                    Map.of("leader_url", "http://[fd00::2]:9977", "plan_mismatch", 0, "plan_lag", 0)));
 
             MetricQueryResult result = storage.queryRange(new MetricQuery(
                     "group.submitted_agent_count",
@@ -184,9 +216,22 @@ class LocalMetricStorageTest {
                     1_000,
                     10));
 
-            assertEquals(1, result.series().size());
+            assertEquals(2, result.series().size());
             assertEquals("cluster-a/area-a/001", result.series().get(0).labels().get("group_id"));
             assertEquals(10.0, result.series().get(0).points().get(0).value());
+
+            MetricQueryResult clusterResult = storage.queryRange(new MetricQuery(
+                    "group.submitted_agent_count",
+                    List.of(),
+                    1_710_000_000_000L,
+                    1_710_000_000_000L,
+                    1_000,
+                    10,
+                    10,
+                    0,
+                    "cluster-b"));
+            assertEquals(1, clusterResult.series().size());
+            assertEquals("cluster-b/area-a/001", clusterResult.series().get(0).labels().get("group_id"));
 
             MetricQueryResult stale = storage.queryRange(new MetricQuery(
                     "group.stale_member_count",

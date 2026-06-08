@@ -4,7 +4,7 @@
 
 - 时间：2026-06-08
 - 最新已部署提交：`fc8c7e4 Count group direct fallback metrics`
-- 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection、aggregate series、frontend visibility/range pause、frontend render metrics、heartbeat timing instrumentation、heartbeat health presets、group plan mismatch metrics、direct fallback metrics、heartbeat path normalization、unknown cluster direct-only guard
+- 最新本地已测试：writer maintenance、batch transaction、query envelope、query budget、topN series selection、aggregate series、frontend visibility/range pause、frontend render metrics、heartbeat timing instrumentation、heartbeat health presets、group plan mismatch metrics、direct fallback metrics、heartbeat path normalization、unknown cluster direct-only guard、Apple-style Metrics UI、cluster-scoped metric query
 - 部署范围：`cdn_new` 50 台 agent 与 3 台 coordinator/group leader 已完成最新版本全量 rollout
 - JAR SHA：`35d5d9fa66ca6b2eece9d8dc4b8c616d385dbe798114971a604c2de5fa055e84`
 - 结论：后端本地时序存储核心链路已部署并在线验证；前端 Ant Design 时序面板已完成第一版查询与预览；Metrics Panel 已能通过 health presets 反馈心跳架构健壮性、plan 收敛状态和 agent 采集数据实效性。
@@ -44,6 +44,7 @@
   - heartbeat 指标按 `step_ms` 做服务端 `avg` 聚合。
   - tide worker 指标按 agent/pid 返回 series。
   - group leader 指标按 group 返回 series。
+  - heartbeat 和 group leader 指标已支持 `cluster` query 参数，Metrics UI 可直接按集群分析健康状态。
   - host event 支持 time range、agent、severity 和 limit 过滤。
 
 - 保留与清理：
@@ -74,6 +75,8 @@
   - 已实现页面不可见时暂停补偿查询，以及“暂停窗口/跟随最新”的固定时间窗口查看模式。
   - 已在面板中暴露 `query_ms` 和 `render_ms`，辅助判断查询与渲染是否流畅。
   - 已新增“架构健康 / 计划收敛 / 采集实效 / 发送链路” preset，默认执行全局 TopN + aggregate 查询并用 Tag 给出健康判定；“计划收敛”使用 `group.plan_mismatch`。
+  - 已按 Apple 风格重构 Metrics UI：大圆角玻璃卡片、顶部健康概览、统一控件高度、分区对齐、响应式布局和集群分析入口。
+  - 已新增“分析范围”集群选择，切换后自动进入当前集群 TopN + aggregate，并将 `cluster` 下推到 metrics query。
 
 - SSE 重连补偿：
   - `/api/metrics/stream` 已读取 `Last-Event-ID`。
@@ -85,7 +88,7 @@
 
 ## 测试
 
-- `mvn test`：`69` tests passed。
+- `mvn test`：`70` tests passed。
 - `bash .tmp/build_frontend.sh`：Vite build passed，产出 `pulse-hosts.js/css`。
 - 关键新增测试：
   - `AsyncLocalMetricStorageTest`
@@ -103,6 +106,7 @@
   - `CoordinatorHttpServerTest#metricsRangeQueryAcceptsTopNSeriesSelection` 已覆盖 HTTP `top_n` 参数和 aggregate series numeric value。
   - `LocalMetricStorageTest#storesAndQueriesGroupLeaderSamples` 已覆盖 `group.stale_member_count`、`group.direct_fallback_count`、`group.status_unhealthy`。
   - `LocalMetricStorageTest#storesAndQueriesGroupLeaderSamples` 已覆盖 `group.plan_generation`、`group.plan_mismatch` 和 `group.plan_lag` 兼容语义。
+  - `LocalMetricStorageTest` 已覆盖 heartbeat/group leader metric 的 `cluster` query filter。
   - `CoordinatorServiceTest#batchHeartbeatWritesGroupLeaderMetricSample` 已覆盖 cold-start/unknown `agent_plan_generation` 不产生巨大 lag。
   - `CoordinatorServiceTest#batchHeartbeatWritesGroupLeaderMetricSample` 已覆盖 `group_leader_batch` / `fallback_direct` path metadata。
   - `CoordinatorServiceTest#unknownClusterAgentsStayDirect` 已覆盖 `cluster=unknown` 不进入 group leader 规划。

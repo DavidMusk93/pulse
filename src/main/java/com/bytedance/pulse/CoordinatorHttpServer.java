@@ -426,7 +426,8 @@ public class CoordinatorHttpServer {
                 (int) Math.min(LocalMetricStorage.MAX_POINT_LIMIT,
                         longQuery(uri, "point_limit", LocalMetricStorage.MAX_POINT_LIMIT)),
                 (int) Math.min(LocalMetricStorage.MAX_SERIES_LIMIT,
-                        longQuery(uri, "top_n", longQuery(uri, "topN", 0))));
+                        longQuery(uri, "top_n", longQuery(uri, "topN", 0))),
+                queryValue(uri, "cluster"));
     }
 
     private static MetricEventQuery metricEventQuery(URI uri) {

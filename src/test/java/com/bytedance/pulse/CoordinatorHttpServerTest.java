@@ -361,7 +361,8 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("批任务"));
         assertTrue(js.body().contains("sampledAtMs"));
         assertTrue(js.body().contains("agent 执行中"));
-        assertTrue(js.body().contains("时序洞察"));
+        assertTrue(js.body().contains("集群健康洞察"));
+        assertTrue(js.body().contains("分析范围"));
         assertTrue(js.body().contains("/api/metrics/catalog"));
         assertTrue(js.body().contains("/api/metrics/storage"));
         assertTrue(js.body().contains("/api/metrics/query_range"));

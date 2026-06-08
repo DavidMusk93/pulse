@@ -52,6 +52,7 @@ export type MetricQueryResultView = {
 export type MetricQueryRequest = {
   metric: string;
   agents: string[];
+  cluster?: string;
   rangeMinutes?: number;
   startMs?: number;
   endMs?: number;
@@ -124,6 +125,9 @@ export class MetricQueryController {
     });
     if (request.topN && request.topN > 0) {
       params.set('top_n', String(request.topN));
+    }
+    if (request.cluster && request.cluster !== 'all') {
+      params.set('cluster', request.cluster);
     }
     if (request.agents.length) {
       params.set('agents', request.agents.join(','));

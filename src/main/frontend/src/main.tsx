@@ -1001,6 +1001,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const [storage, setStorage] = useState<MetricStorageHealth | null>(null);
   const [metric, setMetric] = useState('agent.thread_count');
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
+  const [selectedCluster, setSelectedCluster] = useState('all');
   const [fleetMode, setFleetMode] = useState(false);
   const [rangeMinutes, setRangeMinutes] = useState(30);
   const [result, setResult] = useState<MetricQueryResultView | null>(null);
@@ -1026,14 +1027,43 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
     value: item.metric,
     label: `${item.title} (${item.unit || '-'})`
   })), [catalog]);
+  const clusterOptions = useMemo(() => {
+    const counts = new Map<string, { total: number; alive: number }>();
+    hosts.forEach(host => {
+      const cluster = host.cluster && host.cluster !== '-' ? host.cluster : 'unknown';
+      const current = counts.get(cluster) || { total: 0, alive: 0 };
+      current.total++;
+      if (host.status === 'alive') current.alive++;
+      counts.set(cluster, current);
+    });
+    return [
+      { value: 'all', label: `全部集群 (${hosts.filter(host => host.status === 'alive').length}/${hosts.length})` },
+      ...[...counts.entries()]
+        .sort((left, right) => right[1].alive - left[1].alive || left[0].localeCompare(right[0]))
+        .map(([cluster, count]) => ({
+          value: cluster,
+          label: `${cluster} (${count.alive}/${count.total})`
+        }))
+    ];
+  }, [hosts]);
+  const clusterHosts = useMemo(() => selectedCluster === 'all'
+    ? hosts
+    : hosts.filter(host => (host.cluster && host.cluster !== '-' ? host.cluster : 'unknown') === selectedCluster), [hosts, selectedCluster]);
+  const scopedAgentOptions = useMemo(() => selectedCluster === 'all'
+    ? agentOptions
+    : agentOptions.filter(option => clusterHosts.some(host => agentId(host) === option.value)), [agentOptions, clusterHosts, selectedCluster]);
+  const clusterAliveCount = clusterHosts.filter(host => host.status === 'alive').length;
+  const clusterLeaderCount = clusterHosts.filter(host => (host.groupMode || host.group_mode) === 'leader').length;
+  const clusterDirectCount = clusterHosts.filter(host => (host.groupMode || host.group_mode) === 'direct').length;
   const activeMetric = catalog.find(item => item.metric === metric);
-  const visibleAgents = fleetMode ? [] : selectedAgents.length ? selectedAgents : agentOptions.slice(0, 3).map(option => option.value);
+  const visibleAgents = fleetMode ? [] : selectedAgents.length ? selectedAgents : scopedAgentOptions.slice(0, 3).map(option => option.value);
+  const activeCluster = selectedCluster === 'all' ? undefined : selectedCluster;
   const rangePaused = fixedRangeEndMs !== null;
   const livePaused = rangePaused || !pageVisible;
   const storageStatus = storage?.status || 'unknown';
   const assessment = metricAssessment(metric, result, storageStatus);
 
-  async function loadMetrics(nextMetric = metric, nextAgents = visibleAgents, nextRangeMinutes = rangeMinutes, nextNowMs = fixedRangeEndMs ?? undefined) {
+  async function loadMetrics(nextMetric = metric, nextAgents = visibleAgents, nextRangeMinutes = rangeMinutes, nextNowMs = fixedRangeEndMs ?? undefined, nextCluster = activeCluster) {
     const queryStart = performance.now();
     setLoading(true);
     setError('');
@@ -1041,6 +1071,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
       const data = await queryController.queryRange({
         metric: nextMetric,
         agents: nextAgents,
+        cluster: nextCluster,
         rangeMinutes: nextRangeMinutes,
         nowMs: nextNowMs,
         topN: fleetMode ? 12 : undefined,
@@ -1073,9 +1104,9 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   }, []);
 
   useEffect(() => {
-    if (fleetMode || selectedAgents.length || agentOptions.length === 0) return;
-    setSelectedAgents(agentOptions.slice(0, 3).map(option => option.value));
-  }, [agentOptions, selectedAgents.length, fleetMode]);
+    if (fleetMode || selectedAgents.length || scopedAgentOptions.length === 0) return;
+    setSelectedAgents(scopedAgentOptions.slice(0, 3).map(option => option.value));
+  }, [scopedAgentOptions, selectedAgents.length, fleetMode]);
 
   useEffect(() => {
     if (!metric) return;
@@ -1083,8 +1114,8 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
       setLiveStatus('paused-hidden');
       return;
     }
-    loadMetrics(metric, visibleAgents, rangeMinutes, fixedRangeEndMs ?? undefined);
-  }, [metric, selectedAgents.join(','), rangeMinutes, pageVisible, fixedRangeEndMs, fleetMode]);
+    loadMetrics(metric, visibleAgents, rangeMinutes, fixedRangeEndMs ?? undefined, activeCluster);
+  }, [metric, selectedAgents.join(','), rangeMinutes, pageVisible, fixedRangeEndMs, fleetMode, selectedCluster]);
 
   useEffect(() => {
     const onVisibilityChange = () => setPageVisible(document.visibilityState !== 'hidden');
@@ -1137,6 +1168,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
         const patch = await queryController.queryRange({
           metric,
           agents: visibleAgents,
+          cluster: activeCluster,
           startMs,
           endMs,
           stepMs: 10_000,
@@ -1153,76 +1185,123 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
       }
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [invalidatedRange, metric, selectedAgents.join(','), rangeMinutes, livePaused, fleetMode]);
+  }, [invalidatedRange, metric, selectedAgents.join(','), rangeMinutes, livePaused, fleetMode, selectedCluster]);
 
   const seriesStore = useMemo(() => new SeriesStore(result), [result]);
   const seriesCount = seriesStore.seriesCount();
   const pointCount = seriesStore.pointCount();
   const storageTone = storageStatus === 'ok' ? 'success' : storageStatus === 'disabled' ? 'default' : 'warning';
 
-  return <Card id="metrics" className="metrics-panel" variant="outlined" title={<Space size={8}><span>时序洞察</span><Tag color={storageTone}>{storageStatus}</Tag><Tag>{liveStatus}</Tag>{livePaused && <Tag color="gold">live paused</Tag>}</Space>}>
+  return <Card id="metrics" className="metrics-panel metrics-panel-apple" variant="outlined">
     <div className="metrics-layout">
+      <div className="metrics-hero">
+        <div>
+          <span className="metrics-eyebrow">METRICS OVERVIEW</span>
+          <Typography.Title level={2}>集群健康洞察</Typography.Title>
+          <Typography.Text type="secondary">选择一个集群，直接观察 heartbeat 架构、plan 收敛、采集实效和发送链路。</Typography.Text>
+        </div>
+        <Space size={8} wrap className="metrics-status-strip">
+          <Tag color={storageTone}>{storageStatus}</Tag>
+          <Tag>{liveStatus}</Tag>
+          {livePaused && <Tag color="gold">live paused</Tag>}
+          {fleetMode && <Tag color="cyan">TopN + aggregate</Tag>}
+        </Space>
+      </div>
+      <div className="metrics-topline">
+        <div className="metrics-scope-card metrics-control-card">
+          <span className="metrics-field-label">分析范围</span>
+          <Select
+            className="metrics-control"
+            value={selectedCluster}
+            options={clusterOptions}
+            showSearch
+            optionFilterProp="label"
+            onChange={value => {
+              setSelectedCluster(value);
+              setSelectedAgents([]);
+              setFleetMode(true);
+            }}
+          />
+        </div>
+        <div className="metrics-scope-card"><span>在线</span><b>{clusterAliveCount}</b><em>/ {clusterHosts.length}</em></div>
+        <div className="metrics-scope-card"><span>Leader</span><b>{clusterLeaderCount}</b><em>nodes</em></div>
+        <div className="metrics-scope-card"><span>Direct</span><b>{clusterDirectCount}</b><em>nodes</em></div>
+      </div>
       <div className="metrics-control-grid">
-        <Segmented
-          value={metricPresetValue(metric)}
-          options={[
-            { label: '手动指标', value: 'manual' },
-            { label: '架构健康', value: 'heartbeat-architecture' },
-            { label: '计划收敛', value: 'plan-convergence' },
-            { label: '采集实效', value: 'agent-freshness' },
-            { label: '发送链路', value: 'send-path' }
-          ]}
-          onChange={value => {
-            if (value === 'manual') {
+        <div className="metrics-control-card metrics-preset-card">
+          <span className="metrics-field-label">健康视角</span>
+          <Segmented
+            value={metricPresetValue(metric)}
+            options={[
+              { label: '手动指标', value: 'manual' },
+              { label: '架构健康', value: 'heartbeat-architecture' },
+              { label: '计划收敛', value: 'plan-convergence' },
+              { label: '采集实效', value: 'agent-freshness' },
+              { label: '发送链路', value: 'send-path' }
+            ]}
+            onChange={value => {
+              if (value === 'manual') {
+                setFleetMode(false);
+                return;
+              }
+              const preset = metricPreset(String(value));
+              if (!preset) return;
+              setMetric(preset.metric);
+              setRangeMinutes(preset.rangeMinutes);
+              setSelectedAgents([]);
+              setFleetMode(true);
+            }}
+          />
+        </div>
+        <div className="metrics-control-card">
+          <span className="metrics-field-label">指标</span>
+          <Select
+            className="metrics-control"
+            value={metric}
+            options={metricOptions}
+            loading={!catalog.length}
+            showSearch
+            optionFilterProp="label"
+            onChange={value => {
+              setMetric(value);
               setFleetMode(false);
-              return;
-            }
-            const preset = metricPreset(String(value));
-            if (!preset) return;
-            setMetric(preset.metric);
-            setRangeMinutes(preset.rangeMinutes);
-            setSelectedAgents([]);
-            setFleetMode(true);
-          }}
-        />
-        <Select
-          className="metrics-control"
-          value={metric}
-          options={metricOptions}
-          loading={!catalog.length}
-          onChange={value => {
-            setMetric(value);
-            setFleetMode(false);
-          }}
-        />
-        <Select
-          mode="multiple"
-          className="metrics-control"
-          maxTagCount="responsive"
-          value={selectedAgents}
-          options={agentOptions}
-          placeholder={fleetMode ? '全局 TopN + aggregate' : '默认选择前 3 台在线 host'}
-          onChange={values => {
-            setSelectedAgents(values);
-            setFleetMode(false);
-          }}
-        />
-        <Segmented
-          value={rangeMinutes}
-          options={[
-            { label: '15m', value: 15 },
-            { label: '30m', value: 30 },
-            { label: '1h', value: 60 },
-            { label: '6h', value: 360 }
-          ]}
-          onChange={value => setRangeMinutes(Number(value))}
-        />
-        <Space.Compact>
-          <Button onClick={() => setFixedRangeEndMs(current => current === null ? Date.now() : null)}>
-            {rangePaused ? '跟随最新' : '暂停窗口'}
-          </Button>
-          <Button type="primary" loading={loading} onClick={() => loadMetrics()}>刷新时序</Button>
-        </Space.Compact>
+            }}
+          />
+        </div>
+        <div className="metrics-control-card">
+          <span className="metrics-field-label">Host 明细</span>
+          <Select
+            mode="multiple"
+            className="metrics-control"
+            maxTagCount="responsive"
+            value={selectedAgents}
+            options={scopedAgentOptions}
+            placeholder={fleetMode ? '当前范围 TopN + aggregate' : '默认选择前 3 台在线 host'}
+            onChange={values => {
+              setSelectedAgents(values);
+              setFleetMode(false);
+            }}
+          />
+        </div>
+        <div className="metrics-control-card metrics-actions-card">
+          <span className="metrics-field-label">时间窗口</span>
+          <Segmented
+            value={rangeMinutes}
+            options={[
+              { label: '15m', value: 15 },
+              { label: '30m', value: 30 },
+              { label: '1h', value: 60 },
+              { label: '6h', value: 360 }
+            ]}
+            onChange={value => setRangeMinutes(Number(value))}
+          />
+          <Space.Compact>
+            <Button onClick={() => setFixedRangeEndMs(current => current === null ? Date.now() : null)}>
+              {rangePaused ? '跟随最新' : '暂停窗口'}
+            </Button>
+            <Button type="primary" loading={loading} onClick={() => loadMetrics()}>刷新时序</Button>
+          </Space.Compact>
+        </div>
       </div>
       <div className="metrics-health-grid">
         <Statistic title="写入队列" value={storage?.queue_depth ?? 0} />
