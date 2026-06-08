@@ -89,3 +89,50 @@ Result:
 - The previous “always zero” timing gaps are fixed for `agent_encode_ms`, `agent_send_ms`, `leader_collect_ms`, and `group_latency_ms`.
 - `cdn2` remains fully visible on all coordinators.
 - The short-window `cdn2` sequence gap count is `0` on all coordinators after the latest rollout.
+
+## Latest Health Metrics Review
+
+Verification scope:
+
+- Online API/UI verification passed on all three coordinators: `/api/metrics/catalog` contains the heartbeat health metrics, the static frontend assets contain the health presets, and `/api/metrics/query_range` returns points for each preset metric.
+- Verified metrics: `group.status_unhealthy`, `group.stale_member_count`, `group.direct_fallback_count`, `group.plan_lag`, `heartbeat.agent_collect_ms`, and `heartbeat.agent_send_ms`.
+- Window: latest 60 minutes collected from coordinator-local SQLite.
+
+Coordinator-level latest results:
+
+| Coordinator | Agents | Heartbeat rows | Arrival p95 | Arrival max | `seq_gap > 1` | Group rows | Group ok | Group partial | Group stale plan | Group plan lag p95 | Agent send p95 | Group latency p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `fdbd:dc05:11:634::45` | 471 | 111868 | 5106 ms | 19996 ms | 28 | 10161 | 9935 | 88 | 138 | 3010807002 | 2 ms | 1 ms |
+| `fdbd:dc05:13:10c::40` | 471 | 111868 | 5109 ms | 31074 ms | 23 | 10122 | 9905 | 75 | 142 | 2894767122 | 2 ms | 1 ms |
+| `fdbd:dc07:0:810::44` | 471 | 111868 | 5113 ms | 15184 ms | 21 | 10124 | 9917 | 99 | 108 | 2809445064 | 2 ms | 2 ms |
+
+`cdn2` latest results:
+
+| Coordinator | Agents | Arrival p95 | Arrival p99 | Arrival max | `seq_gap > 1` | Group ok | Group partial | Group stale plan | Direct fallback p95 | Direct fallback max | Plan lag p95 | Plan lag max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `fdbd:dc05:11:634::45` | 50 | 5036 ms | 8887 ms | 15041 ms | 4 | 1522 | 11 | 18 | 0 | 7 | 0 | 3977717525 |
+| `fdbd:dc05:13:10c::40` | 50 | 5064 ms | 9315 ms | 14505 ms | 1 | 1534 | 26 | 9 | 0 | 10 | 0 | 2717142775 |
+| `fdbd:dc07:0:810::44` | 50 | 5042 ms | 9576 ms | 14244 ms | 2 | 1534 | 25 | 14 | 0 | 5 | 0 | 4010505202 |
+
+Current assessment:
+
+- Healthy signal: all coordinators still observe `471` agents overall and `50/50` `cdn2` agents, so there is no fleet-wide heartbeat visibility collapse.
+- Healthy signal: heartbeat arrival p95 remains close to the 5s target; `cdn2` p99 stays below 10s and max stays below the 30s TTL in this window.
+- Healthy signal: agent send and group latency instrumentation is now visible and low; p95 is `1-2 ms`, which supports the low-resource hot-path design.
+- Tail risk: low-volume `partial` and `stale_plan` remain visible in group samples. The architecture should continue treating these as degraded telemetry instead of hiding them behind averages.
+- Tail risk: `direct_fallback_count` p95 is `0`, but max reaches `5-10` in `cdn2`; UI presets and alerting should use max/topN or tail buckets, not only average.
+- Tail risk: `seq_gap > 1` is rare but non-zero. It does not indicate continuous loss, but it should stay in the health view because rollout, restart, network retry, or coordinator delay can all surface here.
+
+Design or implementation defects exposed by metrics:
+
+- `group.plan_lag` is currently not a trustworthy arithmetic lag metric. The implementation uses an unsigned hash as `plan_generation`, while `plan_lag = max(0, expected_generation - agent_plan_generation)` assumes monotonic generations. This creates huge values such as `2.8B-3.0B` p95 overall and multi-billion max values in `cdn2`, which can falsely imply severe convergence lag.
+- Zero or old `agent_plan_generation` samples after rollout are mixed with normal samples. Metrics need a generation epoch or rollout-aware cold-start state so initial unknown generation does not look like multi-billion lag.
+- `group.plan_lag` should either become a boolean/categorical mismatch metric for hash generations, or `plan_generation` must change to a monotonic coordinator-side version before arithmetic lag is used.
+- `plan_lag` is still stored through `debug_json` extraction instead of a first-class column. This is acceptable for verification but too fragile for a health preset and alerting path.
+- `partial` and `stale_plan` lack enough structured root-cause detail. The next schema/API iteration should expose `expected_generation`, `agent_plan_generation`, `reject_reason_json`, and member-level lag/reject counters as first-class queryable data.
+
+Required design correction:
+
+- Treat `group.plan_lag` as experimental until generation semantics are fixed.
+- Prefer `group.plan_mismatch` or `group.generation_mismatch` when generation is hash-like and only equality is meaningful.
+- If operators need “lag” severity, replace hash generation with a monotonic plan version scoped by coordinator, cluster, area, and group, and include an epoch to distinguish rollout/cold-start from true delayed convergence.

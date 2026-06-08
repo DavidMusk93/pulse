@@ -70,6 +70,78 @@ flowchart LR
 - Query API 必须先执行 series/point budget，再返回 `truncated`、`suggested_step_ms`、TopN 明细和 aggregate 聚合线，前端必须诚实展示降级状态。
 - SSE 只负责 invalidation 和 bounded replay；断线或不可见页面由前端补偿查询和 live pause 控制，避免后台页面持续消耗资源。
 
+### 心跳链路架构图
+
+心跳链路必须同时满足三个目标：agent 热路径极轻、group fan-in 可退化、metrics 能直接证明链路健壮性和采集实效性。因此架构上把控制面 plan 下发、数据面 heartbeat 上报、观测面 SQLite/SSE 查询分开建模。
+
+```mermaid
+flowchart LR
+  subgraph AgentRuntime["agent runtime"]
+    F["Follower agent<br/>collect + seq + timing"]
+    L["Group leader<br/>fan-in collector"]
+    CACHE["Cached tide_worker probe<br/>low-frequency discovery"]
+    F --> CACHE
+    F -->|follower reply<br/>agent_plan_generation| L
+    F -.->|direct fallback<br/>heartbeat_path=direct| C
+    L -->|batch heartbeat<br/>leader_collect_ms / group_sent_at_ms| C
+  end
+
+  subgraph CoordinatorRuntime["coordinator runtime"]
+    C["Heartbeat handler<br/>validate + current view"]
+    PLAN["Group plan builder<br/>expected_generation"]
+    SAMPLE["Metric sample extractor<br/>gap / fallback / lag"]
+    Q["AsyncLocalMetricStorage<br/>bounded queue"]
+    W["SQLite writer<br/>single transaction owner"]
+    DB[("SQLite WAL<br/>heartbeat + group samples")]
+    PLAN -->|plan response| F
+    C --> PLAN
+    C --> SAMPLE
+    SAMPLE -->|immutable command| Q
+    Q --> W
+    W --> DB
+  end
+
+  subgraph MetricsFeedback["metrics feedback loop"]
+    API["/api/metrics/query_range<br/>TopN + aggregate"]
+    SSE["/api/metrics/stream<br/>metric.invalidate + replay"]
+    UI["AntD MetricsPanel<br/>health presets"]
+    DB --> API
+    W --> SSE
+    API --> UI
+    SSE --> UI
+    UI -->|架构健康| GH["group.status_unhealthy<br/>partial / stale_plan"]
+    UI -->|计划收敛| PL["group.plan_lag<br/>generation mismatch"]
+    UI -->|采集实效| AC["heartbeat.agent_collect_ms<br/>hot-path cost"]
+    UI -->|发送链路| AS["heartbeat.agent_send_ms<br/>agent to coordinator"]
+  end
+```
+
+链路语义：
+
+- `Follower agent -> Group leader -> Coordinator` 是正常低请求数路径，group leader 只做批量转发和轻量统计，不承载唯一事实源。
+- `Follower agent -> Coordinator` 的 direct fallback 是架构级安全阀，必须保留并结构化记录；它的健康判断不能只看平均值，要看 p95/p99 和 max。
+- `Group plan builder -> Agent` 是控制面，`expected_generation` 与 agent 上报的 `agent_plan_generation` 必须用可解释语义比较，不能让观测指标依赖不可排序的 hash。
+- `Metric sample extractor -> SQLite writer` 是观测面，写入异步化是硬边界；任何 SQLite busy、checkpoint、cleanup 都不能反压 heartbeat handler。
+- `SQLite -> Metrics API/SSE -> MetricsPanel` 是反馈面，preset 必须直接回答“架构是否退化、plan 是否收敛、agent 采集是否新鲜、发送链路是否轻量”。
+
+### 当前 metrics 反推的设计修正
+
+线上 SQLite 与 Metrics Panel health preset 已经能证明一部分设计假设，也暴露了当前指标语义的缺陷：
+
+- 心跳可见性符合预期：三个 coordinator 在 1 小时窗口均观察到 `471` 个 agent，`cdn2` 均为 `50/50`，说明当前链路没有整体不可见问题。
+- 到达间隔符合 5s heartbeat 设计：整体 arrival p95 约 `5.1s`，`cdn2` p95 约 `5.0s`，p99 低于 10s，说明低资源路径没有明显牺牲数据新鲜度。
+- agent 发送与 group leader 链路成本较低：`heartbeat.agent_send_ms` p95 约 `2ms`，`group.group_latency_ms` p95 约 `1-2ms`，说明热路径 timing instrumentation 已能验证轻量化目标。
+- `partial`、`stale_plan` 和少量 `seq_gap` 仍存在尾部样本，因此 UI 必须展示 TopN、p99/max 和事件，不允许只用平均值表达健康。
+- `group.direct_fallback_count` p95/p99 大多为 `0`，但 `cdn2` 单窗口 max 可达 `5-10`，说明 direct fallback 是低频尾部事件，必须作为退化信号保留。
+- `group.plan_lag` 当前语义存在设计/实现缺陷：如果 `plan_generation` 是 unsigned hash，则只有相等/不相等语义，不能执行 `expected_generation - agent_plan_generation`；当前线上出现数十亿级 `plan_lag`，更像指标语义错误或冷启动混入，而不是实际传播延迟。
+
+因此 `group.plan_lag` 需要按以下规则修正后才能作为健康 preset 的强结论：
+
+- 如果 generation 继续使用 hash，指标应改为 `group.plan_mismatch` 或 `group.generation_mismatch`，值为 `0/1` 或按成员数计数。
+- 如果需要表达“滞后多少代”，generation 必须改为 coordinator 侧单调递增版本，并带上 cluster/area/group 作用域和 rollout epoch。
+- `agent_plan_generation` 为 `0` 或缺失时应标记为 `unknown/cold_start`，不能参与 lag 数值聚合。
+- `expected_generation`、`agent_plan_generation`、`plan_lag`、`reject_reason_json` 应从 `debug_json` 升级为结构化列，避免 health preset 依赖 JSON extraction。
+
 ## 非目标
 
 - 不实现跨 coordinator 的全局一致查询。
