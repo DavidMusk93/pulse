@@ -1387,6 +1387,16 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
               TopN
             </Button>
           </Space.Compact>
+          <div className="metrics-inline-stats">
+            <div className="metrics-inline-stat">
+              <span>候选 Host</span>
+              <b>{scopedAgentOptions.length}</b>
+            </div>
+            <div className="metrics-inline-stat">
+              <span>模式</span>
+              <b>{fleetMode ? 'TopN' : `${selectedAgents.length || draftAgents.length} 台`}</b>
+            </div>
+          </div>
         </div>
         <div className="metrics-control-card metrics-actions-card">
           <span className="metrics-field-label">时间窗口</span>
@@ -1406,6 +1416,16 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
             </Button>
             <Button type="primary" loading={loading} onClick={() => loadMetrics()}>刷新时序</Button>
           </Space.Compact>
+          <div className="metrics-inline-stats">
+            <div className="metrics-inline-stat">
+              <span>窗口</span>
+              <b>{rangeMinutes >= 60 ? `${rangeMinutes / 60}h` : `${rangeMinutes}m`}</b>
+            </div>
+            <div className="metrics-inline-stat">
+              <span>状态</span>
+              <b>{rangePaused ? '暂停' : '跟随'}</b>
+            </div>
+          </div>
         </div>
       </div>
       {error && <Typography.Text type="danger">{error}</Typography.Text>}

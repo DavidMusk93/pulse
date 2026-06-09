@@ -285,7 +285,6 @@ body {
   align-items: stretch;
 }
 .metrics-control-card {
-  min-height: 104px;
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
@@ -294,6 +293,7 @@ body {
 }
 .metrics-control-grid > .metrics-control-card {
   grid-column: span 3;
+  min-height: 122px;
 }
 .metrics-actions-card {
   gap: 7px;
