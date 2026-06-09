@@ -241,45 +241,45 @@ body {
 }
 .metrics-topline {
   display: grid;
-  grid-template-columns: minmax(300px, .88fr) minmax(520px, 1.62fr);
-  gap: 12px;
+  grid-template-columns: minmax(300px, .72fr) minmax(560px, 1.78fr);
+  gap: 10px;
   align-items: center;
-  padding: 12px;
-  border: 1px solid rgba(148, 163, 184, .18);
-  border-radius: 20px;
-  background: rgba(255, 255, 255, .72);
+  padding: 8px;
+  border: 1px solid rgba(148, 163, 184, .14);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, .62);
 }
 .metrics-scope-card,
 .metrics-control-card {
   min-width: 0;
-  border: 1px solid rgba(148, 163, 184, .22);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, .9);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, .045);
+  border: 1px solid rgba(148, 163, 184, .18);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .86);
+  box-shadow: none;
 }
 .metrics-scope-card {
   min-height: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  justify-content: flex-start;
-  gap: 8px;
+  justify-content: center;
+  gap: 6px;
   border: 0;
   background: transparent;
   box-shadow: none;
 }
 .metrics-scope-stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-rows: repeat(2, minmax(50px, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-rows: none;
   gap: 6px;
 }
 .metrics-scope-stats .metrics-scope-card {
-  min-height: 50px;
-  padding: 8px 10px;
-  border: 1px solid rgba(148, 163, 184, .16);
-  border-radius: 15px;
-  background: rgba(255, 255, 255, .82);
+  min-height: 46px;
+  padding: 7px 9px;
+  border: 1px solid rgba(148, 163, 184, .14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .78);
 }
 .metrics-scope-card span {
   color: #86868b;
@@ -288,14 +288,14 @@ body {
 }
 .metrics-scope-card b {
   color: #1d1d1f;
-  font-size: 21px;
+  font-size: 19px;
   line-height: 1;
   letter-spacing: -.04em;
   font-variant-numeric: tabular-nums;
 }
 .metrics-scope-card em {
   color: #6e6e73;
-  font-size: 12px;
+  font-size: 11px;
   font-style: normal;
 }
 .metrics-control-grid {
