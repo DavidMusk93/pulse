@@ -1308,6 +1308,16 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
               setFleetMode(true);
             }}
           />
+          <div className="metrics-inline-stats">
+            <div className="metrics-inline-stat">
+              <span>写入队列</span>
+              <b>{storage?.queue_depth ?? 0}</b>
+            </div>
+            <div className="metrics-inline-stat">
+              <span>已写入</span>
+              <b>{storage?.written_commands ?? 0}</b>
+            </div>
+          </div>
         </div>
         <div className="metrics-control-card">
           <span className="metrics-field-label">指标</span>
@@ -1323,6 +1333,16 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
               setFleetMode(false);
             }}
           />
+          <div className="metrics-inline-stats">
+            <div className="metrics-inline-stat">
+              <span>失败</span>
+              <b>{storage?.failed_commands ?? 0}</b>
+            </div>
+            <div className="metrics-inline-stat">
+              <span>事务批次</span>
+              <b>{storage?.transaction_batches ?? 0}</b>
+            </div>
+          </div>
         </div>
         <div className="metrics-control-card">
           <span className="metrics-field-label">Host 明细</span>
@@ -1387,12 +1407,6 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
             <Button type="primary" loading={loading} onClick={() => loadMetrics()}>刷新时序</Button>
           </Space.Compact>
         </div>
-      </div>
-      <div className="metrics-health-grid">
-        <Statistic title="写入队列" value={storage?.queue_depth ?? 0} />
-        <Statistic title="已写入" value={storage?.written_commands ?? 0} />
-        <Statistic title="失败" value={storage?.failed_commands ?? 0} />
-        <Statistic title="事务批次" value={storage?.transaction_batches ?? 0} />
       </div>
       {error && <Typography.Text type="danger">{error}</Typography.Text>}
       <div className="metrics-chart-card">
