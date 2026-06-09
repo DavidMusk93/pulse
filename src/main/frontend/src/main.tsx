@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { createRoot } from 'react-dom/client';
 import { init, use, type EChartsOption } from 'echarts/core';
 import { LineChart } from 'echarts/charts';
@@ -1008,6 +1008,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const [storage, setStorage] = useState<MetricStorageHealth | null>(null);
   const [metric, setMetric] = useState('agent.thread_count');
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
+  const [draftAgents, setDraftAgents] = useState<string[]>([]);
   const [selectedCluster, setSelectedCluster] = useState('all');
   const [fleetMode, setFleetMode] = useState(false);
   const [rangeMinutes, setRangeMinutes] = useState(30);
@@ -1020,16 +1021,17 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState !== 'hidden');
   const [fixedRangeEndMs, setFixedRangeEndMs] = useState<number | null>(null);
   const [frontendMetrics, setFrontendMetrics] = useState({ queryMs: 0, renderMs: 0 });
+  const [isApplyingHostSelection, startHostSelectionTransition] = useTransition();
   const queryController = useMemo(() => new MetricQueryController(fetchJson), []);
   const renderScheduler = useMemo(() => new RenderScheduler(), []);
-  const agentOptions = useMemo(() => sortHosts(hosts)
+  const deferredHosts = useDeferredValue(hosts);
+  const agentOptions = useMemo(() => sortHosts(deferredHosts)
     .filter(host => host.status === 'alive')
-    .slice(0, 120)
     .map(host => ({
       value: agentId(host),
-      label: normalizeAddress(host.ip) === '-' ? agentId(host) : normalizeAddress(host.ip)
+      label: `${normalizeAddress(host.ip) === '-' ? agentId(host) : normalizeAddress(host.ip)} · ${host.cluster || 'unknown'}`
     }))
-    .filter(option => option.value), [hosts]);
+    .filter(option => option.value), [deferredHosts]);
   const metricOptions = useMemo(() => catalog.map(item => ({
     value: item.metric,
     label: `${item.title} (${item.unit || '-'})`
@@ -1056,9 +1058,10 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const clusterHosts = useMemo(() => selectedCluster === 'all'
     ? hosts
     : hosts.filter(host => (host.cluster && host.cluster !== '-' ? host.cluster : 'unknown') === selectedCluster), [hosts, selectedCluster]);
+  const clusterAgentSet = useMemo(() => new Set(clusterHosts.map(agentId)), [clusterHosts]);
   const scopedAgentOptions = useMemo(() => selectedCluster === 'all'
     ? agentOptions
-    : agentOptions.filter(option => clusterHosts.some(host => agentId(host) === option.value)), [agentOptions, clusterHosts, selectedCluster]);
+    : agentOptions.filter(option => clusterAgentSet.has(option.value)), [agentOptions, clusterAgentSet, selectedCluster]);
   const clusterAliveCount = clusterHosts.filter(host => host.status === 'alive').length;
   const clusterLeaderCount = clusterHosts.filter(host => (host.groupMode || host.group_mode) === 'leader').length;
   const clusterDirectCount = clusterHosts.filter(host => (host.groupMode || host.group_mode) === 'direct').length;
@@ -1069,6 +1072,9 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const livePaused = rangePaused || !pageVisible;
   const storageStatus = storage?.status || 'unknown';
   const assessment = metricAssessment(metric, result, storageStatus);
+  const selectedAgentKey = selectedAgents.join(',');
+  const draftAgentKey = draftAgents.join(',');
+  const hostSelectionDirty = draftAgentKey !== selectedAgentKey || (fleetMode && draftAgents.length > 0);
 
   async function loadMetrics(nextMetric = metric, nextAgents = visibleAgents, nextRangeMinutes = rangeMinutes, nextNowMs = fixedRangeEndMs ?? undefined, nextCluster = activeCluster) {
     const queryStart = performance.now();
@@ -1112,8 +1118,14 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
 
   useEffect(() => {
     if (fleetMode || selectedAgents.length || scopedAgentOptions.length === 0) return;
-    setSelectedAgents(scopedAgentOptions.slice(0, 3).map(option => option.value));
+    const defaults = scopedAgentOptions.slice(0, 3).map(option => option.value);
+    setSelectedAgents(defaults);
+    setDraftAgents(defaults);
   }, [scopedAgentOptions, selectedAgents.length, fleetMode]);
+
+  useEffect(() => {
+    setDraftAgents(selectedAgents);
+  }, [selectedAgentKey]);
 
   useEffect(() => {
     if (!metric) return;
@@ -1226,6 +1238,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
             onChange={value => {
               setSelectedCluster(value);
               setSelectedAgents([]);
+              setDraftAgents([]);
               setFleetMode(true);
             }}
           />
@@ -1256,6 +1269,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
               setMetric(preset.metric);
               setRangeMinutes(preset.rangeMinutes);
               setSelectedAgents([]);
+              setDraftAgents([]);
               setFleetMode(true);
             }}
           />
@@ -1280,15 +1294,44 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
           <Select
             mode="multiple"
             className="metrics-control"
-            maxTagCount="responsive"
-            value={selectedAgents}
+            maxTagCount={2}
+            maxTagTextLength={18}
+            maxTagPlaceholder={omitted => `+${omitted.length}`}
+            value={draftAgents}
             options={scopedAgentOptions}
+            showSearch
+            optionFilterProp="label"
+            virtual
+            listHeight={320}
+            allowClear
             placeholder={fleetMode ? '当前范围 TopN + aggregate' : '默认选择前 3 台在线 host'}
-            onChange={values => {
-              setSelectedAgents(values);
-              setFleetMode(false);
-            }}
+            onChange={setDraftAgents}
           />
+          <Space.Compact className="metrics-host-apply">
+            <Button
+              type="primary"
+              size="small"
+              disabled={!hostSelectionDirty || !draftAgents.length}
+              loading={isApplyingHostSelection}
+              onClick={() => startHostSelectionTransition(() => {
+                setSelectedAgents(draftAgents);
+                setFleetMode(false);
+              })}
+            >
+              应用 Host
+            </Button>
+            <Button
+              size="small"
+              disabled={fleetMode && !draftAgents.length && !selectedAgents.length}
+              onClick={() => startHostSelectionTransition(() => {
+                setDraftAgents([]);
+                setSelectedAgents([]);
+                setFleetMode(true);
+              })}
+            >
+              TopN
+            </Button>
+          </Space.Compact>
         </div>
         <div className="metrics-control-card metrics-actions-card">
           <span className="metrics-field-label">时间窗口</span>

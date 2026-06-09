@@ -302,6 +302,12 @@ body {
   width: 100%;
   min-width: 0;
 }
+.metrics-host-apply {
+  width: 100%;
+}
+.metrics-host-apply .ant-btn {
+  flex: 1 1 0;
+}
 .metrics-panel .ant-select-selector,
 .metrics-panel .ant-segmented,
 .metrics-panel .ant-btn {
