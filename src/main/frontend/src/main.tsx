@@ -1313,16 +1313,6 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
               setFleetMode(true);
             }}
           />
-          <div className="metrics-inline-stats">
-            <div className="metrics-inline-stat">
-              <span>写入队列</span>
-              <b>{storage?.queue_depth ?? 0}</b>
-            </div>
-            <div className="metrics-inline-stat">
-              <span>已写入</span>
-              <b>{storage?.written_commands ?? 0}</b>
-            </div>
-          </div>
         </div>
         <div className="metrics-control-card">
           <span className="metrics-field-label">指标</span>
@@ -1338,16 +1328,6 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
               setFleetMode(false);
             }}
           />
-          <div className="metrics-inline-stats">
-            <div className="metrics-inline-stat">
-              <span>失败</span>
-              <b>{storage?.failed_commands ?? 0}</b>
-            </div>
-            <div className="metrics-inline-stat">
-              <span>事务批次</span>
-              <b>{storage?.transaction_batches ?? 0}</b>
-            </div>
-          </div>
         </div>
         <div className="metrics-control-card">
           <span className="metrics-field-label">Host 明细</span>
