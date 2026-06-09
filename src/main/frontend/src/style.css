@@ -203,18 +203,21 @@ body {
   box-shadow: 0 18px 52px rgba(15, 23, 42, .07), 0 1px 0 rgba(255, 255, 255, .96) inset !important;
 }
 .metrics-panel .ant-card-body {
-  padding: clamp(16px, 1.8vw, 24px) !important;
+  padding: clamp(14px, 1.55vw, 20px) !important;
 }
 .metrics-layout {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
 }
 .metrics-hero {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  min-height: 52px;
+  padding: 0 2px 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, .14);
 }
 .metrics-eyebrow,
 .metrics-field-label {
@@ -228,7 +231,7 @@ body {
 .metrics-hero h2.ant-typography {
   margin: 2px 0 4px;
   color: #1d1d1f;
-  font-size: clamp(24px, 2.35vw, 34px);
+  font-size: clamp(22px, 2.05vw, 30px);
   line-height: 1.08;
   letter-spacing: -.04em;
 }
@@ -238,8 +241,9 @@ body {
 }
 .metrics-topline {
   display: grid;
-  grid-template-columns: minmax(300px, 1.6fr) repeat(3, minmax(132px, .55fr));
-  gap: 10px;
+  grid-template-columns: minmax(360px, 2fr) repeat(3, minmax(128px, .62fr));
+  gap: 8px;
+  align-items: stretch;
 }
 .metrics-scope-card,
 .metrics-control-card {
@@ -250,8 +254,8 @@ body {
   box-shadow: 0 10px 24px rgba(15, 23, 42, .045);
 }
 .metrics-scope-card {
-  min-height: 74px;
-  padding: 12px 14px;
+  min-height: 64px;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -264,7 +268,7 @@ body {
 }
 .metrics-scope-card b {
   color: #1d1d1f;
-  font-size: 26px;
+  font-size: 24px;
   line-height: 1;
   letter-spacing: -.04em;
   font-variant-numeric: tabular-nums;
@@ -276,20 +280,23 @@ body {
 }
 .metrics-control-grid {
   display: grid;
-  grid-template-columns: minmax(330px, 1.35fr) minmax(260px, 1fr) minmax(300px, 1.12fr) minmax(300px, .95fr);
-  gap: 10px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 8px;
   align-items: stretch;
 }
 .metrics-control-card {
-  min-height: 88px;
-  padding: 12px;
+  min-height: 68px;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: flex-start;
+  gap: 7px;
+}
+.metrics-control-grid > .metrics-control-card {
+  grid-column: span 3;
 }
 .metrics-actions-card {
-  gap: 9px;
+  gap: 7px;
 }
 .metrics-actions-card .ant-space-compact {
   width: 100%;
@@ -307,20 +314,20 @@ body {
 }
 .metrics-host-apply .ant-btn {
   flex: 1 1 0;
-  height: 30px;
+  height: 28px;
   font-weight: 650;
 }
 .metrics-panel .ant-select-selector,
 .metrics-panel .ant-segmented,
 .metrics-panel .ant-btn {
-  border-radius: 14px !important;
+  border-radius: 13px !important;
 }
 .metrics-panel .ant-select-selector {
-  min-height: 40px;
+  min-height: 34px;
   align-items: center;
 }
 .metrics-panel .ant-select-multiple .ant-select-selector {
-  height: 40px;
+  height: 34px;
   overflow: hidden;
 }
 .metrics-panel .ant-select-multiple .ant-select-selection-overflow {
@@ -336,6 +343,7 @@ body {
   width: 100%;
   padding: 4px;
   background: #f1f5f9;
+  min-height: 34px;
 }
 .metrics-preset-card .ant-segmented-group {
   width: 100%;
@@ -353,12 +361,12 @@ body {
 .metrics-health-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 .metrics-health-grid .ant-statistic {
-  padding: 12px 14px;
+  padding: 10px 12px;
   border: 1px solid rgba(148, 163, 184, .18);
-  border-radius: 16px;
+  border-radius: 15px;
   background: rgba(255, 255, 255, .86);
 }
 .metrics-health-grid .ant-statistic-title {
@@ -373,9 +381,9 @@ body {
 .metrics-chart-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 9px;
   min-height: 260px;
-  padding: 16px;
+  padding: 14px;
   border: 1px solid rgba(148, 163, 184, .22);
   border-radius: 20px;
   background: #fff;
