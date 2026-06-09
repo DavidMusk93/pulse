@@ -195,27 +195,26 @@ body {
 }
 .metrics-panel-apple {
   overflow: hidden;
-  border-radius: 28px !important;
-  border-color: rgba(29, 29, 31, .08) !important;
+  border-radius: 24px !important;
+  border-color: rgba(148, 163, 184, .28) !important;
   background:
-    radial-gradient(circle at 12% 0%, rgba(10, 132, 255, .12), transparent 34%),
-    linear-gradient(180deg, rgba(255, 255, 255, .94), rgba(246, 246, 248, .92)) !important;
-  box-shadow: 0 24px 70px rgba(29, 29, 31, .09), 0 1px 0 rgba(255, 255, 255, .82) inset !important;
-  backdrop-filter: saturate(180%) blur(22px);
+    radial-gradient(circle at 16% 0%, rgba(37, 99, 235, .08), transparent 28%),
+    linear-gradient(180deg, #ffffff 0%, #f8fafc 100%) !important;
+  box-shadow: 0 18px 52px rgba(15, 23, 42, .07), 0 1px 0 rgba(255, 255, 255, .96) inset !important;
 }
 .metrics-panel .ant-card-body {
-  padding: clamp(18px, 2.2vw, 28px) !important;
+  padding: clamp(16px, 1.8vw, 24px) !important;
 }
 .metrics-layout {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 .metrics-hero {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 18px;
+  gap: 16px;
 }
 .metrics-eyebrow,
 .metrics-field-label {
@@ -227,11 +226,11 @@ body {
   text-transform: uppercase;
 }
 .metrics-hero h2.ant-typography {
-  margin: 4px 0 4px;
+  margin: 2px 0 4px;
   color: #1d1d1f;
-  font-size: clamp(26px, 2.7vw, 38px);
-  line-height: 1.05;
-  letter-spacing: -.045em;
+  font-size: clamp(24px, 2.35vw, 34px);
+  line-height: 1.08;
+  letter-spacing: -.04em;
 }
 .metrics-status-strip {
   justify-content: flex-end;
@@ -239,20 +238,20 @@ body {
 }
 .metrics-topline {
   display: grid;
-  grid-template-columns: minmax(260px, 1.5fr) repeat(3, minmax(120px, .52fr));
-  gap: 12px;
+  grid-template-columns: minmax(300px, 1.6fr) repeat(3, minmax(132px, .55fr));
+  gap: 10px;
 }
 .metrics-scope-card,
 .metrics-control-card {
   min-width: 0;
-  border: 1px solid rgba(29, 29, 31, .07);
-  border-radius: 22px;
-  background: rgba(255, 255, 255, .72);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, .9) inset, 0 10px 28px rgba(29, 29, 31, .045);
+  border: 1px solid rgba(148, 163, 184, .22);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, .9);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, .045);
 }
 .metrics-scope-card {
-  min-height: 82px;
-  padding: 14px 16px;
+  min-height: 74px;
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -265,7 +264,7 @@ body {
 }
 .metrics-scope-card b {
   color: #1d1d1f;
-  font-size: 28px;
+  font-size: 26px;
   line-height: 1;
   letter-spacing: -.04em;
   font-variant-numeric: tabular-nums;
@@ -277,13 +276,13 @@ body {
 }
 .metrics-control-grid {
   display: grid;
-  grid-template-columns: minmax(320px, 1.35fr) minmax(260px, 1fr) minmax(280px, 1fr) minmax(310px, .95fr);
-  gap: 12px;
+  grid-template-columns: minmax(330px, 1.35fr) minmax(260px, 1fr) minmax(300px, 1.12fr) minmax(300px, .95fr);
+  gap: 10px;
   align-items: stretch;
 }
 .metrics-control-card {
-  min-height: 98px;
-  padding: 14px;
+  min-height: 88px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -304,9 +303,12 @@ body {
 }
 .metrics-host-apply {
   width: 100%;
+  gap: 8px;
 }
 .metrics-host-apply .ant-btn {
   flex: 1 1 0;
+  height: 30px;
+  font-weight: 650;
 }
 .metrics-panel .ant-select-selector,
 .metrics-panel .ant-segmented,
@@ -314,8 +316,21 @@ body {
   border-radius: 14px !important;
 }
 .metrics-panel .ant-select-selector {
-  min-height: 38px;
+  min-height: 40px;
   align-items: center;
+}
+.metrics-panel .ant-select-multiple .ant-select-selector {
+  height: 40px;
+  overflow: hidden;
+}
+.metrics-panel .ant-select-multiple .ant-select-selection-overflow {
+  flex-wrap: nowrap;
+}
+.metrics-panel .ant-select-multiple .ant-select-selection-item {
+  max-width: 160px;
+}
+.metrics-panel .ant-select-multiple .ant-select-selection-placeholder {
+  inset-inline-start: 12px;
 }
 .metrics-preset-card .ant-segmented {
   width: 100%;
@@ -336,9 +351,9 @@ body {
 }
 .metrics-health-grid .ant-statistic {
   padding: 12px 14px;
-  border: 1px solid rgba(29, 29, 31, .07);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, .62);
+  border: 1px solid rgba(148, 163, 184, .18);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .86);
 }
 .metrics-health-grid .ant-statistic-title {
   margin-bottom: 4px !important;
@@ -355,10 +370,10 @@ body {
   gap: 10px;
   min-height: 260px;
   padding: 16px;
-  border: 1px solid rgba(29, 29, 31, .07);
-  border-radius: 24px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, .88) 0%, rgba(251, 251, 253, .82) 100%);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, .9) inset;
+  border: 1px solid rgba(148, 163, 184, .22);
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, .045);
 }
 .metrics-chart-head {
   display: flex;
