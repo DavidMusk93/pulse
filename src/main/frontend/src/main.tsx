@@ -1329,9 +1329,9 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
           <Select
             mode="multiple"
             className="metrics-control"
-            maxTagCount={1}
+            maxTagCount={0}
             maxTagTextLength={16}
-            maxTagPlaceholder={omitted => `已选 ${omitted.length + 1}`}
+            maxTagPlaceholder={() => `已选 ${draftAgents.length}`}
             value={draftAgents}
             options={scopedAgentOptions}
             showSearch
