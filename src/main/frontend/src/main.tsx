@@ -679,6 +679,9 @@ function App() {
   const [collapsedClusters, setCollapsedClusters] = useState<Record<string, boolean>>(() => loadCollapsedClusters());
   const viewport = useRef({ left: 0, top: 0 });
   const snapshotVersionRef = useRef('');
+  const scrollingRef = useRef(false);
+  const scrollIdleTimerRef = useRef<number | null>(null);
+  const pendingHostsRef = useRef<HostView[] | null>(null);
   const activeTargetHost = activeHost || activeCluster?.hosts[0] || null;
   const clusterAgentKey = useMemo(() => (activeCluster?.hosts || []).map(agentId).join(','), [activeCluster?.name, activeCluster?.hosts]);
 
@@ -697,15 +700,23 @@ function App() {
     viewport.current = { left: window.scrollX, top: window.scrollY };
     try {
       const data = await fetchJson<HostView[]>('/api/hosts');
-      recordLoadSamples(data);
-      setHosts(data);
+      if (scrollingRef.current) {
+        pendingHostsRef.current = data;
+      } else {
+        applyHosts(data);
+      }
       setError('');
-      requestAnimationFrame(() => window.scrollTo(viewport.current.left, viewport.current.top));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
+  }
+
+  function applyHosts(data: HostView[]) {
+    recordLoadSamples(data);
+    setHosts(data);
+    requestAnimationFrame(() => window.scrollTo(viewport.current.left, viewport.current.top));
   }
 
   async function refreshSnapshot(host: HostView) {
@@ -718,6 +729,30 @@ function App() {
     refreshHosts();
     const timer = window.setInterval(refreshHosts, 5000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const flushPendingHosts = () => {
+      scrollingRef.current = false;
+      if (!pendingHostsRef.current) return;
+      const pendingHosts = pendingHostsRef.current;
+      pendingHostsRef.current = null;
+      applyHosts(pendingHosts);
+    };
+    const onScroll = () => {
+      scrollingRef.current = true;
+      if (scrollIdleTimerRef.current) {
+        window.clearTimeout(scrollIdleTimerRef.current);
+      }
+      scrollIdleTimerRef.current = window.setTimeout(flushPendingHosts, 350);
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (scrollIdleTimerRef.current) {
+        window.clearTimeout(scrollIdleTimerRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
