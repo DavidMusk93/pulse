@@ -1288,11 +1288,11 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
           <Segmented
             value={metricPresetValue(metric)}
             options={[
-              { label: '手动指标', value: 'manual' },
-              { label: '架构健康', value: 'heartbeat-architecture' },
-              { label: '计划收敛', value: 'plan-convergence' },
-              { label: '采集实效', value: 'agent-freshness' },
-              { label: '发送链路', value: 'send-path' }
+              { label: '手动', value: 'manual' },
+              { label: '架构', value: 'heartbeat-architecture' },
+              { label: '计划', value: 'plan-convergence' },
+              { label: '采集', value: 'agent-freshness' },
+              { label: '发送', value: 'send-path' }
             ]}
             onChange={value => {
               if (value === 'manual') {
