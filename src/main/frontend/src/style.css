@@ -464,7 +464,9 @@ body {
   position: relative;
   background: hsl(var(--cluster-hue) 42% calc(76% - var(--load-level) * 28%)) !important;
   border: 0 !important;
-  backdrop-filter: saturate(140%) blur(18px);
+  contain: layout paint;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 244px;
 }
 .host-tile .ant-card-body {
   height: 100%;

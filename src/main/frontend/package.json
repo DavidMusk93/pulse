@@ -1,6 +1,7 @@
 {
   "scripts": {
-    "build": "vite build"
+    "build": "vite build",
+    "perf:smoothness": "node ../../../tools/ui-smoothness-regression.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "latest",
