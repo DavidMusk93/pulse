@@ -241,7 +241,7 @@ body {
 }
 .metrics-topline {
   display: grid;
-  grid-template-columns: minmax(360px, 2fr) repeat(3, minmax(128px, .62fr));
+  grid-template-columns: minmax(360px, 1.08fr) minmax(460px, 1.42fr);
   gap: 8px;
   align-items: stretch;
 }
@@ -254,12 +254,21 @@ body {
   box-shadow: 0 10px 24px rgba(15, 23, 42, .045);
 }
 .metrics-scope-card {
-  min-height: 64px;
+  min-height: 58px;
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
   justify-content: center;
   gap: 4px;
+}
+.metrics-scope-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(58px, 1fr));
+  gap: 8px;
+}
+.metrics-scope-stats .metrics-scope-card {
+  min-height: 0;
 }
 .metrics-scope-card span {
   color: #86868b;
@@ -268,7 +277,7 @@ body {
 }
 .metrics-scope-card b {
   color: #1d1d1f;
-  font-size: 24px;
+  font-size: 22px;
   line-height: 1;
   letter-spacing: -.04em;
   font-variant-numeric: tabular-nums;
@@ -293,7 +302,7 @@ body {
 }
 .metrics-control-grid > .metrics-control-card {
   grid-column: span 3;
-  min-height: 122px;
+  min-height: 104px;
 }
 .metrics-actions-card {
   gap: 7px;
@@ -1461,6 +1470,10 @@ body {
   .metrics-control-grid,
   .metrics-insight-grid {
     grid-template-columns: 1fr;
+  }
+  .metrics-scope-stats {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
   }
   .metrics-preset-card .ant-segmented-group {
     grid-template-columns: repeat(2, minmax(0, 1fr));

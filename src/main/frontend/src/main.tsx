@@ -1278,9 +1278,14 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
             }}
           />
         </div>
-        <div className="metrics-scope-card"><span>在线</span><b>{clusterAliveCount}</b><em>/ {clusterHosts.length}</em></div>
-        <div className="metrics-scope-card"><span>Leader</span><b>{clusterLeaderCount}</b><em>nodes</em></div>
-        <div className="metrics-scope-card"><span>Direct</span><b>{clusterDirectCount}</b><em>nodes</em></div>
+        <div className="metrics-scope-stats">
+          <div className="metrics-scope-card"><span>在线</span><b>{clusterAliveCount}</b><em>/ {clusterHosts.length}</em></div>
+          <div className="metrics-scope-card"><span>Leader</span><b>{clusterLeaderCount}</b><em>nodes</em></div>
+          <div className="metrics-scope-card"><span>Direct</span><b>{clusterDirectCount}</b><em>nodes</em></div>
+          <div className="metrics-scope-card"><span>写入队列</span><b>{storage?.queue_depth ?? 0}</b><em>pending</em></div>
+          <div className="metrics-scope-card"><span>失败</span><b>{storage?.failed_commands ?? 0}</b><em>commands</em></div>
+          <div className="metrics-scope-card"><span>事务批次</span><b>{storage?.transaction_batches ?? 0}</b><em>batches</em></div>
+        </div>
       </div>
       <div className="metrics-control-grid">
         <div className="metrics-control-card metrics-preset-card">
@@ -1387,16 +1392,6 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
               TopN
             </Button>
           </Space.Compact>
-          <div className="metrics-inline-stats">
-            <div className="metrics-inline-stat">
-              <span>候选 Host</span>
-              <b>{scopedAgentOptions.length}</b>
-            </div>
-            <div className="metrics-inline-stat">
-              <span>模式</span>
-              <b>{fleetMode ? 'TopN' : `${selectedAgents.length || draftAgents.length} 台`}</b>
-            </div>
-          </div>
         </div>
         <div className="metrics-control-card metrics-actions-card">
           <span className="metrics-field-label">时间窗口</span>
@@ -1416,16 +1411,6 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
             </Button>
             <Button type="primary" loading={loading} onClick={() => loadMetrics()}>刷新时序</Button>
           </Space.Compact>
-          <div className="metrics-inline-stats">
-            <div className="metrics-inline-stat">
-              <span>窗口</span>
-              <b>{rangeMinutes >= 60 ? `${rangeMinutes / 60}h` : `${rangeMinutes}m`}</b>
-            </div>
-            <div className="metrics-inline-stat">
-              <span>状态</span>
-              <b>{rangePaused ? '暂停' : '跟随'}</b>
-            </div>
-          </div>
         </div>
       </div>
       {error && <Typography.Text type="danger">{error}</Typography.Text>}
