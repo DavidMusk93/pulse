@@ -18,8 +18,9 @@ import os
 import shutil
 import sqlite3
 import sys
+import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 DEFAULT_TIDE_HOME = "/opt/tiger/tide"
@@ -62,16 +63,54 @@ def utc_now_epoch():
 
 
 def local_report_time():
-    return dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
 
 
 def log_trace(enabled, message):
     if enabled:
-        sys.stderr.write("[TRACE] {}\n".format(message))
+        emit_progress("trace", "trace", {"message": message}, trace_only=False)
+
+
+def log_trace_event(enabled, phase, status, details):
+    if enabled:
+        emit_progress(phase, status, details, trace_only=False)
 
 
 def log_error(message):
     sys.stderr.write("[ERROR] {}\n".format(message))
+    sys.stderr.flush()
+
+
+def emit_progress(phase, status, details=None, trace_only=False):
+    if trace_only:
+        return
+    event = {
+        "event": "tide_block_layout_cleanup_progress",
+        "phase": phase,
+        "status": status,
+        "datetime": local_report_time(),
+        "pid": os.getpid(),
+        "tid": threading.get_ident(),
+        "thread": threading.current_thread().name,
+    }
+    if details is not None:
+        event["details"] = details
+    sys.stderr.write(json.dumps(event) + "\n")
+    sys.stderr.flush()
+
+
+def finish_phase(phase_summaries, phase, started, summary):
+    duration = round(time.time() - started, 3)
+    phase_summary = {
+        "phase": phase,
+        "duration_seconds": duration,
+        "summary": summary,
+    }
+    phase_summaries.append(phase_summary)
+    event_details = dict(summary)
+    event_details["duration_seconds"] = duration
+    emit_progress(phase, "done", event_details)
+    return phase_summary
 
 
 def format_bytes(size):
@@ -161,6 +200,15 @@ def parse_partition_time(block_path):
     return int((parsed - dt.datetime(1970, 1, 1)).total_seconds())
 
 
+def partition_date_from_epoch(epoch_seconds):
+    if epoch_seconds is None:
+        return "<unknown>"
+    try:
+        return (dt.datetime(1970, 1, 1) + dt.timedelta(seconds=epoch_seconds)).strftime("%Y-%m-%d")
+    except (OverflowError, OSError, ValueError):
+        return "<unknown>"
+
+
 def load_blocks(db_path, tide_home, now_epoch):
     conn = sqlite3.connect(db_path)
     try:
@@ -207,9 +255,9 @@ def load_all_blocks(db_paths, tide_home, now_epoch, trace):
             skipped.append({"db_path": db_path, "reason": "missing"})
             continue
         started = time.time()
-        log_trace(trace, "load db={} start".format(db_path))
+        log_trace_event(trace, "load_metadata", "task_start", {"db_path": db_path})
         records.extend(load_blocks(db_path, tide_home, now_epoch))
-        log_trace(trace, "load db={} done duration={:.2f}s".format(db_path, time.time() - started))
+        log_trace_event(trace, "load_metadata", "task_done", {"db_path": db_path, "duration_seconds": round(time.time() - started, 3)})
     return records, skipped
 
 
@@ -271,6 +319,7 @@ def discover_block_table_paths_for_disk(disk_path):
 def scan_disk_untracked_paths(disk_path, known_paths, tide_home, trace):
     started = time.time()
     results = []
+    log_trace_event(trace, "scan_untracked_paths", "task_start", {"disk_path": disk_path})
     for table_path in discover_block_table_paths_for_disk(disk_path):
         try:
             names = sorted(os.listdir(table_path))
@@ -287,7 +336,7 @@ def scan_disk_untracked_paths(disk_path, known_paths, tide_home, trace):
             if not is_safe_path_under_disk(block_path, disk_path, tide_home):
                 raise RuntimeError("unsafe untracked path: {}".format(block_path))
             results.append(UntrackedPath(block_path, disk_path, path_size(block_path)))
-    log_trace(trace, "scan disk={} untracked={} duration={:.2f}s".format(disk_path, len(results), time.time() - started))
+    log_trace_event(trace, "scan_untracked_paths", "task_done", {"disk_path": disk_path, "untracked_path_count": len(results), "duration_seconds": round(time.time() - started, 3)})
     return results
 
 
@@ -305,16 +354,21 @@ def discover_untracked_paths(tide_home, disk_paths, known_paths_by_disk, trace):
         return []
     results = []
     workers = min(len(disk_paths), max(1, os.cpu_count() or 1), MAX_DELETE_WORKERS)
+    log_trace_event(trace, "scan_untracked_paths", "executor_start", {"workers": workers, "tasks": len(disk_paths)})
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {}
         for disk_path in disk_paths:
+            log_trace_event(trace, "scan_untracked_paths", "task_submit", {"disk_path": disk_path})
             futures[executor.submit(scan_disk_untracked_paths, disk_path, known_paths_by_disk.get(disk_path, set()), tide_home, trace)] = disk_path
         for future in as_completed(futures):
             disk_path = futures[future]
             try:
-                results.extend(future.result())
+                disk_results = future.result()
+                log_trace_event(trace, "scan_untracked_paths", "task_collect", {"disk_path": disk_path, "untracked_path_count": len(disk_results)})
+                results.extend(disk_results)
             except Exception as exc:
                 raise RuntimeError("{} failed to scan untracked paths: {}".format(disk_path, exc))
+    log_trace_event(trace, "scan_untracked_paths", "executor_done", {"result_count": len(results)})
     return sorted(results, key=lambda item: (item.disk_path, item.path))
 
 
@@ -342,6 +396,7 @@ def aggregate_table_layout(records, top):
             "size_bytes": 0,
             "ttl_seconds": set(),
             "disks": {},
+            "partition_dates": {},
             "metadata_missing_path_blocks": 0,
             "ttl_expired_blocks": 0,
         })
@@ -352,6 +407,11 @@ def aggregate_table_layout(records, top):
         disk = table["disks"].setdefault(record.disk_path, {"disk_path": record.disk_path, "blocks": 0, "size_bytes": 0})
         disk["blocks"] += 1
         disk["size_bytes"] += record.data_size
+        partition_date = partition_date_from_epoch(record.partition_time)
+        date_stats = table["partition_dates"].setdefault(partition_date, {"partition_date": partition_date, "blocks": 0, "size_bytes": 0, "disks": set()})
+        date_stats["blocks"] += 1
+        date_stats["size_bytes"] += record.data_size
+        date_stats["disks"].add(record.disk_path)
         if not record.path_exists:
             table["metadata_missing_path_blocks"] += 1
         elif record.ttl_expired:
@@ -365,16 +425,25 @@ def aggregate_table_layout(records, top):
             disks.append({
                 "disk_path": disk["disk_path"],
                 "blocks": disk["blocks"],
-                "size_bytes": size_bytes,
                 "size": format_bytes(size_bytes),
                 "table_percent": round((size_bytes * 100.0 / table["size_bytes"]) if table["size_bytes"] else 0.0, 2),
+            })
+        partition_dates = []
+        for _partition_date, date_stats in sorted(table["partition_dates"].items(), key=lambda item: item[0], reverse=True):
+            date_size_bytes = date_stats["size_bytes"]
+            partition_dates.append({
+                "partition_date": date_stats["partition_date"],
+                "blocks": date_stats["blocks"],
+                "size": format_bytes(date_size_bytes),
+                "table_percent": round((date_size_bytes * 100.0 / table["size_bytes"]) if table["size_bytes"] else 0.0, 2),
+                "disk_count": len(date_stats["disks"]),
             })
         rows.append({
             "table": table["table"],
             "blocks": table["blocks"],
-            "size_bytes": table["size_bytes"],
             "size": format_bytes(table["size_bytes"]),
             "ttl_seconds": sorted(table["ttl_seconds"]),
+            "partition_date_distribution": partition_dates,
             "disk_count": len(disks),
             "metadata_missing_path_blocks": table["metadata_missing_path_blocks"],
             "ttl_expired_blocks": table["ttl_expired_blocks"],
@@ -400,12 +469,12 @@ def record_to_json(record):
         "disk_path": record.disk_path,
         "disk_name": record.disk_name,
         "node_name": record.node_name,
-        "data_size_bytes": record.data_size,
         "data_size": format_bytes(record.data_size),
         "layer": record.layer,
         "event_time": record.event_time,
         "ttl_seconds": record.ttl,
         "partition_time": record.partition_time,
+        "partition_date": partition_date_from_epoch(record.partition_time),
         "expire_at": expire_at,
         "expired_seconds": expired_seconds,
     }
@@ -415,7 +484,6 @@ def untracked_to_json(item):
     return {
         "path": item.path,
         "disk_path": item.disk_path,
-        "data_size_bytes": item.data_size,
         "data_size": format_bytes(item.data_size),
     }
 
@@ -444,7 +512,7 @@ def delete_metadata_rows(db_path, paths, trace):
     finally:
         conn.close()
     duration = time.time() - started
-    log_trace(trace, "delete metadata db={} requested={} deleted={} duration={:.2f}s".format(db_path, len(paths), deleted, duration))
+    log_trace_event(trace, "delete_metadata", "task_done", {"db_path": db_path, "requested": len(paths), "deleted": deleted, "duration_seconds": round(duration, 3)})
     return {"db_path": db_path, "requested": len(paths), "deleted": deleted, "duration_seconds": round(duration, 3)}
 
 
@@ -474,34 +542,94 @@ def file_delete_items(cleanup_plan, tide_home):
             continue
         if not is_safe_path_under_disk(record.path, record.disk_path, tide_home):
             raise RuntimeError("unsafe ttl-expired path: {}".format(record.path))
-        items.append({"type": "ttl_expired", "path": record.path, "disk_path": record.disk_path, "size_bytes": record.data_size})
+        items.append({"type": "ttl_expired", "path": record.path, "disk_path": record.disk_path, "size": format_bytes(record.data_size)})
     for item in cleanup_plan["untracked_path"]:
         if not is_safe_path_under_disk(item.path, item.disk_path, tide_home):
             raise RuntimeError("unsafe untracked path: {}".format(item.path))
-        items.append({"type": "untracked_path", "path": item.path, "disk_path": item.disk_path, "size_bytes": item.data_size})
+        items.append({"type": "untracked_path", "path": item.path, "disk_path": item.disk_path, "size": format_bytes(item.data_size)})
     return sorted(items, key=lambda value: (value["disk_path"], value["path"]))
 
 
-def remove_one_file_item(item):
+def delete_path_trace_details(item, extra=None):
+    details = {
+        "task_id": item.get("task_id"),
+        "type": item["type"],
+        "path": item["path"],
+        "disk_path": item["disk_path"],
+        "size": item.get("size"),
+    }
+    if extra:
+        details.update(extra)
+    return details
+
+
+def public_delete_result(item):
+    return dict((key, value) for key, value in item.items() if not key.startswith("_"))
+
+
+def remove_one_file_item(item, trace):
     started = time.time()
-    result = dict(item)
-    if not os.path.exists(item["path"]):
-        result.update({"status": "skipped_missing", "duration_seconds": round(time.time() - started, 3)})
+    result = public_delete_result(item)
+    queue_seconds = round(started - item.get("_submitted_at", started), 3)
+    log_trace_event(trace, "delete_path", "task_start", delete_path_trace_details(item, {
+        "queue_seconds": queue_seconds,
+    }))
+    try:
+        if not os.path.exists(item["path"]):
+            duration = round(time.time() - started, 3)
+            result.update({"status": "skipped_missing", "duration_seconds": duration})
+            log_trace_event(trace, "delete_path", "task_done", delete_path_trace_details(item, {
+                "status": "skipped_missing",
+                "duration_seconds": duration,
+            }))
+            return result
+        remove_path(item["path"])
+        duration = round(time.time() - started, 3)
+        result.update({"status": "removed", "duration_seconds": duration})
+        log_trace_event(trace, "delete_path", "task_done", delete_path_trace_details(item, {
+            "status": "removed",
+            "duration_seconds": duration,
+        }))
         return result
-    remove_path(item["path"])
-    result.update({"status": "removed", "duration_seconds": round(time.time() - started, 3)})
-    return result
+    except Exception as exc:
+        duration = round(time.time() - started, 3)
+        log_trace_event(trace, "delete_path", "task_error", delete_path_trace_details(item, {
+            "error_type": exc.__class__.__name__,
+            "error": str(exc),
+            "duration_seconds": duration,
+        }))
+        raise
 
 
-def delete_file_items(items):
+def delete_file_items(items, trace):
     if not items:
         return []
     workers = min(len(items), max(1, os.cpu_count() or 1), MAX_DELETE_WORKERS)
     results = []
+    log_trace_event(trace, "delete_path", "executor_start", {"workers": workers, "tasks": len(items)})
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(remove_one_file_item, item) for item in items]
+        futures = {}
+        for task_id, item in enumerate(items, 1):
+            task_item = dict(item)
+            task_item["task_id"] = task_id
+            task_item["_submitted_at"] = time.time()
+            log_trace_event(trace, "delete_path", "task_submit", delete_path_trace_details(task_item))
+            futures[executor.submit(remove_one_file_item, task_item, trace)] = task_item
         for future in as_completed(futures):
-            results.append(future.result())
+            task_item = futures[future]
+            try:
+                result = future.result()
+            except Exception as exc:
+                log_trace_event(trace, "delete_path", "task_collect_error", delete_path_trace_details(task_item, {
+                    "error_type": exc.__class__.__name__,
+                    "error": str(exc),
+                }))
+                raise RuntimeError("failed to delete path {}: {}".format(task_item["path"], exc))
+            log_trace_event(trace, "delete_path", "task_collect", delete_path_trace_details(result, {
+                "status": result["status"],
+            }))
+            results.append(result)
+    log_trace_event(trace, "delete_path", "executor_done", {"result_count": len(results)})
     return sorted(results, key=lambda item: (item["type"], item["disk_path"], item["path"]))
 
 
@@ -517,53 +645,50 @@ def plan_summary(cleanup_plan):
             "count": len(expired),
             "metadata_delete_count": len(expired),
             "path_delete_count": sum(1 for record in expired if record.path_exists),
-            "path_delete_bytes": expired_file_bytes,
             "path_delete_size": format_bytes(expired_file_bytes),
         },
         "untracked_path": {
             "count": len(untracked),
             "path_delete_count": len(untracked),
-            "path_delete_bytes": untracked_bytes,
             "path_delete_size": format_bytes(untracked_bytes),
         },
     }
 
 
-def build_payload(args, db_paths, skipped_dbs, disk_paths, records, cleanup_plan, mode, action_results=None):
+def build_payload(args, db_paths, skipped_dbs, disk_paths, records, cleanup_plan, mode, phase_summaries, action_results=None):
     total_bytes = sum(record.data_size for record in records)
-    payload = {
-        "report_type": "tide_block_layout_cleanup",
-        "report_time": local_report_time(),
-        "mode": mode,
-        "tide_home": args.tide_home,
-        "now_epoch": args.now,
-        "metadata_dbs": db_paths,
-        "skipped_dbs": skipped_dbs,
-        "disk_paths": disk_paths,
-        "summary": {
-            "metadata_db_count": len(db_paths),
-            "disk_count": len(disk_paths),
-            "metadata_record_count": len(records),
-            "metadata_record_bytes": total_bytes,
-            "metadata_record_size": format_bytes(total_bytes),
-            "cleanup": plan_summary(cleanup_plan),
-        },
-        "block_layout": {
-            "tables_order": "size_bytes_desc",
-            "table_limit": args.top,
-            "tables": aggregate_table_layout(records, args.top),
-        },
-        "cleanup_plan": {
-            "metadata_missing_path": limited_json(cleanup_plan["metadata_missing_path"], record_to_json, args.sample_limit),
-            "ttl_expired": limited_json(cleanup_plan["ttl_expired"], record_to_json, args.sample_limit),
-            "untracked_path": limited_json(cleanup_plan["untracked_path"], untracked_to_json, args.sample_limit),
-        },
-        "semantics": [
+    payload = OrderedDict()
+    payload["report_type"] = "tide_block_layout_cleanup"
+    payload["report_time"] = local_report_time()
+    payload["mode"] = mode
+    payload["tide_home"] = args.tide_home
+    payload["now_epoch"] = args.now
+    payload["block_layout"] = {
+        "tables_order": "size_desc",
+        "table_limit": args.top,
+        "tables": aggregate_table_layout(records, args.top),
+    }
+    payload["metadata_dbs"] = db_paths
+    payload["skipped_dbs"] = skipped_dbs
+    payload["disk_paths"] = disk_paths
+    payload["summary"] = {
+        "metadata_db_count": len(db_paths),
+        "disk_count": len(disk_paths),
+        "metadata_record_count": len(records),
+        "metadata_record_size": format_bytes(total_bytes),
+        "cleanup": plan_summary(cleanup_plan),
+    }
+    payload["phase_summaries"] = phase_summaries
+    payload["cleanup_plan"] = {
+        "metadata_missing_path": limited_json(cleanup_plan["metadata_missing_path"], record_to_json, args.sample_limit),
+        "ttl_expired": limited_json(cleanup_plan["ttl_expired"], record_to_json, args.sample_limit),
+        "untracked_path": limited_json(cleanup_plan["untracked_path"], untracked_to_json, args.sample_limit),
+    }
+    payload["semantics"] = [
             {"type": "metadata_missing_path", "condition": "metadata row exists and path is missing", "action": "delete metadata only"},
             {"type": "ttl_expired", "condition": "metadata row exists, path exists, and partition_time + ttl < now", "action": "delete metadata first, then delete path"},
             {"type": "untracked_path", "condition": "path exists on disk but metadata row is missing", "action": "delete path only"},
-        ],
-    }
+    ]
     if action_results is not None:
         payload["action_results"] = action_results
     return payload
@@ -580,7 +705,7 @@ def parse_args(argv):
     parser.add_argument("--now", type=int, default=utc_now_epoch(), help="Override current epoch seconds")
     parser.add_argument("--top", type=int, default=DEFAULT_TOP, help="Maximum table layout entries in JSON output")
     parser.add_argument("--sample-limit", type=int, default=DEFAULT_SAMPLE_LIMIT, help="Maximum sample items per cleanup type; 0 means all")
-    parser.add_argument("--trace", action="store_true", help="Print task traces to stderr")
+    parser.add_argument("--trace", action="store_true", help="Print JSONL concurrency task traces with datetime/pid/tid/thread to stderr")
     return parser.parse_args(argv)
 
 
@@ -594,41 +719,110 @@ def validate_args(args):
 def run(argv):
     args = parse_args(argv)
     validate_args(args)
+    phase_summaries = []
+    emit_progress("start", "start", {
+        "mode": "dry-run" if args.dry_run else "apply",
+        "tide_home": args.tide_home,
+        "sample_limit": args.sample_limit,
+        "top": args.top,
+    })
+    phase_started = time.time()
     db_paths = discover_dbs(args.tide_home, args.db)
+    finish_phase(phase_summaries, "discover_metadata_dbs", phase_started, {
+        "metadata_db_count": len(db_paths),
+        "explicit_db_count": len(args.db),
+    })
     if not db_paths:
         log_error("No metadata DB found under {}/node*/metadata/fringedb.db".format(args.tide_home))
+        emit_progress("finish", "failed", {"reason": "no_metadata_db"})
         return 1
     try:
+        phase_started = time.time()
+        emit_progress("load_metadata", "start", {"metadata_db_count": len(db_paths)})
         records, skipped_dbs = load_all_blocks(db_paths, args.tide_home, args.now, args.trace)
+        total_bytes = sum(record.data_size for record in records)
+        finish_phase(phase_summaries, "load_metadata", phase_started, {
+            "metadata_record_count": len(records),
+            "metadata_record_size": format_bytes(total_bytes),
+            "skipped_db_count": len(skipped_dbs),
+        })
+
+        phase_started = time.time()
+        emit_progress("discover_disks", "start", {"tide_home": args.tide_home})
         disk_paths = discover_logical_disk_paths(args.tide_home)
+        finish_phase(phase_summaries, "discover_disks", phase_started, {
+            "disk_count": len(disk_paths),
+        })
+
+        phase_started = time.time()
+        emit_progress("scan_untracked_paths", "start", {"disk_count": len(disk_paths)})
         known_paths_by_disk = build_known_paths_by_disk(records)
         untracked_paths = discover_untracked_paths(args.tide_home, disk_paths, known_paths_by_disk, args.trace)
+        finish_phase(phase_summaries, "scan_untracked_paths", phase_started, {
+            "disk_count": len(disk_paths),
+            "untracked_path_count": len(untracked_paths),
+        })
+
+        phase_started = time.time()
+        emit_progress("classify_cleanup", "start", {
+            "metadata_record_count": len(records),
+            "untracked_path_count": len(untracked_paths),
+        })
         cleanup_plan = classify_cleanup(records, untracked_paths)
+        cleanup_summary = plan_summary(cleanup_plan)
+        finish_phase(phase_summaries, "classify_cleanup", phase_started, cleanup_summary)
+
         if args.dry_run:
-            payload = build_payload(args, db_paths, skipped_dbs, disk_paths, records, cleanup_plan, "dry-run")
+            emit_progress("dry_run_plan", "done", cleanup_summary)
+            payload = build_payload(args, db_paths, skipped_dbs, disk_paths, records, cleanup_plan, "dry-run", phase_summaries)
         else:
+            phase_started = time.time()
+            metadata_delete_count = len(cleanup_plan["metadata_missing_path"]) + len(cleanup_plan["ttl_expired"])
+            emit_progress("apply_metadata", "start", {"requested_rows": metadata_delete_count})
             metadata_results = delete_metadata_plan(cleanup_plan, args.trace)
+            metadata_summary = {
+                "db_count": len(metadata_results),
+                "requested_rows": sum(item["requested"] for item in metadata_results),
+                "deleted_rows": sum(item["deleted"] for item in metadata_results),
+            }
+            finish_phase(phase_summaries, "apply_metadata", phase_started, metadata_summary)
+
+            phase_started = time.time()
             file_items = file_delete_items(cleanup_plan, args.tide_home)
-            file_results = delete_file_items(file_items)
+            emit_progress("apply_paths", "start", {"requested_paths": len(file_items)})
+            file_results = delete_file_items(file_items, args.trace)
             visible_results = file_results if args.sample_limit == 0 else file_results[:args.sample_limit]
-            payload = build_payload(args, db_paths, skipped_dbs, disk_paths, records, cleanup_plan, "apply", {
+            path_summary = {
+                "requested": len(file_items),
+                "removed": sum(1 for item in file_results if item.get("status") == "removed"),
+                "skipped_missing": sum(1 for item in file_results if item.get("status") == "skipped_missing"),
+                "hidden": max(0, len(file_results) - len(visible_results)),
+            }
+            finish_phase(phase_summaries, "apply_paths", phase_started, path_summary)
+            payload = build_payload(args, db_paths, skipped_dbs, disk_paths, records, cleanup_plan, "apply", phase_summaries, {
                 "metadata": {
                     "db_results": metadata_results,
-                    "requested_rows": sum(item["requested"] for item in metadata_results),
-                    "deleted_rows": sum(item["deleted"] for item in metadata_results),
+                    "requested_rows": metadata_summary["requested_rows"],
+                    "deleted_rows": metadata_summary["deleted_rows"],
                 },
                 "paths": {
-                    "requested": len(file_items),
-                    "removed": sum(1 for item in file_results if item.get("status") == "removed"),
-                    "skipped_missing": sum(1 for item in file_results if item.get("status") == "skipped_missing"),
-                    "hidden": max(0, len(file_results) - len(visible_results)),
+                    "requested": path_summary["requested"],
+                    "removed": path_summary["removed"],
+                    "skipped_missing": path_summary["skipped_missing"],
+                    "hidden": path_summary["hidden"],
                     "results": visible_results,
                 },
             })
     except Exception as exc:
         log_error(str(exc))
+        emit_progress("finish", "failed", {"error": str(exc)})
         return 1
-    json.dump(payload, sys.stdout, indent=2, sort_keys=True)
+    emit_progress("finish", "done", {
+        "mode": payload["mode"],
+        "metadata_record_count": payload["summary"]["metadata_record_count"],
+        "cleanup": payload["summary"]["cleanup"],
+    })
+    json.dump(payload, sys.stdout, indent=2)
     sys.stdout.write("\n")
     return 0
 
