@@ -57,3 +57,43 @@ Session id: `cdn-new-offline`
 ## Conclusion
 
 Root cause: the 3 "dropped" `cdn_new` machines were coordinator hosts running stale/broken agent runtime. They disappeared from the `cdn2` view, so the symptom looked like 3 machines dropped. Rebuilding the latest JAR and redeploying all `cdn_new` agents/coordinators restored the coordinator API view to `50/50 alive`.
+
+## IPv6 Identity Follow-up
+
+User pointed out that metrics and the project must not use hostnames; all runtime identity should use IPv6.
+
+Changes:
+- `pulse-cdn-new-deploy.sh` now writes IPv6 into:
+  - `PULSE_AGENT_ID`
+  - `PULSE_AGENT_HOST`
+  - `PULSE_AGENT_IP`
+  - `PULSE_COORDINATOR_ID`
+- `AgentHeartbeatFactory` fallback now prefers first non-loopback IP instead of local host name.
+- `pulse-cdn-new-probe.sh` and `pulse-cdn-new-verify.sh` report the target IPv6 instead of host name.
+- frontend URL display no longer uses a hostname parser path.
+- `CoordinatorService` deduplicates host views by stable IPv6 identity, preferring alive IPv6 records over legacy hostname records.
+
+Deployment:
+- Full `cdn_new` agent deployment with IPv6 env:
+  - total `50`
+  - ok `50`
+  - failed `0`
+  - agent/coordinator JAR SHA during full deploy: `2d9a10ba46df59cd4a826801e7a98d6bccb939476a40f4ebfb02b00105605d0d`
+- Coordinator-only deploy for API IPv6 dedupe:
+  - all 3 coordinators active
+  - coordinator JAR SHA: `8154ffbe4b121193fe595592e28f28efdf425d2b2e51bf42b0d831ffb9c4604f`
+
+Post-fix evidence:
+- Coordinator env:
+  - `PULSE_AGENT_ID=fdbd:...`
+  - `PULSE_AGENT_HOST=fdbd:...`
+  - `PULSE_AGENT_IP=fdbd:...`
+  - `PULSE_COORDINATOR_ID=fdbd:...`
+- `/api/hosts`:
+  - `cdn2_total=50`
+  - `bad_identity_fields=0`
+- metrics labels:
+  - `metric_series=8`
+  - `bad_labels=0`
+- cluster liveness:
+  - all three coordinators report `cdn2 total=50 offline=0`.
