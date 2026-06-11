@@ -75,11 +75,11 @@ call() {
   remote_tmp="/tmp/pulse-deploy.${index}.$$"
 
   echo "EVENT phase=deploy host=${host} index=${index} status=start root=${install_root}"
-  run_with_stderr "$host" "$index" stage_remote_tmp ssh "$host" "rm -rf '$remote_tmp' && mkdir -p '$remote_tmp'" || return "$?"
+  run_with_stderr "$host" "$index" stage_remote_tmp ssh -n "$host" "rm -rf '$remote_tmp' && mkdir -p '$remote_tmp'" || return "$?"
   run_with_stderr "$host" "$index" upload_jar scp -q "$jar_path" "${scp_host}:${remote_tmp}/pulse.jar" || return "$?"
   task_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../task" && pwd)"
   if [ -d "$task_dir" ]; then
-    run_with_stderr "$host" "$index" stage_task_dir ssh "$host" "mkdir -p '$remote_tmp/tasks'" || return "$?"
+    run_with_stderr "$host" "$index" stage_task_dir ssh -n "$host" "mkdir -p '$remote_tmp/tasks'" || return "$?"
     run_with_stderr "$host" "$index" upload_tasks scp -q "$task_dir"/prepare-disk-layout.sh "$task_dir"/analyze-block-layout.py "$task_dir"/repair-corrupt-sqlite3.sh "${scp_host}:${remote_tmp}/tasks/" || return "$?"
   fi
   if [ -n "$jre_tarball" ] && [ "$jre_tarball" != "-" ]; then
