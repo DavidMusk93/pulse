@@ -27,6 +27,7 @@ DEFAULT_TIDE_HOME = "/opt/tiger/tide"
 DEFAULT_TOP = 50
 DEFAULT_SAMPLE_LIMIT = 20
 MAX_DELETE_WORKERS = 32
+DELETE_DISK_QUANTUM = 8
 
 
 class BlockRecord(object):
@@ -567,6 +568,18 @@ def public_delete_result(item):
     return dict((key, value) for key, value in item.items() if not key.startswith("_"))
 
 
+def disk_delete_trace_details(shard, extra=None):
+    details = {
+        "disk_task_id": shard.get("disk_task_id"),
+        "disk_path": shard["disk_path"],
+        "remaining": len(shard["items"]),
+        "quantum": shard.get("quantum"),
+    }
+    if extra:
+        details.update(extra)
+    return details
+
+
 def remove_one_file_item(item, trace):
     started = time.time()
     result = public_delete_result(item)
@@ -601,35 +614,149 @@ def remove_one_file_item(item, trace):
         raise
 
 
+def group_delete_items_by_disk(items):
+    grouped = OrderedDict()
+    for item in sorted(items, key=lambda value: (value["disk_path"], value["path"])):
+        grouped.setdefault(item["disk_path"], []).append(item)
+    return grouped
+
+
+def delete_disk_quantum(shard, trace):
+    started = time.time()
+    results = []
+    items = shard["items"]
+    quantum = shard["quantum"]
+    disk_task_id = shard["disk_task_id"]
+    disk_path = shard["disk_path"]
+    run_items = items[:quantum]
+    remaining_items = items[quantum:]
+
+    log_trace_event(trace, "delete_path", "disk_task_start", disk_delete_trace_details(shard, {
+        "batch_count": len(run_items),
+    }))
+    try:
+        for offset, item in enumerate(run_items, 1):
+            task_item = dict(item)
+            task_item["task_id"] = "{}.{}".format(disk_task_id, offset)
+            task_item["disk_task_id"] = disk_task_id
+            task_item["_submitted_at"] = shard.get("_submitted_at", started)
+            results.append(remove_one_file_item(task_item, trace))
+        duration = round(time.time() - started, 3)
+        log_trace_event(trace, "delete_path", "disk_task_done", disk_delete_trace_details(shard, {
+            "batch_count": len(run_items),
+            "remaining_after": len(remaining_items),
+            "preempted": bool(remaining_items),
+            "duration_seconds": duration,
+        }))
+        return {
+            "disk_task_id": disk_task_id,
+            "disk_path": disk_path,
+            "results": results,
+            "remaining_items": remaining_items,
+            "duration_seconds": duration,
+            "preempted": bool(remaining_items),
+        }
+    except Exception as exc:
+        duration = round(time.time() - started, 3)
+        log_trace_event(trace, "delete_path", "disk_task_error", disk_delete_trace_details(shard, {
+            "error_type": exc.__class__.__name__,
+            "error": str(exc),
+            "duration_seconds": duration,
+        }))
+        raise
+
+
 def delete_file_items(items, trace):
     if not items:
         return []
-    workers = min(len(items), max(1, os.cpu_count() or 1), MAX_DELETE_WORKERS)
+    grouped = group_delete_items_by_disk(items)
+    disk_paths = list(grouped.keys())
+    workers = min(len(disk_paths), max(1, os.cpu_count() or 1), MAX_DELETE_WORKERS)
     results = []
-    log_trace_event(trace, "delete_path", "executor_start", {"workers": workers, "tasks": len(items)})
+    pending_shards = []
+    active_disks = set()
+    disk_task_seq = 0
+
+    for disk_path in disk_paths:
+        pending_shards.append({
+            "disk_path": disk_path,
+            "items": grouped[disk_path],
+            "quantum": DELETE_DISK_QUANTUM,
+        })
+
+    log_trace_event(trace, "delete_path", "executor_start", {
+        "workers": workers,
+        "tasks": len(items),
+        "disk_count": len(disk_paths),
+        "disk_quantum": DELETE_DISK_QUANTUM,
+        "concurrency_model": "disk_path",
+        "preemption": "quantum",
+    })
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {}
-        for task_id, item in enumerate(items, 1):
-            task_item = dict(item)
-            task_item["task_id"] = task_id
-            task_item["_submitted_at"] = time.time()
-            log_trace_event(trace, "delete_path", "task_submit", delete_path_trace_details(task_item))
-            futures[executor.submit(remove_one_file_item, task_item, trace)] = task_item
-        for future in as_completed(futures):
-            task_item = futures[future]
+
+        def submit_ready_shards():
+            nonlocal disk_task_seq
+            submitted = 0
+            remaining = []
+            for shard in pending_shards:
+                if len(futures) >= workers:
+                    remaining.append(shard)
+                    continue
+                if shard["disk_path"] in active_disks:
+                    remaining.append(shard)
+                    continue
+                disk_task_seq += 1
+                task_shard = {
+                    "disk_task_id": disk_task_seq,
+                    "disk_path": shard["disk_path"],
+                    "items": shard["items"],
+                    "quantum": shard["quantum"],
+                    "_submitted_at": time.time(),
+                }
+                active_disks.add(task_shard["disk_path"])
+                log_trace_event(trace, "delete_path", "disk_task_submit", disk_delete_trace_details(task_shard, {
+                    "batch_count": min(task_shard["quantum"], len(task_shard["items"])),
+                }))
+                futures[executor.submit(delete_disk_quantum, task_shard, trace)] = task_shard
+                submitted += 1
+            pending_shards[:] = remaining
+            return submitted
+
+        submit_ready_shards()
+        while futures:
+            future = next(as_completed(futures))
+            task_shard = futures.pop(future)
+            active_disks.discard(task_shard["disk_path"])
             try:
-                result = future.result()
+                disk_result = future.result()
             except Exception as exc:
-                log_trace_event(trace, "delete_path", "task_collect_error", delete_path_trace_details(task_item, {
+                log_trace_event(trace, "delete_path", "disk_task_collect_error", disk_delete_trace_details(task_shard, {
                     "error_type": exc.__class__.__name__,
                     "error": str(exc),
                 }))
-                raise RuntimeError("failed to delete path {}: {}".format(task_item["path"], exc))
-            log_trace_event(trace, "delete_path", "task_collect", delete_path_trace_details(result, {
-                "status": result["status"],
+                raise RuntimeError("failed to delete disk {}: {}".format(task_shard["disk_path"], exc))
+            log_trace_event(trace, "delete_path", "disk_task_collect", disk_delete_trace_details(task_shard, {
+                "batch_count": len(disk_result["results"]),
+                "remaining_after": len(disk_result["remaining_items"]),
+                "preempted": disk_result["preempted"],
             }))
-            results.append(result)
-    log_trace_event(trace, "delete_path", "executor_done", {"result_count": len(results)})
+            for result in disk_result["results"]:
+                log_trace_event(trace, "delete_path", "task_collect", delete_path_trace_details(result, {
+                    "status": result["status"],
+                }))
+            results.extend(disk_result["results"])
+            if disk_result["remaining_items"]:
+                log_trace_event(trace, "delete_path", "disk_task_preempt", disk_delete_trace_details(task_shard, {
+                    "remaining_after": len(disk_result["remaining_items"]),
+                }))
+                pending_shards.append({
+                    "disk_path": disk_result["disk_path"],
+                    "items": disk_result["remaining_items"],
+                    "quantum": DELETE_DISK_QUANTUM,
+                })
+            submit_ready_shards()
+    log_trace_event(trace, "delete_path", "executor_done", {"result_count": len(results), "disk_count": len(disk_paths)})
     return sorted(results, key=lambda item: (item["type"], item["disk_path"], item["path"]))
 
 
