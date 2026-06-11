@@ -51,7 +51,6 @@ call() {
   local jre_tarball=${6:-}
   local cluster_fallback=${7:-unknown}
   local group_plan_path=${8:-}
-  local identity_override=${9:-}
   local task_dir
   local scp_host
   local remote_tmp
@@ -89,7 +88,7 @@ call() {
   if [ -n "$group_plan_path" ] && [ "$group_plan_path" != "-" ] && [ -f "$group_plan_path" ]; then
     run_with_stderr "$host" "$index" upload_group_plan scp -q "$group_plan_path" "${scp_host}:${remote_tmp}/pulse-group-plan.csv" || return "$?"
   fi
-  run_with_stderr "$host" "$index" remote_install ssh "$host" 'bash -s' -- "$host" "$coordinators_csv" "$install_root" "$remote_tmp" "$cluster_fallback" "$expected_jar_sha" "$identity_override" <<'REMOTE'
+  run_with_stderr "$host" "$index" remote_install ssh "$host" 'bash -s' -- "$host" "$coordinators_csv" "$install_root" "$remote_tmp" "$cluster_fallback" "$expected_jar_sha" <<'REMOTE'
 set -euo pipefail
 
 host=$1
@@ -98,7 +97,6 @@ install_root=$3
 remote_tmp=$4
 cluster_fallback=$5
 expected_jar_sha=$6
-identity_override=${7:-}
 
 java_bin="${PULSE_JAVA_BIN:-$(command -v java || true)}"
 
@@ -207,14 +205,13 @@ for coordinator in "${coordinators[@]}"; do
 done
 
 ip_value=""
-identity_source=${identity_override:-$host}
-case "$identity_source" in
-  *:*) ip_value="$identity_source" ;;
+case "$host" in
+  *:*) ip_value="$host" ;;
 esac
 if [ -z "$ip_value" ]; then
-  ip_value=$(ip -6 addr show scope global 2>/dev/null | awk '/inet6/{print $2}' | cut -d/ -f1 | head -n 1 || true)
+  ip_value=$(ip -6 addr show dev eth0 scope global 2>/dev/null | awk '/inet6/{print $2}' | cut -d/ -f1 | head -n 1 || true)
 fi
-identity_value=${ip_value:-$identity_source}
+identity_value=${ip_value:-$host}
 
 tide_pid=$(pgrep -f tide_worker | head -n 1 || true)
 tide_area="unknown"
