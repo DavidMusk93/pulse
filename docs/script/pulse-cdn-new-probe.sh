@@ -8,7 +8,7 @@ call() {
   echo "EVENT phase=probe host=${host} index=${index} status=start"
   ssh "$host" 'bash -s' <<'REMOTE'
 set -euo pipefail
-echo "HOST=$(hostname -f 2>/dev/null || hostname)"
+echo "HOST=${host}"
 echo "WHOAMI=$(id -un)"
 echo "ARCH=$(uname -m)"
 echo "JAVA=$(command -v java || true)"

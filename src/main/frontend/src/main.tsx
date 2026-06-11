@@ -187,7 +187,9 @@ async function copyTextToClipboard(text: string) {
 function normalizeUrlHost(value?: string) {
   if (!value) return '-';
   try {
-    return normalizeAddress(new URL(value).hostname);
+    const parsed = new URL(value);
+    const hostWithoutPort = parsed.port ? parsed.host.replace(`:${parsed.port}`, '') : parsed.host;
+    return normalizeAddress(hostWithoutPort);
   } catch {
     return normalizeAddress(value);
   }

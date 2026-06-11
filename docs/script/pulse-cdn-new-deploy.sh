@@ -204,11 +204,14 @@ for coordinator in "${coordinators[@]}"; do
   fi
 done
 
-hostname_value=$(hostname -f 2>/dev/null || hostname)
-ip_value=$(ip -6 addr show scope global 2>/dev/null | awk '/inet6/{print $2}' | cut -d/ -f1 | head -n 1 || true)
+ip_value=""
+case "$host" in
+  *:*) ip_value="$host" ;;
+esac
 if [ -z "$ip_value" ]; then
-  ip_value=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+  ip_value=$(ip -6 addr show scope global 2>/dev/null | awk '/inet6/{print $2}' | cut -d/ -f1 | head -n 1 || true)
 fi
+identity_value=${ip_value:-$host}
 
 tide_pid=$(pgrep -f tide_worker | head -n 1 || true)
 tide_area="unknown"
@@ -238,8 +241,8 @@ fi
 
 cat > "$install_root/etc/pulse-agent.env" <<ENV
 PULSE_COORDINATOR_URLS=${coordinator_urls}
-PULSE_AGENT_ID=${hostname_value}
-PULSE_AGENT_HOST=${hostname_value}
+PULSE_AGENT_ID=${identity_value}
+PULSE_AGENT_HOST=${identity_value}
 PULSE_AGENT_IP=${ip_value:-unknown}
 PULSE_AGENT_CLUSTER=${tide_cluster}
 PULSE_AGENT_AREA=${tide_area}
@@ -261,7 +264,7 @@ PULSE_AGENT_JAVA_OPTS=-XX:+UseSerialGC -XX:ActiveProcessorCount=2 -XX:CICompiler
 ENV
 
 cat > "$install_root/etc/pulse-coordinator.env" <<ENV
-PULSE_COORDINATOR_ID=${hostname_value}
+PULSE_COORDINATOR_ID=${identity_value}
 PULSE_BIND_HOST=::
 PULSE_PORT=9966
 PULSE_GROUP_PORT=9977

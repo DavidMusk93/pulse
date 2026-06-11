@@ -23,7 +23,7 @@ for coordinator in "${coordinators[@]}"; do
   fi
 done
 
-echo "HOST=$(hostname -f 2>/dev/null || hostname)"
+echo "HOST=${host}"
 java_bin=$(command -v java || true)
 if [ -z "$java_bin" ] && [ -x "$install_root/jre/bin/java" ]; then
   java_bin="$install_root/jre/bin/java"

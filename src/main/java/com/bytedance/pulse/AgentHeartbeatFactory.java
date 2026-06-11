@@ -141,9 +141,10 @@ public class AgentHeartbeatFactory {
     }
 
     public static AgentHeartbeatFactory fromEnvironment(Clock clock) {
-        String host = env("PULSE_AGENT_HOST", localHostName());
-        String ip = env("PULSE_AGENT_IP", firstNonLoopbackAddress().orElse("-"));
-        String agentId = env("PULSE_AGENT_ID", host);
+        String detectedIp = firstNonLoopbackAddress().orElse("-");
+        String ip = env("PULSE_AGENT_IP", detectedIp);
+        String host = env("PULSE_AGENT_HOST", ip);
+        String agentId = env("PULSE_AGENT_ID", ip);
         String cluster = env("PULSE_AGENT_CLUSTER", "unknown");
         String area = env("PULSE_AGENT_AREA", "unknown");
         String zone = env("PULSE_AGENT_ZONE", area);
@@ -160,14 +161,6 @@ public class AgentHeartbeatFactory {
 
     private static String blankToUnknown(String value) {
         return value == null || value.isBlank() || "-".equals(value) ? "unknown" : value;
-    }
-
-    private static String localHostName() {
-        try {
-            return InetAddress.getLocalHost().getHostName();
-        } catch (Exception ignored) {
-            return "unknown-host";
-        }
     }
 
     private static Optional<String> firstNonLoopbackAddress() {
