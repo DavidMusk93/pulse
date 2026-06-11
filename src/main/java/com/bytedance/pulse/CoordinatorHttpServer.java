@@ -9,6 +9,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -35,6 +36,7 @@ public class CoordinatorHttpServer {
     private final PeerForwarder peerForwarder;
     private final HttpClient routeClient = HttpClient.newHttpClient();
     private final BiFunction<String, URI, URI> taskRouteResolver;
+    private final List<String> metricPeerUrls;
     private final ArrayDeque<SseEvent> metricEventCache = new ArrayDeque<>();
     private final AtomicLong metricEventSequence = new AtomicLong();
     private final int metricEventCacheLimit;
@@ -57,9 +59,20 @@ public class CoordinatorHttpServer {
             int port,
             PeerForwarder peerForwarder,
             BiFunction<String, URI, URI> taskRouteResolver) throws IOException {
+        this(service, bindHost, port, peerForwarder, taskRouteResolver, peerUrlsFromEnvironment());
+    }
+
+    CoordinatorHttpServer(
+            CoordinatorService service,
+            String bindHost,
+            int port,
+            PeerForwarder peerForwarder,
+            BiFunction<String, URI, URI> taskRouteResolver,
+            List<String> metricPeerUrls) throws IOException {
         this.service = service;
         this.peerForwarder = peerForwarder;
         this.taskRouteResolver = taskRouteResolver;
+        this.metricPeerUrls = metricPeerUrls == null ? List.of() : List.copyOf(metricPeerUrls);
         this.metricEventCacheLimit = positiveInt("PULSE_METRIC_SSE_CACHE_EVENTS", 256);
         this.server = HttpServer.create(new InetSocketAddress(bindHost, port), httpBacklog());
         this.server.createContext("/", this::handle);
@@ -107,7 +120,7 @@ public class CoordinatorHttpServer {
                 return;
             }
             if ("GET".equals(method) && "/api/metrics/query_range".equals(path)) {
-                writeJson(exchange, 200, service.queryMetrics(metricQuery(exchange.getRequestURI())));
+                writeJson(exchange, 200, queryMetrics(exchange));
                 return;
             }
             if ("GET".equals(method) && "/api/metrics/events".equals(path)) {
@@ -253,7 +266,7 @@ public class CoordinatorHttpServer {
             while (!Thread.currentThread().isInterrupted() && System.currentTimeMillis() < deadline) {
                 boolean wroteSnapshot = false;
                 for (String agentId : agentIds) {
-                    String payload = mapper.writeValueAsString(service.taskSnapshot(agentId));
+                    String payload = mapper.writeValueAsString(taskSnapshotForHttp(exchange, agentId));
                     if (!payload.equals(lastPayloads.get(agentId))) {
                         writeSse(output, "task.snapshot", sequence++, payload);
                         lastPayloads.put(agentId, payload);
@@ -456,6 +469,84 @@ public class CoordinatorHttpServer {
                 queryValue(uri, "cluster"));
     }
 
+    private MetricQueryResult queryMetrics(HttpExchange exchange) throws Exception {
+        MetricQuery query = metricQuery(exchange.getRequestURI());
+        MetricQueryResult local = service.queryMetrics(query);
+        if ("1".equals(exchange.getRequestHeaders().getFirst("x-pulse-metric-routed")) || metricPeerUrls.isEmpty()) {
+            return local;
+        }
+        List<MetricQueryResult> results = new ArrayList<>();
+        results.add(local);
+        String rawPath = exchange.getRequestURI().getRawPath();
+        String rawQuery = exchange.getRequestURI().getRawQuery();
+        for (String peerUrl : metricPeerUrls) {
+            try {
+                URI target = URI.create(peerUrl + rawPath + (rawQuery == null || rawQuery.isBlank() ? "" : "?" + rawQuery));
+                HttpRequest request = HttpRequest.newBuilder(target)
+                        .timeout(Duration.ofMillis(positiveLong("PULSE_METRIC_ROUTE_TIMEOUT_MS", 2_000)))
+                        .header("x-pulse-metric-routed", "1")
+                        .GET()
+                        .build();
+                HttpResponse<String> response = routeClient.send(request, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                    results.add(mapper.readValue(response.body(), MetricQueryResult.class));
+                } else {
+                    System.err.printf("metric_route status=bad_response peer=%s code=%d body=%s%n",
+                            peerUrl, response.statusCode(), response.body());
+                }
+            } catch (Exception exception) {
+                System.err.printf("metric_route status=failed peer=%s error=%s%n", peerUrl, exception.getMessage());
+            }
+        }
+        return mergeMetricResults(query, results);
+    }
+
+    private static MetricQueryResult mergeMetricResults(MetricQuery query, List<MetricQueryResult> results) {
+        MetricQueryResult first = results.get(0);
+        Map<Map<String, String>, List<MetricPoint>> byLabels = new java.util.LinkedHashMap<>();
+        boolean truncated = false;
+        long suggestedStepMs = first.suggestedStepMs();
+        for (MetricQueryResult result : results) {
+            truncated = truncated || result.truncated();
+            suggestedStepMs = Math.max(suggestedStepMs, result.suggestedStepMs());
+            for (MetricSeries series : result.series()) {
+                byLabels.computeIfAbsent(series.labels(), ignored -> new ArrayList<>()).addAll(series.points());
+            }
+        }
+        int limit = Math.min(first.seriesLimit(), query.topN() > 0 ? query.topN() : first.seriesLimit());
+        List<MetricSeries> series = byLabels.entrySet().stream()
+                .map(entry -> new MetricSeries(
+                        entry.getKey(),
+                        entry.getValue().stream()
+                                .sorted(java.util.Comparator.comparingLong(MetricPoint::timestampMs))
+                                .toList()))
+                .sorted((left, right) -> stableMetricLabelKey(left).compareTo(stableMetricLabelKey(right)))
+                .toList();
+        if (series.size() > limit) {
+            truncated = true;
+            series = List.copyOf(series.subList(0, limit));
+        }
+        return new MetricQueryResult(
+                "q-merged-" + query.startMs() + "-" + query.endMs() + "-" + Math.abs((query.metric() + query.agentIds() + query.cluster()).hashCode()),
+                query.metric(),
+                query.startMs(),
+                query.endMs(),
+                first.unit(),
+                first.samplePolicy(),
+                truncated,
+                suggestedStepMs,
+                first.seriesLimit(),
+                first.pointLimit(),
+                series);
+    }
+
+    private static String stableMetricLabelKey(MetricSeries series) {
+        return series.labels().entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .map(entry -> entry.getKey() + "=" + entry.getValue())
+                .reduce("", (left, right) -> left + "|" + right);
+    }
+
     private static MetricEventQuery metricEventQuery(URI uri) {
         return new MetricEventQuery(
                 longQuery(uri, "start_ms", longQuery(uri, "from", 0)),
@@ -509,6 +600,47 @@ public class CoordinatorHttpServer {
         try (InputStream body = exchange.getRequestBody()) {
             return new String(body.readAllBytes(), StandardCharsets.UTF_8);
         }
+    }
+
+    private TaskSnapshot taskSnapshotForHttp(HttpExchange exchange, String agentId) throws IOException {
+        Optional<URI> target = taskSnapshotRouteUri(exchange, agentId);
+        if (target.isEmpty()) {
+            return service.taskSnapshot(agentId);
+        }
+        try {
+            HttpRequest request = HttpRequest.newBuilder(target.get())
+                    .timeout(Duration.ofMillis(positiveLong("PULSE_TASK_ROUTE_TIMEOUT_MS", 5_000)))
+                    .header("x-pulse-task-routed", "1")
+                    .GET()
+                    .build();
+            HttpResponse<String> response = routeClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                return mapper.readValue(response.body(), TaskSnapshot.class);
+            }
+            System.err.printf("task_snapshot_route status=bad_response agent_id=%s target=%s code=%d body=%s%n",
+                    agentId, target.get(), response.statusCode(), response.body());
+            return service.taskSnapshot(agentId);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IOException("task snapshot route interrupted", exception);
+        } catch (Exception exception) {
+            System.err.printf("task_snapshot_route status=failed agent_id=%s target=%s error=%s%n",
+                    agentId, target.get(), exception.getMessage());
+            return service.taskSnapshot(agentId);
+        }
+    }
+
+    private Optional<URI> taskSnapshotRouteUri(HttpExchange exchange, String agentId) {
+        if ("1".equals(exchange.getRequestHeaders().getFirst("x-pulse-task-routed"))) {
+            return Optional.empty();
+        }
+        Optional<String> owner = service.agentCoordinatorId(agentId);
+        if (owner.isEmpty() || owner.get().equals(service.coordinatorId())) {
+            return Optional.empty();
+        }
+        String encodedAgentId = URLEncoder.encode(agentId, StandardCharsets.UTF_8).replace("+", "%20");
+        URI snapshotUri = URI.create("/api/agents/" + encodedAgentId + "/tasks");
+        return Optional.of(taskRouteResolver.apply(owner.get(), snapshotUri));
     }
 
     private boolean proxyTaskRequestIfNeeded(
@@ -576,6 +708,14 @@ public class CoordinatorHttpServer {
         }
         long port = positiveLong("PULSE_PORT", 9966);
         return "http://" + coordinatorId + ":" + port;
+    }
+
+    private static List<String> peerUrlsFromEnvironment() {
+        String rawPeers = System.getenv().getOrDefault("PULSE_COORDINATOR_PEERS", "");
+        return Arrays.stream(rawPeers.split(","))
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .toList();
     }
 
     private static List<String> parseArgs(Object rawArgs) {
@@ -728,11 +868,7 @@ public class CoordinatorHttpServer {
         }
 
         static PeerForwarder fromEnvironment(String coordinatorId) {
-            String rawPeers = System.getenv().getOrDefault("PULSE_COORDINATOR_PEERS", "");
-            List<String> peers = Arrays.stream(rawPeers.split(","))
-                    .map(String::trim)
-                    .filter(value -> !value.isEmpty())
-                    .toList();
+            List<String> peers = peerUrlsFromEnvironment();
             if (peers.isEmpty()) {
                 return noop();
             }

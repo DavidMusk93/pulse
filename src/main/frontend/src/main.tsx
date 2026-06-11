@@ -1892,7 +1892,7 @@ function TaskModal(props: {
           </Space>
         </Card>
         <Card title="结果队列"><Statistic value={completions.length} /></Card>
-        <Card title="文件上传">
+        <Card title="文件上传" data-testid="file-upload-status-card">
           {fileTransfers.length > 0 ? <List
             dataSource={fileTransfers}
             renderItem={(file: any) => <List.Item>
@@ -2023,7 +2023,7 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
     <div className="file-shell-panel">
       <Typography.Text className="task-args-title">文件上传</Typography.Text>
       <Space direction="vertical" size={8} className="file-shell-stack">
-        <input type="file" onChange={event => setFile(event.target.files?.[0] || null)} />
+        <input data-testid="task-file-input" type="file" onChange={event => setFile(event.target.files?.[0] || null)} />
         <Select
           value={fileTargetDir}
           onChange={setFileTargetDir}
@@ -2032,7 +2032,7 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
             { value: 'workspace', label: '上传到 $agent_work_dir/workspace/files' }
           ]}
         />
-        <Button size="small" disabled={!file || busy} loading={busy && actionMessage.includes('文件上传')} onClick={submitFile}>仅上传文件</Button>
+        <Button data-testid="task-file-upload-submit" size="small" disabled={!file || busy} loading={busy && actionMessage.includes('文件上传')} onClick={submitFile}>仅上传文件</Button>
         <Typography.Text type="secondary">文件上传只负责投递文件，不会执行脚本或触发任务。</Typography.Text>
       </Space>
     </div>
@@ -2049,7 +2049,7 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
         <Typography.Text type="secondary">Shell 执行使用这里的脚本内容；它和上面的文件上传是两个独立功能。</Typography.Text>
       </Space>
     </div>
-    {actionMessage && <Typography.Text className="action-message" type={actionMessage.includes('失败') ? 'danger' : 'secondary'}>{actionMessage}</Typography.Text>}
+    {actionMessage && <Typography.Text className="action-message" data-testid="task-action-message" type={actionMessage.includes('失败') ? 'danger' : 'secondary'}>{actionMessage}</Typography.Text>}
   </>;
 });
 

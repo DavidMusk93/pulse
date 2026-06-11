@@ -733,6 +733,39 @@ class CoordinatorHttpServerTest {
             JsonNode getBody = mapper.readTree(routedGet.body());
             assertEquals("analyze_block_layout_dry_run", getBody.get("execution_queue").get(0).get("task_type").asText());
 
+            String content = "hello routed file";
+            String encoded = Base64.getEncoder().encodeToString(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            String sha = TaskOutputCodec.sha256(content);
+            HttpResponse<String> routedFilePut = postJson("/api/agents/agent-routed/tasks", """
+                    {"operation":"file_put","file_name":"hello.txt","file_role":"generic_file","target_dir":"files","content_base64":"%s","content_sha256":"%s","content_bytes":17}
+                    """.formatted(encoded, sha));
+            assertEquals(200, routedFilePut.statusCode());
+            JsonNode fileBody = mapper.readTree(routedFilePut.body());
+            assertEquals("queued", fileBody.get("file_transfers").get(0).get("status").asText());
+
+            HttpRequest streamRequest = HttpRequest.newBuilder(URI.create(baseUrl + "/api/tasks/stream?agents=agent-routed"))
+                    .timeout(Duration.ofSeconds(2))
+                    .GET()
+                    .build();
+            HttpResponse<java.io.InputStream> streamResponse =
+                    client.send(streamRequest, HttpResponse.BodyHandlers.ofInputStream());
+            assertEquals(200, streamResponse.statusCode());
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(streamResponse.body()))) {
+                StringBuilder firstLines = new StringBuilder();
+                for (int i = 0; i < 30; i++) {
+                    String line = reader.readLine();
+                    if (line == null) {
+                        break;
+                    }
+                    firstLines.append(line).append('\n');
+                    if (firstLines.toString().contains("hello.txt")) {
+                        break;
+                    }
+                }
+                assertTrue(firstLines.toString().contains("hello.txt"));
+                assertTrue(firstLines.toString().contains("file_transfers"));
+            }
+
             HttpResponse<String> loopProtectedGet = client.send(
                     HttpRequest.newBuilder(URI.create(baseUrl + "/api/agents/agent-routed/tasks"))
                             .header("x-pulse-task-routed", "1")
@@ -743,6 +776,74 @@ class CoordinatorHttpServerTest {
             assertEquals(0, mapper.readTree(loopProtectedGet.body()).get("execution_queue").size());
         } finally {
             ownerServer.stop();
+        }
+    }
+
+    @Test
+    void metricQueryAggregatesPeerCoordinatorResults() throws Exception {
+        server.stop();
+        metricStorage.close();
+        metricStorage = null;
+
+        LocalMetricStorage ownerStorage = LocalMetricStorage.open(tempDir.resolve("owner-metrics.db"));
+        CoordinatorHttpServer ownerServer = null;
+        try {
+            CoordinatorService ownerService = new CoordinatorService(
+                    "coordinator-owner",
+                    Clock.fixed(Instant.ofEpochMilli(1_710_000_010_000L), ZoneOffset.UTC),
+                    ownerStorage);
+            ownerService.handleHeartbeat(new HeartbeatRequest(
+                    "cdn2/area-a/000",
+                    null,
+                    null,
+                    null,
+                    null,
+                    List.of(),
+                    List.of(new AgentHeartbeat(
+                            "agent-owned",
+                            1,
+                            10,
+                            15_000,
+                            List.of(new PulseMessage("state-owned", "state.heartbeat", 1, null, null, Map.of(
+                                    "host", "owned-host",
+                                    "ip", "10.0.0.8",
+                                    "cluster", "cdn2",
+                                    "area", "area-a")))))));
+            ownerServer = new CoordinatorHttpServer(
+                    ownerService,
+                    "127.0.0.1",
+                    0,
+                    CoordinatorHttpServer.PeerForwarder.noop());
+            ownerServer.start();
+
+            LocalMetricStorage edgeStorage = LocalMetricStorage.open(tempDir.resolve("edge-metrics.db"));
+            metricStorage = edgeStorage;
+            CoordinatorService edgeService = new CoordinatorService(
+                    "coordinator-edge",
+                    Clock.fixed(Instant.ofEpochMilli(1_710_000_010_000L), ZoneOffset.UTC),
+                    edgeStorage);
+            server = new CoordinatorHttpServer(
+                    edgeService,
+                    "127.0.0.1",
+                    0,
+                    CoordinatorHttpServer.PeerForwarder.noop(),
+                    (coordinatorId, requestUri) -> URI.create("http://" + coordinatorId + requestUri.getRawPath()),
+                    List.of("http://127.0.0.1:" + ownerServer.port()));
+            server.start();
+            baseUrl = "http://127.0.0.1:" + server.port();
+
+            HttpResponse<String> response = get("/api/metrics/query_range?metric=group.status_unhealthy&cluster=cdn2&start_ms=1710000000000&end_ms=1710000010000&step_ms=1000&series_limit=20&point_limit=100");
+
+            assertEquals(200, response.statusCode());
+            JsonNode body = mapper.readTree(response.body());
+            assertEquals(1, body.get("series").size());
+            assertEquals("cdn2", body.get("series").get(0).get("labels").get("cluster").asText());
+            assertTrue(body.get("series").get(0).get("points").size() > 0);
+        } finally {
+            if (ownerServer != null) {
+                ownerServer.stop();
+            }
+            ownerStorage.close();
         }
     }
 

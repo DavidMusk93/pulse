@@ -679,6 +679,36 @@ class CoordinatorServiceTest {
         assertEquals(1, host.state().size());
     }
 
+    @Test
+    void forwardedHeartbeatWithoutStateStillRefreshesLivenessAndKeepsState() {
+        CoordinatorService service = new CoordinatorService("coordinator-b", clock);
+        service.handleForward(new HeartbeatForwardRequest("coordinator-a", List.of(new ForwardState(
+                "agent-1",
+                1,
+                10,
+                15_000,
+                clock.millis(),
+                "direct",
+                List.of(new PulseMessage("state-1", "state.heartbeat", 1, null, null, Map.of(
+                        "host", "host-1",
+                        "ip", "10.0.0.1",
+                        "cluster", "cluster-a",
+                        "area", "area-a")))))));
+
+        service.handleForward(new HeartbeatForwardRequest("coordinator-a", List.of(new ForwardState(
+                "agent-1", 1, 11, 15_000, clock.millis(), "direct", List.of()))));
+        service.handleForward(new HeartbeatForwardRequest("coordinator-a", List.of(new ForwardState(
+                "agent-1", 1, 12, 15_000, clock.millis(), "direct", List.of()))));
+
+        HostView host = service.hosts().get(0);
+        assertEquals(12, host.seq());
+        assertEquals("alive", host.status());
+        assertEquals("host-1", host.host());
+        assertEquals("cluster-a", host.cluster());
+        assertEquals("coordinator-a", host.coordinatorId());
+        assertEquals(3, host.heartbeatConfirmations());
+    }
+
     private static HeartbeatRequest singleHeartbeat(String agentId, long epoch, long seq, String host, String ip) {
         AgentHeartbeat heartbeat = agent(agentId, epoch, seq, host, ip);
         return new HeartbeatRequest(

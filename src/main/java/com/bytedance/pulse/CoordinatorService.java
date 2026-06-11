@@ -93,9 +93,6 @@ public class CoordinatorService {
             List<PulseMessage> stateMessages = state.messages().stream()
                     .filter(PulseMessage::isStateMessage)
                     .toList();
-            if (stateMessages.isEmpty()) {
-                continue;
-            }
             accepted++;
             String source = state.source() == null || state.source().isBlank() ? fallbackSource : state.source();
             boolean changed = mergeForwardState(state, source, request.sourceCoordinatorId(), stateMessages);
@@ -238,7 +235,13 @@ public class CoordinatorService {
             List<PulseMessage> messages,
             String ownerCoordinatorId) {
         NodeState previous = states.get(heartbeat.agentId());
-        NodeState incoming = NodeState.fromHeartbeat(heartbeat, source, observedAtMs, messages, ownerCoordinatorId);
+        NodeState incoming = NodeState.fromHeartbeat(
+                heartbeat,
+                source,
+                observedAtMs,
+                messages,
+                ownerCoordinatorId,
+                previous == null ? Map.of() : previous.state);
         states.merge(heartbeat.agentId(), incoming, NodeState::newer);
         writeHeartbeatMetric(heartbeat, source, observedAtMs, messages, previous);
         markStateChanged();
@@ -250,8 +253,13 @@ public class CoordinatorService {
             String source,
             String ownerCoordinatorId,
             List<PulseMessage> messages) {
-        NodeState incoming = NodeState.fromForwardState(state, source, ownerCoordinatorId, messages);
         NodeState existing = states.get(state.agentId());
+        NodeState incoming = NodeState.fromForwardState(
+                state,
+                source,
+                ownerCoordinatorId,
+                messages,
+                existing == null ? Map.of() : existing.state);
         NodeState selected = existing == null ? incoming : NodeState.newer(existing, incoming);
         states.put(state.agentId(), selected);
         markStateChanged();
@@ -359,8 +367,8 @@ public class CoordinatorService {
                     groupId,
                     leaderAgentId,
                     stringState(leaderState, "ip", ""),
-                    group == null ? "unknown" : group.cluster(),
-                    group == null ? "unknown" : group.area(),
+                    group == null ? stringState(leaderState, "cluster", "unknown") : group.cluster(),
+                    group == null ? stringState(leaderState, "area", "unknown") : group.area(),
                     expectedGeneration,
                     expectedMembers.isEmpty() ? request.agents().size() : expectedMembers.size(),
                     request.agents().size(),
@@ -719,7 +727,8 @@ public class CoordinatorService {
                 String source,
                 long observedAtMs,
                 List<PulseMessage> messages,
-                String coordinatorId) {
+                String coordinatorId,
+                Map<String, Object> previousState) {
             return new NodeState(
                     heartbeat.agentId(),
                     heartbeat.epoch(),
@@ -729,14 +738,15 @@ public class CoordinatorService {
                     List.of(new HeartbeatConfirmation(heartbeat.epoch(), heartbeat.seq(), observedAtMs)),
                     source,
                     coordinatorId,
-                    extractState(messages));
+                    stateOrPrevious(messages, previousState));
         }
 
         private static NodeState fromForwardState(
                 ForwardState state,
                 String source,
                 String coordinatorId,
-                List<PulseMessage> messages) {
+                List<PulseMessage> messages,
+                Map<String, Object> previousState) {
             return new NodeState(
                     state.agentId(),
                     state.epoch(),
@@ -746,7 +756,15 @@ public class CoordinatorService {
                     List.of(new HeartbeatConfirmation(state.epoch(), state.seq(), state.observedAtMs())),
                     source,
                     coordinatorId,
-                    extractState(messages));
+                    stateOrPrevious(messages, previousState));
+        }
+
+        private static Map<String, Object> stateOrPrevious(List<PulseMessage> messages, Map<String, Object> previousState) {
+            Map<String, Object> state = extractState(messages);
+            if (!state.isEmpty() || previousState == null || previousState.isEmpty()) {
+                return state;
+            }
+            return previousState;
         }
 
         private static NodeState newer(NodeState left, NodeState right) {
