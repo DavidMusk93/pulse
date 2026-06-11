@@ -679,6 +679,74 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
+    void taskApiRoutesForwardedAgentRequestsToHeartbeatOwner() throws Exception {
+        server.stop();
+        CoordinatorService ownerService = new CoordinatorService(
+                "coordinator-owner",
+                Clock.fixed(Instant.ofEpochMilli(1_710_000_000_000L), ZoneOffset.UTC));
+        CoordinatorHttpServer ownerServer = new CoordinatorHttpServer(
+                ownerService,
+                "127.0.0.1",
+                0,
+                CoordinatorHttpServer.PeerForwarder.noop());
+        ownerServer.start();
+        String ownerBaseUrl = "http://127.0.0.1:" + ownerServer.port();
+        try {
+            CoordinatorService edgeService = new CoordinatorService(
+                    "coordinator-edge",
+                    Clock.fixed(Instant.ofEpochMilli(1_710_000_000_000L), ZoneOffset.UTC));
+            edgeService.handleForward(new HeartbeatForwardRequest("coordinator-owner", List.of(new ForwardState(
+                    "agent-routed",
+                    1L,
+                    42L,
+                    15_000L,
+                    1_710_000_000_000L,
+                    "direct",
+                    List.of(new PulseMessage(
+                            "state-agent-routed-42",
+                            "state.heartbeat",
+                            1,
+                            null,
+                            null,
+                            Map.of("host", "owner-host")))))));
+            server = new CoordinatorHttpServer(
+                    edgeService,
+                    "127.0.0.1",
+                    0,
+                    CoordinatorHttpServer.PeerForwarder.noop(),
+                    (coordinatorId, requestUri) -> URI.create(ownerBaseUrl
+                            + requestUri.getRawPath()
+                            + (requestUri.getRawQuery() == null ? "" : "?" + requestUri.getRawQuery())));
+            server.start();
+            baseUrl = "http://127.0.0.1:" + server.port();
+
+            HttpResponse<String> routedPost = postJson("/api/agents/agent-routed/tasks", """
+                    {"task_type":"analyze_block_layout_dry_run"}
+                    """);
+            assertEquals(200, routedPost.statusCode());
+            JsonNode postBody = mapper.readTree(routedPost.body());
+            assertEquals("agent-routed", postBody.get("agent_id").asText());
+            assertEquals("analyze_block_layout_dry_run", postBody.get("execution_queue").get(0).get("task_type").asText());
+
+            HttpResponse<String> routedGet = get("/api/agents/agent-routed/tasks");
+            assertEquals(200, routedGet.statusCode());
+            JsonNode getBody = mapper.readTree(routedGet.body());
+            assertEquals("analyze_block_layout_dry_run", getBody.get("execution_queue").get(0).get("task_type").asText());
+
+            HttpResponse<String> loopProtectedGet = client.send(
+                    HttpRequest.newBuilder(URI.create(baseUrl + "/api/agents/agent-routed/tasks"))
+                            .header("x-pulse-task-routed", "1")
+                            .GET()
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, loopProtectedGet.statusCode());
+            assertEquals(0, mapper.readTree(loopProtectedGet.body()).get("execution_queue").size());
+        } finally {
+            ownerServer.stop();
+        }
+    }
+
+    @Test
     void heartbeatResponseCarriesGroupPlanMessage() throws Exception {
         for (int i = 1; i <= 5; i++) {
             postAlive("agent-" + i, "host-" + i, "10.0.0." + i);

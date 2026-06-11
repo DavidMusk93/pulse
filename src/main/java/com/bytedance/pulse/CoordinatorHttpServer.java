@@ -26,6 +26,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiFunction;
 
 public class CoordinatorHttpServer {
     private final CoordinatorService service;
@@ -33,6 +34,7 @@ public class CoordinatorHttpServer {
     private final ObjectMapper mapper = JsonSupport.objectMapper();
     private final PeerForwarder peerForwarder;
     private final HttpClient routeClient = HttpClient.newHttpClient();
+    private final BiFunction<String, URI, URI> taskRouteResolver;
     private final ArrayDeque<SseEvent> metricEventCache = new ArrayDeque<>();
     private final AtomicLong metricEventSequence = new AtomicLong();
     private final int metricEventCacheLimit;
@@ -46,8 +48,18 @@ public class CoordinatorHttpServer {
     }
 
     CoordinatorHttpServer(CoordinatorService service, String bindHost, int port, PeerForwarder peerForwarder) throws IOException {
+        this(service, bindHost, port, peerForwarder, CoordinatorHttpServer::defaultTaskRouteUri);
+    }
+
+    CoordinatorHttpServer(
+            CoordinatorService service,
+            String bindHost,
+            int port,
+            PeerForwarder peerForwarder,
+            BiFunction<String, URI, URI> taskRouteResolver) throws IOException {
         this.service = service;
         this.peerForwarder = peerForwarder;
+        this.taskRouteResolver = taskRouteResolver;
         this.metricEventCacheLimit = positiveInt("PULSE_METRIC_SSE_CACHE_EVENTS", 256);
         this.server = HttpServer.create(new InetSocketAddress(bindHost, port), httpBacklog());
         this.server.createContext("/", this::handle);
@@ -547,10 +559,14 @@ public class CoordinatorHttpServer {
         if (owner.isEmpty() || owner.get().equals(service.coordinatorId())) {
             return Optional.empty();
         }
-        String base = taskRouteBase(owner.get());
-        String rawPath = exchange.getRequestURI().getRawPath();
-        String rawQuery = exchange.getRequestURI().getRawQuery();
-        return Optional.of(URI.create(base + rawPath + (rawQuery == null || rawQuery.isBlank() ? "" : "?" + rawQuery)));
+        return Optional.of(taskRouteResolver.apply(owner.get(), exchange.getRequestURI()));
+    }
+
+    private static URI defaultTaskRouteUri(String coordinatorId, URI requestUri) {
+        String base = taskRouteBase(coordinatorId);
+        String rawPath = requestUri.getRawPath();
+        String rawQuery = requestUri.getRawQuery();
+        return URI.create(base + rawPath + (rawQuery == null || rawQuery.isBlank() ? "" : "?" + rawQuery));
     }
 
     private static String taskRouteBase(String coordinatorId) {
