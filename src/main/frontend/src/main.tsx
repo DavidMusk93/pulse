@@ -1853,11 +1853,14 @@ function TaskModal(props: {
   const fileTransfers = (props.snapshot?.file_transfers || []).filter((file: any) => file.file_role !== 'shell_script');
   const shellTransfers = (props.snapshot?.file_transfers || []).filter((file: any) => file.file_role === 'shell_script');
   function handleResultTitleClick() {
+    if (argsUnlocked) return;
     const now = Date.now();
     const next = [...unlockClicks.current.filter(value => now - value <= 5000), now];
     unlockClicks.current = next;
     if (next.length >= 3) {
       setArgsUnlocked(true);
+      unlockClicks.current = [];
+      message.success({ content: '已显示预定义任务参数输入', key: 'task-args-unlocked', duration: 1.6 });
     }
   }
   return <Modal centered open={props.open} onCancel={props.onClose} footer={null} width="min(61.8vw, calc(100vw - 32px))" className={`task-modal ${isClusterRun ? 'cluster-run-modal' : ''}`} title={null} closeIcon={<span className="mac-close" />}>
@@ -2006,6 +2009,16 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
       <Button type="primary" onClick={() => onRun(parsedArgs)}>执行</Button>
       <Button onClick={onPop} icon={<InboxOutlined />}>弹出结果</Button>
       </Flex>
+      {argsUnlocked && <div className="task-args-panel">
+        <Typography.Text className="task-args-title">自定义参数</Typography.Text>
+        <Input.TextArea
+          value={taskArgs}
+          onChange={event => setTaskArgs(event.target.value)}
+          autoSize={{ minRows: 1, maxRows: 3 }}
+          placeholder={defaultTaskArgs}
+        />
+        <Typography.Text type="secondary">默认参数为 --dry-run。非 dry-run 操作会真实修改线上机器，执行前必须确认目标范围。</Typography.Text>
+      </div>}
     </div>
     <div className="file-shell-panel">
       <Typography.Text className="task-args-title">文件上传</Typography.Text>
@@ -2037,16 +2050,6 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
       </Space>
     </div>
     {actionMessage && <Typography.Text className="action-message" type={actionMessage.includes('失败') ? 'danger' : 'secondary'}>{actionMessage}</Typography.Text>}
-    {argsUnlocked && <div className="task-args-panel">
-      <Typography.Text className="task-args-title">自定义参数</Typography.Text>
-      <Input.TextArea
-        value={taskArgs}
-        onChange={event => setTaskArgs(event.target.value)}
-        autoSize={{ minRows: 1, maxRows: 3 }}
-        placeholder={defaultTaskArgs}
-      />
-      <Typography.Text type="secondary">默认参数为 --dry-run。非 dry-run 操作会真实修改线上机器，执行前必须确认目标范围。</Typography.Text>
-    </div>}
   </>;
 });
 
@@ -2169,8 +2172,22 @@ const OutputPanelTitle = memo(function OutputPanelTitle({
 }) {
   const lines = showMeta ? Number(meta?.output_lines ?? meta?.stream_lines ?? countLines(value)) : 0;
   const bytes = showMeta ? Number(meta?.output_bytes ?? meta?.stream_bytes ?? new Blob([value]).size) : 0;
-  return <div className="output-panel-title">
-    <button type="button" className="output-title-main output-title-trigger" onClick={onUnlock}>结果查看</button>
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!onUnlock) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onUnlock();
+    }
+  };
+  return <div
+    className={`output-panel-title ${onUnlock ? 'output-title-trigger' : ''}`.trim()}
+    onClick={onUnlock}
+    onKeyDown={handleKeyDown}
+    role={onUnlock ? 'button' : undefined}
+    tabIndex={onUnlock ? 0 : undefined}
+    title={onUnlock ? '连续点击 3 次显示预定义任务参数输入' : undefined}
+  >
+    <span className="output-title-main">结果查看</span>
     <span className="output-title-spacer" />
     {showMeta && <div className="output-title-status-stack">
       {notice && <OutputStatusNotice notice={notice} compact />}

@@ -1105,14 +1105,18 @@ body {
   border: 0;
   background: transparent;
   padding: 0;
-  cursor: default;
+  cursor: pointer;
   font: inherit;
   text-align: left;
+  user-select: none;
 }
 .output-title-trigger:focus-visible {
   outline: 2px solid #2563eb;
   outline-offset: 4px;
   border-radius: 6px;
+}
+.output-title-trigger:hover .output-title-main {
+  color: #2563eb;
 }
 .output-title-spacer {
   flex: 1 1 auto;
