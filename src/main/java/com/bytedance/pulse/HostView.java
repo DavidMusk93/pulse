@@ -13,6 +13,7 @@ public record HostView(
         int heartbeatConfirmations,
         String status,
         String source,
+        String coordinatorId,
         String groupId,
         String groupMode,
         String leaderAgentId,

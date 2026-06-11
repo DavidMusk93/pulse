@@ -35,6 +35,7 @@ class CoordinatorServiceTest {
         assertEquals("cluster-a", host.cluster());
         assertEquals("area-a", host.area());
         assertEquals("alive", host.status());
+        assertEquals("coordinator-a", host.coordinatorId());
         assertEquals(3, host.heartbeatConfirmations());
         assertEquals(0, host.lastObservedAgeMs());
         assertEquals("direct", host.groupId());
@@ -671,6 +672,8 @@ class CoordinatorServiceTest {
         HostView host = service.hosts().get(0);
         assertEquals("host-1", host.host());
         assertEquals("cdn2/yg/000", host.source());
+        assertEquals("coordinator-a", host.coordinatorId());
+        assertEquals("coordinator-a", service.agentCoordinatorId("agent-1").orElseThrow());
         assertEquals("direct", host.groupId());
         assertEquals("direct", host.groupMode());
         assertEquals(1, host.state().size());

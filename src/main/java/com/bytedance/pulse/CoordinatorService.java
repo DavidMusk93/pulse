@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class CoordinatorService {
@@ -61,7 +62,7 @@ public class CoordinatorService {
             String source = request.groupId() == null || request.groupId().isBlank() ? "group" : request.groupId();
             int accepted = 0;
             for (AgentHeartbeat agent : request.agents()) {
-                long acceptedSeq = merge(agent, source, now, agent.messages());
+                long acceptedSeq = merge(agent, source, now, agent.messages(), coordinatorId);
                 taskService.handleReplies(agent.agentId(), agent.messages());
                 agentResponses.add(new AgentHeartbeatResponse(agent.agentId(), acceptedSeq, List.of()));
                 accepted++;
@@ -78,7 +79,7 @@ public class CoordinatorService {
         }
 
         AgentHeartbeat heartbeat = request.toSingleAgentHeartbeat();
-        long acceptedSeq = merge(heartbeat, "direct", now, heartbeat.messages());
+        long acceptedSeq = merge(heartbeat, "direct", now, heartbeat.messages(), coordinatorId);
         taskService.handleReplies(heartbeat.agentId(), heartbeat.messages());
         maybeRecomputeGroups(now, false);
         return HeartbeatResponse.single(coordinatorId, acceptedSeq, responseMessages(heartbeat.agentId()));
@@ -97,7 +98,7 @@ public class CoordinatorService {
             }
             accepted++;
             String source = state.source() == null || state.source().isBlank() ? fallbackSource : state.source();
-            boolean changed = mergeForwardState(state, source, stateMessages);
+            boolean changed = mergeForwardState(state, source, request.sourceCoordinatorId(), stateMessages);
             if (changed) {
                 merged++;
             }
@@ -144,6 +145,14 @@ public class CoordinatorService {
 
     public TaskSnapshot taskSnapshot(String agentId) {
         return taskService.snapshot(agentId);
+    }
+
+    public Optional<String> agentCoordinatorId(String agentId) {
+        if (agentId == null || agentId.isBlank()) {
+            return Optional.empty();
+        }
+        NodeState state = states.get(agentId);
+        return state == null || state.coordinatorId.isBlank() ? Optional.empty() : Optional.of(state.coordinatorId);
     }
 
     public TaskSnapshot enqueueTask(String agentId, String taskType) {
@@ -222,17 +231,26 @@ public class CoordinatorService {
         return messages;
     }
 
-    private long merge(AgentHeartbeat heartbeat, String source, long observedAtMs, List<PulseMessage> messages) {
+    private long merge(
+            AgentHeartbeat heartbeat,
+            String source,
+            long observedAtMs,
+            List<PulseMessage> messages,
+            String ownerCoordinatorId) {
         NodeState previous = states.get(heartbeat.agentId());
-        NodeState incoming = NodeState.fromHeartbeat(heartbeat, source, observedAtMs, messages);
+        NodeState incoming = NodeState.fromHeartbeat(heartbeat, source, observedAtMs, messages, ownerCoordinatorId);
         states.merge(heartbeat.agentId(), incoming, NodeState::newer);
         writeHeartbeatMetric(heartbeat, source, observedAtMs, messages, previous);
         markStateChanged();
         return states.get(heartbeat.agentId()).seq;
     }
 
-    private boolean mergeForwardState(ForwardState state, String source, List<PulseMessage> messages) {
-        NodeState incoming = NodeState.fromForwardState(state, source, messages);
+    private boolean mergeForwardState(
+            ForwardState state,
+            String source,
+            String ownerCoordinatorId,
+            List<PulseMessage> messages) {
+        NodeState incoming = NodeState.fromForwardState(state, source, ownerCoordinatorId, messages);
         NodeState existing = states.get(state.agentId());
         NodeState selected = existing == null ? incoming : NodeState.newer(existing, incoming);
         states.put(state.agentId(), selected);
@@ -671,6 +689,7 @@ public class CoordinatorService {
         private final long expireAtMs;
         private final List<HeartbeatConfirmation> confirmations;
         private final String source;
+        private final String coordinatorId;
         private final Map<String, Object> state;
 
         private NodeState(
@@ -681,6 +700,7 @@ public class CoordinatorService {
                 long observedAtMs,
                 List<HeartbeatConfirmation> confirmations,
                 String source,
+                String coordinatorId,
                 Map<String, Object> state) {
             this.agentId = agentId;
             this.epoch = epoch;
@@ -690,6 +710,7 @@ public class CoordinatorService {
             this.expireAtMs = observedAtMs + ttlMs;
             this.confirmations = List.copyOf(confirmations);
             this.source = source;
+            this.coordinatorId = coordinatorId == null ? "" : coordinatorId;
             this.state = Map.copyOf(state);
         }
 
@@ -697,7 +718,8 @@ public class CoordinatorService {
                 AgentHeartbeat heartbeat,
                 String source,
                 long observedAtMs,
-                List<PulseMessage> messages) {
+                List<PulseMessage> messages,
+                String coordinatorId) {
             return new NodeState(
                     heartbeat.agentId(),
                     heartbeat.epoch(),
@@ -706,12 +728,14 @@ public class CoordinatorService {
                     observedAtMs,
                     List.of(new HeartbeatConfirmation(heartbeat.epoch(), heartbeat.seq(), observedAtMs)),
                     source,
+                    coordinatorId,
                     extractState(messages));
         }
 
         private static NodeState fromForwardState(
                 ForwardState state,
                 String source,
+                String coordinatorId,
                 List<PulseMessage> messages) {
             return new NodeState(
                     state.agentId(),
@@ -721,6 +745,7 @@ public class CoordinatorService {
                     state.observedAtMs(),
                     List.of(new HeartbeatConfirmation(state.epoch(), state.seq(), state.observedAtMs())),
                     source,
+                    coordinatorId,
                     extractState(messages));
         }
 
@@ -735,7 +760,7 @@ public class CoordinatorService {
         }
 
         private NodeState withConfirmations(List<HeartbeatConfirmation> nextConfirmations) {
-            return new NodeState(agentId, epoch, seq, ttlMs, observedAtMs, nextConfirmations, source, state);
+            return new NodeState(agentId, epoch, seq, ttlMs, observedAtMs, nextConfirmations, source, coordinatorId, state);
         }
 
         private HostView toHostView(long now, AgentGroupPlan plan) {
@@ -753,6 +778,7 @@ public class CoordinatorService {
                     confirmations,
                     status,
                     source,
+                    coordinatorId,
                     debugPlan.groupId(),
                     debugPlan.groupMode(),
                     debugPlan.leaderAgentId(),

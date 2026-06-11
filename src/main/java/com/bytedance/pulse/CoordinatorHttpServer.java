@@ -32,6 +32,7 @@ public class CoordinatorHttpServer {
     private final HttpServer server;
     private final ObjectMapper mapper = JsonSupport.objectMapper();
     private final PeerForwarder peerForwarder;
+    private final HttpClient routeClient = HttpClient.newHttpClient();
     private final ArrayDeque<SseEvent> metricEventCache = new ArrayDeque<>();
     private final AtomicLong metricEventSequence = new AtomicLong();
     private final int metricEventCacheLimit;
@@ -128,6 +129,9 @@ public class CoordinatorHttpServer {
             }
             if ("GET".equals(method) && path.startsWith("/api/agents/") && path.endsWith("/tasks/stream")) {
                 String agentId = path.substring("/api/agents/".length(), path.length() - "/tasks/stream".length());
+                if (proxyTaskRequestIfNeeded(exchange, agentId, null, true)) {
+                    return;
+                }
                 try {
                     writeTaskSnapshotStream(exchange, agentId);
                 } catch (IOException ignored) {
@@ -138,11 +142,18 @@ public class CoordinatorHttpServer {
             if (path.startsWith("/api/agents/") && path.endsWith("/tasks")) {
                 String agentId = path.substring("/api/agents/".length(), path.length() - "/tasks".length());
                 if ("GET".equals(method)) {
+                    if (proxyTaskRequestIfNeeded(exchange, agentId, null, false)) {
+                        return;
+                    }
                     writeJson(exchange, 200, service.taskSnapshot(agentId));
                     return;
                 }
                 if ("POST".equals(method)) {
-                    Map<?, ?> body = readJson(exchange, Map.class);
+                    String rawBody = readBody(exchange);
+                    if (proxyTaskRequestIfNeeded(exchange, agentId, rawBody, false)) {
+                        return;
+                    }
+                    Map<?, ?> body = mapper.readValue(rawBody, Map.class);
                     String operation = stringBody(body, "operation");
                     if ("file_put".equals(operation)) {
                         writeJson(exchange, 200, service.enqueueFilePut(
@@ -176,6 +187,9 @@ public class CoordinatorHttpServer {
             Optional<TaskCompletionAction> completionAction = completionAction(path);
             if ("POST".equals(method) && completionAction.isPresent()) {
                 TaskCompletionAction action = completionAction.get();
+                if (proxyTaskRequestIfNeeded(exchange, action.agentId(), readBody(exchange), false)) {
+                    return;
+                }
                 if ("keep".equals(action.action())) {
                     writeJson(exchange, 200, service.keepCompletion(action.agentId(), action.taskId()));
                     return;
@@ -477,6 +491,75 @@ public class CoordinatorHttpServer {
         try (InputStream body = exchange.getRequestBody()) {
             return mapper.readValue(body, type);
         }
+    }
+
+    private String readBody(HttpExchange exchange) throws IOException {
+        try (InputStream body = exchange.getRequestBody()) {
+            return new String(body.readAllBytes(), StandardCharsets.UTF_8);
+        }
+    }
+
+    private boolean proxyTaskRequestIfNeeded(
+            HttpExchange exchange,
+            String agentId,
+            String body,
+            boolean streamResponse) throws IOException, InterruptedException {
+        Optional<URI> target = taskRouteUri(exchange, agentId);
+        if (target.isEmpty()) {
+            return false;
+        }
+        HttpRequest.BodyPublisher publisher = body == null
+                ? HttpRequest.BodyPublishers.noBody()
+                : HttpRequest.BodyPublishers.ofString(body);
+        HttpRequest.Builder builder = HttpRequest.newBuilder(target.get())
+                .timeout(Duration.ofMillis(positiveLong("PULSE_TASK_ROUTE_TIMEOUT_MS", 5_000)))
+                .header("x-pulse-task-routed", "1")
+                .method(exchange.getRequestMethod(), publisher);
+        if (body != null) {
+            builder.header("content-type", "application/json; charset=utf-8");
+        }
+        if (streamResponse) {
+            HttpResponse<InputStream> response = routeClient.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
+            response.headers().firstValue("content-type")
+                    .ifPresent(value -> exchange.getResponseHeaders().set("content-type", value));
+            exchange.sendResponseHeaders(response.statusCode(), 0);
+            try (InputStream input = response.body(); OutputStream output = exchange.getResponseBody()) {
+                input.transferTo(output);
+            }
+            return true;
+        }
+        HttpResponse<String> response = routeClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+        response.headers().firstValue("content-type")
+                .ifPresent(value -> exchange.getResponseHeaders().set("content-type", value));
+        byte[] bytes = response.body().getBytes(StandardCharsets.UTF_8);
+        exchange.sendResponseHeaders(response.statusCode(), bytes.length);
+        try (OutputStream output = exchange.getResponseBody()) {
+            output.write(bytes);
+        }
+        return true;
+    }
+
+    private Optional<URI> taskRouteUri(HttpExchange exchange, String agentId) {
+        if ("1".equals(exchange.getRequestHeaders().getFirst("x-pulse-task-routed"))) {
+            return Optional.empty();
+        }
+        Optional<String> owner = service.agentCoordinatorId(agentId);
+        if (owner.isEmpty() || owner.get().equals(service.coordinatorId())) {
+            return Optional.empty();
+        }
+        String base = taskRouteBase(owner.get());
+        String rawPath = exchange.getRequestURI().getRawPath();
+        String rawQuery = exchange.getRequestURI().getRawQuery();
+        return Optional.of(URI.create(base + rawPath + (rawQuery == null || rawQuery.isBlank() ? "" : "?" + rawQuery)));
+    }
+
+    private static String taskRouteBase(String coordinatorId) {
+        String template = System.getenv().getOrDefault("PULSE_TASK_ROUTE_TEMPLATE", "");
+        if (!template.isBlank()) {
+            return String.format(template, coordinatorId);
+        }
+        long port = positiveLong("PULSE_PORT", 9966);
+        return "http://" + coordinatorId + ":" + port;
     }
 
     private static List<String> parseArgs(Object rawArgs) {
