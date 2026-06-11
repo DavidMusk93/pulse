@@ -444,16 +444,50 @@ public class CoordinatorService {
     }
 
     private List<HostView> buildHosts(long now, boolean sorted) {
-        List<HostView> hosts = new ArrayList<>(states.size());
+        Map<String, HostView> byIdentity = new LinkedHashMap<>();
         for (NodeState state : states.values()) {
-            hosts.add(state.toHostView(now, groupPlans.getOrDefault(state.agentId, AgentGroupPlan.direct(state.agentId))));
+            HostView host = state.toHostView(now, groupPlans.getOrDefault(state.agentId, AgentGroupPlan.direct(state.agentId)));
+            String identity = stableHostIdentity(host);
+            byIdentity.merge(identity, host, CoordinatorService::preferredHostView);
         }
+        List<HostView> hosts = new ArrayList<>(byIdentity.values());
         if (sorted) {
             hosts.sort(Comparator.comparing(HostView::cluster)
                     .thenComparing(HostView::status)
                     .thenComparing(HostView::agentId));
         }
         return List.copyOf(hosts);
+    }
+
+    private static String stableHostIdentity(HostView host) {
+        String ip = host.ip();
+        if (ip != null && !ip.isBlank() && !"-".equals(ip)) {
+            return ip;
+        }
+        return host.agentId();
+    }
+
+    private static HostView preferredHostView(HostView left, HostView right) {
+        int leftRank = hostViewRank(left);
+        int rightRank = hostViewRank(right);
+        if (rightRank != leftRank) {
+            return rightRank > leftRank ? right : left;
+        }
+        if (right.observedAtMs() != left.observedAtMs()) {
+            return right.observedAtMs() > left.observedAtMs() ? right : left;
+        }
+        return right.seq() > left.seq() ? right : left;
+    }
+
+    private static int hostViewRank(HostView host) {
+        int rank = "alive".equals(host.status()) ? 4 : "warming".equals(host.status()) ? 3 : 1;
+        if (Objects.equals(host.agentId(), host.ip())) {
+            rank += 2;
+        }
+        if (Objects.equals(host.host(), host.ip())) {
+            rank += 1;
+        }
+        return rank;
     }
 
     private void maybeRecomputeGroups(long now, boolean force) {
