@@ -290,8 +290,8 @@ public class CoordinatorService {
         try {
             metricStorage.writeHeartbeat(new HeartbeatMetricSample(
                     observedAtMs,
-                    heartbeat.agentId(),
-                    stringState(state, "host", heartbeat.agentId()),
+                    metricIdentity(heartbeat.agentId(), state),
+                    metricIdentity(heartbeat.agentId(), state),
                     stringState(state, "cluster", "unknown"),
                     stringState(state, "area", "unknown"),
                     metricHeartbeatPath(source, plan),
@@ -412,6 +412,14 @@ public class CoordinatorService {
         return value.toString();
     }
 
+    private static String metricIdentity(String agentId, Map<String, Object> state) {
+        String ip = stringState(state, "ip", "");
+        if (!ip.isBlank() && !"-".equals(ip)) {
+            return ip;
+        }
+        return agentId;
+    }
+
     private static long longState(Map<String, Object> state, String key) {
         Object value = state.get(key);
         if (value instanceof Number number) {
@@ -436,7 +444,9 @@ public class CoordinatorService {
             if (!isStale(now, hostSnapshotAtMs, hostSnapshotTtlMs)) {
                 return hostSnapshot;
             }
-            List<HostView> rebuilt = buildHosts(now, true);
+            List<HostView> rebuilt = buildHosts(now, true).stream()
+                    .map(CoordinatorService::canonicalHostView)
+                    .toList();
             hostSnapshot = rebuilt;
             hostSnapshotAtMs = now;
             return rebuilt;
@@ -465,6 +475,42 @@ public class CoordinatorService {
             return ip;
         }
         return host.agentId();
+    }
+
+    private static HostView canonicalHostView(HostView host) {
+        String identity = stableHostIdentity(host);
+        if (Objects.equals(identity, host.agentId()) && Objects.equals(identity, host.host())) {
+            return host;
+        }
+        Map<String, Object> canonicalState = new LinkedHashMap<>(host.state());
+        canonicalState.put("host", identity);
+        canonicalState.put("ip", identity);
+        return new HostView(
+                identity,
+                host.epoch(),
+                host.seq(),
+                host.ttlMs(),
+                host.observedAtMs(),
+                host.expireAtMs(),
+                host.lastObservedAgeMs(),
+                host.heartbeatConfirmations(),
+                host.status(),
+                host.source(),
+                host.coordinatorId(),
+                host.groupId(),
+                host.groupMode(),
+                host.leaderAgentId(),
+                host.leaderUrl(),
+                host.groupSize(),
+                host.groupSizeLimit(),
+                identity,
+                host.ip(),
+                host.cluster(),
+                host.area(),
+                host.zone(),
+                host.role(),
+                host.load(),
+                Map.copyOf(canonicalState));
     }
 
     private static HostView preferredHostView(HostView left, HostView right) {
