@@ -11,8 +11,6 @@ readonly DEFAULT_ENGINE_HOME='/opt/tiger/tide'
 readonly NUMA_MEMORY_LIMIT_MB=$((512 * 1024))
 readonly NUMA_FIX_DOC_URL='https://bytedance.larkoffice.com/docx/IjZ5dyj4oobPBtxeDK6cFwVsn9d'
 readonly DISK_REPAIR_URL='https://bytebox.bytedance.net/'
-readonly EXPLAIN_RIGHT_MARGIN=4
-readonly EXPLAIN_DRYRUN_PREFIX_WIDTH=9
 
 TIDELET_HOME_PATH=''
 ENGINE_HOME_PATH=''
@@ -20,6 +18,8 @@ PURGE_LINK_TARGET_DATA=0
 REMOVE_TIDEMQ_OFFSET=0
 REPAIR_MISSING_PATH_METADATA=0
 DRY_RUN=0
+TRACE=0
+DISK_HEALTH_PARALLEL=${DISK_HEALTH_PARALLEL:-4}
 DISALLOWED_DIRS_ARR=()
 HDD_DIRS=()
 SSD_DIRS=()
@@ -28,11 +28,14 @@ EXPLAIN_CPU_MODEL=''
 EXPLAIN_NUMA_COUNT=''
 EXPLAIN_NUMA_MEMORY_LINES=()
 EXPLAIN_DISK_HEALTH_LINES=()
+EXPLAIN_DISK_HEALTH_DETAIL_LINES=()
 EXPLAIN_RESOURCE_LINES=()
 EXPLAIN_LAYOUT_LINES=()
 EXPLAIN_ACTION_LINES=()
 EXPLAIN_ACTION_KEYS=()
 EXPLAIN_METADATA_REPAIR_LINES=()
+EXPLAIN_STATUS='success'
+EXPLAIN_ERROR=''
 METADATA_REPAIR_TARGETS=()
 SEEN_BLOCK_DEVICES=()
 SEEN_BLOCK_DEVICE_MOUNTS=()
@@ -42,7 +45,7 @@ function log::print() {
     local level=$2
     local message=$3
 
-    printf '%b[%s]%b %s\n' "$color" "$level" "$LOG_COLOR_RESET" "$message"
+    printf '%b[%s]%b %s\n' "$color" "$level" "$LOG_COLOR_RESET" "$message" >&2
 }
 
 function log::info() {
@@ -63,6 +66,72 @@ function log::success() {
 
 function log::dryrun() {
     log::print "$LOG_COLOR_YELLOW" "DRYRUN" "$1"
+}
+
+function trace::now() {
+    date '+%Y-%m-%d %H:%M:%S.%N'
+}
+
+function trace::emit() {
+    local phase=$1
+    local status=$2
+    local details=${3:-}
+    local pid_value=${BASHPID:-$$}
+
+    (( TRACE == 1 )) || return 0
+    [[ -n "$details" ]] || details='{}'
+    {
+        printf '{"event":"prepare_disk_layout_progress","phase":'
+        json::string "$phase"
+        printf ',"status":'
+        json::string "$status"
+        printf ',"datetime":'
+        json::string "$(trace::now)"
+        printf ',"pid":%s,"tid":%s,"thread":' "$$" "$pid_value"
+        json::string "bash-${pid_value}"
+        printf ',"details":%s}\n' "$details"
+    } >&2
+}
+
+function trace::details() {
+    local first=1
+    local key=''
+    local value=''
+
+    printf '{'
+    while (( $# > 0 )); do
+        key=$1
+        value=${2:-}
+        shift 2
+        if (( first == 0 )); then
+            printf ','
+        fi
+        first=0
+        json::string "$key"
+        printf ':'
+        json::string "$value"
+    done
+    printf '}'
+}
+
+function trace::details_raw() {
+    local first=1
+    local key=''
+    local value=''
+
+    printf '{'
+    while (( $# > 0 )); do
+        key=$1
+        value=${2:-null}
+        shift 2
+        if (( first == 0 )); then
+            printf ','
+        fi
+        first=0
+        json::string "$key"
+        printf ':%s' "$value"
+    done
+    printf '}'
 }
 
 function json::string() {
@@ -114,6 +183,37 @@ function json::print_disk_health_array() {
         json::string "${kind:-unknown}"
         printf ',"device":'
         json::string "${device:-unknown}"
+        printf '}'
+    done
+    printf ']'
+}
+
+function json::print_disk_health_detail_array() {
+    local first=1
+    local line=''
+    local mount=''
+    local kind=''
+    local check_name=''
+    local status=''
+    local detail=''
+
+    printf '['
+    for line in "$@"; do
+        IFS='|' read -r mount kind check_name status detail <<< "$line"
+        if (( first == 0 )); then
+            printf ','
+        fi
+        first=0
+        printf '{"mount":'
+        json::string "${mount:-unknown}"
+        printf ',"kind":'
+        json::string "${kind:-unknown}"
+        printf ',"check":'
+        json::string "${check_name:-unknown}"
+        printf ',"status":'
+        json::string "${status:-UNKNOWN}"
+        printf ',"detail":'
+        json::string "${detail:-}"
         printf '}'
     done
     printf ']'
@@ -582,87 +682,6 @@ function json::print_planned_mutations() {
     printf '  }'
 }
 
-function explain::get_terminal_width() {
-    local raw_width=''
-
-    if [[ -r /dev/tty ]] && command -v stty >/dev/null 2>&1; then
-        raw_width=$(stty size </dev/tty 2>/dev/null | awk '{print $2}')
-    fi
-
-    if [[ -z "$raw_width" ]] && command -v tput >/dev/null 2>&1; then
-        raw_width=$(tput cols 2>/dev/null || true)
-    fi
-
-    if [[ -z "$raw_width" && -n "${COLUMNS:-}" && "${COLUMNS}" =~ ^[0-9]+$ ]]; then
-        raw_width=$COLUMNS
-    fi
-
-    if ! [[ "$raw_width" =~ ^[0-9]+$ ]]; then
-        raw_width=100
-    fi
-
-    printf '%s\n' "$raw_width"
-}
-
-function explain::get_plain_output_width() {
-    local terminal_width=0
-    local width=0
-
-    terminal_width=$(explain::get_terminal_width)
-    width=$((terminal_width * 2 / 3 - EXPLAIN_RIGHT_MARGIN))
-
-    if (( width < 60 )); then
-        width=60
-    fi
-
-    printf '%s\n' "$width"
-}
-
-function explain::get_dryrun_box_content_width() {
-    local terminal_width=0
-    local width=0
-
-    terminal_width=$(explain::get_terminal_width)
-    width=$((terminal_width * 2 / 3 - EXPLAIN_DRYRUN_PREFIX_WIDTH - EXPLAIN_RIGHT_MARGIN - 4))
-
-    if (( width < 40 )); then
-        width=40
-    fi
-
-    printf '%s\n' "$width"
-}
-
-function explain::repeat_char() {
-    local char=$1
-    local count=$2
-    local output=''
-
-    printf -v output '%*s' "$count" ''
-    output=${output// /$char}
-    printf '%s\n' "$output"
-}
-
-function explain::print_wrapped_line() {
-    local prefix=$1
-    local text=$2
-    local width=$3
-    local line=''
-    local first_line=1
-    local align_prefix=''
-
-    printf -v align_prefix '%*s' "${#prefix}" ''
-
-    while IFS= read -r line; do
-        if (( first_line == 1 )); then
-            log::dryrun "${prefix}${line}"
-            first_line=0
-            continue
-        fi
-
-        log::dryrun "${align_prefix}${line}"
-    done < <(printf '%s\n' "$text" | fold -s -w "$width")
-}
-
 function explain::record_numa_memory() {
     EXPLAIN_NUMA_MEMORY_LINES+=("$1")
 }
@@ -675,131 +694,8 @@ function explain::record_disk_health() {
     EXPLAIN_DISK_HEALTH_LINES+=("$1")
 }
 
-function explain::print_disk_health_table() {
-    local lines=("$@")
-    local available_width=0
-    local header_line=''
-    local status=''
-    local mount=''
-    local kind=''
-    local device=''
-    local col_status=8
-    local col_mount=16
-    local col_kind=6
-    local col_device=0
-    local line=''
-    local sep=''
-    local fields=()
-
-    if (( ${#lines[@]} == 0 )); then
-        printf '  %s\n' "- <none>"
-        return 0
-    fi
-
-    available_width=$(explain::get_plain_output_width)
-    if (( available_width < 56 )); then
-        available_width=56
-    fi
-
-    col_device=$((available_width - col_status - col_mount - col_kind - 15))
-    if (( col_device < 12 )); then
-        col_device=12
-    fi
-
-    printf -v sep "  +-%s-+-%s-+-%s-+-%s-+" \
-        "$(explain::repeat_char '-' "$col_status")" \
-        "$(explain::repeat_char '-' "$col_mount")" \
-        "$(explain::repeat_char '-' "$col_kind")" \
-        "$(explain::repeat_char '-' "$col_device")"
-    printf '%s\n' "$sep"
-    printf -v header_line "  | %-*s | %-*s | %-*s | %-*s |" \
-        "$col_status" "STATUS" \
-        "$col_mount" "MOUNT" \
-        "$col_kind" "KIND" \
-        "$col_device" "DEVICE"
-    printf '%s\n' "$header_line"
-    printf '%s\n' "$sep"
-
-    for line in "${lines[@]}"; do
-        IFS='|' read -r -a fields <<< "$line"
-        status=${fields[0]:-UNKNOWN}
-        mount=${fields[1]:-unknown}
-        kind=${fields[2]:-unknown}
-        device=${fields[3]:-unknown}
-
-        printf -v header_line "  | %-*s | %-*s | %-*s | %-*s |" \
-            "$col_status" "$status" \
-            "$col_mount" "$mount" \
-            "$col_kind" "$kind" \
-            "$col_device" "$device"
-        printf '%s\n' "$header_line"
-    done
-
-    printf '%s\n' "$sep"
-}
-
-function explain::print_command_table() {
-    local title=$1
-    shift
-    local rows=("$@")
-    local available_width=0
-    local col_check=18
-    local col_status=8
-    local col_detail=0
-    local sep=''
-    local line=''
-    local check_name=''
-    local status=''
-    local detail=''
-    local detail_line=''
-    local fields=()
-
-    available_width=$(explain::get_plain_output_width)
-    col_detail=$((available_width - col_check - col_status - 12))
-    if (( col_detail < 24 )); then
-        col_detail=24
-    fi
-
-    printf '  %s\n' "$title"
-    printf -v sep "  +-%s-+-%s-+-%s-+" \
-        "$(explain::repeat_char '-' "$col_check")" \
-        "$(explain::repeat_char '-' "$col_status")" \
-        "$(explain::repeat_char '-' "$col_detail")"
-    printf '%s\n' "$sep"
-    printf -v line "  | %-*s | %-*s | %-*s |" \
-        "$col_check" "CHECK" \
-        "$col_status" "STATUS" \
-        "$col_detail" "DETAIL"
-    printf '%s\n' "$line"
-    printf '%s\n' "$sep"
-
-    for line in "${rows[@]}"; do
-        IFS='|' read -r -a fields <<< "$line"
-        check_name=${fields[0]:-unknown}
-        status=${fields[1]:-UNKNOWN}
-        detail=${fields[2]:-}
-
-        if [[ -z "$detail" ]]; then
-            printf -v line "  | %-*s | %-*s | %-*s |" \
-                "$col_check" "$check_name" \
-                "$col_status" "$status" \
-                "$col_detail" ""
-            printf '%s\n' "$line"
-            continue
-        fi
-
-        while IFS= read -r detail_line; do
-            printf -v line "  | %-*s | %-*s | %-*s |" \
-                "$col_check" "$check_name" \
-                "$col_status" "$status" \
-                "$col_detail" "$detail_line"
-            printf '%s\n' "$line"
-            check_name=''
-            status=''
-        done < <(printf '%s\n' "$detail" | fold -s -w "$col_detail")
-    done
-
-    printf '%s\n' "$sep"
+function explain::record_disk_health_detail() {
+    EXPLAIN_DISK_HEALTH_DETAIL_LINES+=("$1")
 }
 
 function explain::record_layout() {
@@ -808,6 +704,11 @@ function explain::record_layout() {
 
 function explain::record_metadata_repair() {
     EXPLAIN_METADATA_REPAIR_LINES+=("$1")
+}
+
+function explain::mark_failed() {
+    EXPLAIN_STATUS='failed'
+    EXPLAIN_ERROR=$1
 }
 
 function explain::record_action() {
@@ -822,149 +723,22 @@ function explain::record_action() {
     EXPLAIN_ACTION_LINES+=("$action")
 }
 
-function explain::print_section() {
-    local title=$1
-    shift
-    local lines=("$@")
-    local available_width=0
-    local line=''
-    local border=''
-
-    available_width=$(explain::get_dryrun_box_content_width)
-    if (( available_width < 40 )); then
-        available_width=40
-    fi
-
-    border="+$(explain::repeat_char '-' "$((available_width + 2))")+"
-    log::dryrun "$border"
-    printf -v line "| %-*s |" "$available_width" "$title"
-    log::dryrun "$line"
-    log::dryrun "$border"
-
-    if (( ${#lines[@]} == 0 )); then
-        log::dryrun "  - <none>"
-        return 0
-    fi
-
-    for line in "${lines[@]}"; do
-        explain::print_wrapped_line "  - " "$line" "$((available_width - 2))"
-    done
-}
-
-function explain::action_node_key() {
-    local action=$1
-
-    if [[ "$action" =~ /node([0-9]+)(/|$) ]]; then
-        printf 'node%s\n' "${BASH_REMATCH[1]}"
-        return 0
-    fi
-
-    printf 'Global\n'
-}
-
-function explain::print_mutation_block() {
-    local title=$1
-    shift
-    local lines=("$@")
-    local available_width=0
-    local line=''
-
-    if (( ${#lines[@]} == 0 )); then
-        return 0
-    fi
-
-    available_width=$(explain::get_dryrun_box_content_width)
-    if (( available_width < 40 )); then
-        available_width=40
-    fi
-
-    log::dryrun ""
-    log::dryrun "  [ ${title} ]"
-    for line in "${lines[@]}"; do
-        explain::print_wrapped_line "    - " "$line" "$((available_width - 4))"
-    done
-}
-
-function explain::print_mutation_blocks() {
-    local title=$1
-    shift
-    local lines=("$@")
-    local available_width=0
-    local line=''
-    local border=''
-    local key=''
-    local node_key=''
-    local global_lines=()
-    local node_keys=()
-    local node_lines=()
-    local idx=0
-    local found=0
-    local block_lines=()
-
-    available_width=$(explain::get_dryrun_box_content_width)
-    if (( available_width < 40 )); then
-        available_width=40
-    fi
-
-    border="+$(explain::repeat_char '-' "$((available_width + 2))")+"
-    log::dryrun "$border"
-    printf -v line "| %-*s |" "$available_width" "$title"
-    log::dryrun "$line"
-    log::dryrun "$border"
-
-    if (( ${#lines[@]} == 0 )); then
-        log::dryrun "  - <none>"
-        return 0
-    fi
-
-    for line in "${lines[@]}"; do
-        key=$(explain::action_node_key "$line")
-        if [[ "$key" == "Global" ]]; then
-            global_lines+=("$line")
-            continue
-        fi
-
-        found=0
-        for idx in "${!node_keys[@]}"; do
-            if [[ "${node_keys[$idx]}" == "$key" ]]; then
-                node_lines[idx]+=$'\n'"$line"
-                found=1
-                break
-            fi
-        done
-
-        if (( found == 0 )); then
-            node_keys+=("$key")
-            node_lines+=("$line")
-        fi
-    done
-
-    explain::print_mutation_block "Global" "${global_lines[@]}"
-
-    while IFS= read -r node_key; do
-        [[ -n "$node_key" ]] || continue
-        block_lines=()
-        for idx in "${!node_keys[@]}"; do
-            if [[ "${node_keys[$idx]}" == "$node_key" ]]; then
-                while IFS= read -r line; do
-                    block_lines+=("$line")
-                done <<< "${node_lines[$idx]}"
-                break
-            fi
-        done
-
-        explain::print_mutation_block "$node_key" "${block_lines[@]}"
-    done < <(printf '%s\n' "${node_keys[@]}" | sort -V)
-}
-
 function explain::print_summary() {
-    if (( DRY_RUN == 0 )); then
-        return 0
-    fi
-
     printf '{\n'
     printf '  "report_type": "prepare_disk_layout",\n'
-    printf '  "mode": "dry-run",\n'
+    printf '  "mode": '
+    if (( DRY_RUN == 1 )); then
+        json::string "dry-run"
+    else
+        json::string "apply"
+    fi
+    printf ',\n'
+    printf '  "status": '
+    json::string "$EXPLAIN_STATUS"
+    printf ',\n'
+    printf '  "error": '
+    json::string "$EXPLAIN_ERROR"
+    printf ',\n'
     printf '  "environment": {\n'
     printf '    "numa_count": '
     if [[ "${EXPLAIN_NUMA_COUNT:-}" =~ ^[0-9]+$ ]]; then
@@ -1003,6 +777,9 @@ function explain::print_summary() {
     printf '  "disk_health_validation": '
     json::print_disk_health_array "${EXPLAIN_DISK_HEALTH_LINES[@]}"
     printf ',\n'
+    printf '  "disk_health_details": '
+    json::print_disk_health_detail_array "${EXPLAIN_DISK_HEALTH_DETAIL_LINES[@]}"
+    printf ',\n'
     printf '  "discovered_resources": '
     json::print_string_array "${EXPLAIN_RESOURCE_LINES[@]}"
     printf ',\n'
@@ -1028,10 +805,13 @@ function init::usage() {
     cat <<EOF
 Usage:
   ${script_name} [-n] [-p] [-o] [-m] [-l PATH] [-t PATH] [-x DIRS]
-  ${script_name} [--dry-run] [--purge-link-target-data] [--remove-tidemq-offset] [--repair-missing-path-metadata] [--tidelet-home PATH] [--tide-home PATH] [--disallowed-dirs DIRS]
+  ${script_name} [--dry-run] [--trace] [--disk-health-parallel N] [--purge-link-target-data] [--remove-tidemq-offset] [--repair-missing-path-metadata] [--tidelet-home PATH] [--tide-home PATH] [--disallowed-dirs DIRS]
 
 Options:
   -n, --dry-run              Print planned operations without changing files, links, or data
+      --trace                Print JSONL phase and task traces to stderr
+      --disk-health-parallel N
+                             Run read-only disk health checks in batches of N, default: ${DISK_HEALTH_PARALLEL}
   -p, --purge-link-target-data
                              Remove data inside the current symlink target before removing the symlink
   -o, --remove-tidemq-offset Remove node*/tidemq_offset directories during cleanup
@@ -1060,6 +840,21 @@ function init::parse_args() {
         case "$1" in
         -n|--dry-run)
             DRY_RUN=1
+            shift
+            ;;
+        --trace)
+            TRACE=1
+            shift
+            ;;
+        --disk-health-parallel)
+            if ! init::require_option_value "$1" "$@"; then
+                return 1
+            fi
+            DISK_HEALTH_PARALLEL=$2
+            shift 2
+            ;;
+        --disk-health-parallel=*)
+            DISK_HEALTH_PARALLEL=${1#*=}
             shift
             ;;
         -p|--purge-link-target-data)
@@ -1433,13 +1228,19 @@ function validate::print_disk_health_detail() {
     local disk_kind=$2
     shift 2
     local rows=("$@")
+    local row=''
+    local check_name=''
+    local status=''
+    local detail=''
+    local fields=()
 
-    if (( DRY_RUN == 1 )); then
-        return 0
-    fi
-
-    log::info "Disk health detail: ${mount_path} (${disk_kind})"
-    explain::print_command_table "Disk: ${mount_path} (${disk_kind})" "${rows[@]}"
+    for row in "${rows[@]}"; do
+        IFS='|' read -r -a fields <<< "$row"
+        check_name=${fields[0]:-unknown}
+        status=${fields[1]:-UNKNOWN}
+        detail=${fields[2]:-}
+        explain::record_disk_health_detail "${mount_path}|${disk_kind}|${check_name}|${status}|${detail}"
+    done
 }
 
 function validate::extract_smart_detail_lines() {
@@ -1574,7 +1375,6 @@ function validate::check_disk_health() {
         validate::fail_disk_health "$mount_path" "$source" "$block_device" "cannot resolve mount source or block device" || return 1
     fi
 
-    validate::check_duplicate_block_devices "$mount_path" "$source" "$block_device" || return 1
     device_path=$(storage::get_device_path "$block_device")
 
     if command -v lsblk >/dev/null 2>&1; then
@@ -1682,23 +1482,183 @@ function validate::check_disk_health() {
     fi
 }
 
-function validate::check_all_disk_health() {
+function validate::check_all_duplicate_block_devices() {
     local mount_path=''
+    local disk_kind=''
+    local source=''
+    local block_device=''
 
     SEEN_BLOCK_DEVICES=()
     SEEN_BLOCK_DEVICE_MOUNTS=()
 
     for mount_path in "${HDD_DIRS[@]}"; do
-        validate::check_disk_health "$mount_path" "HDD" || return 1
+        disk_kind='HDD'
+        source=$(storage::get_mount_source "$mount_path")
+        block_device=$(storage::get_block_device_name "$source")
+        trace::emit "disk_health" "duplicate_check" "$(trace::details "mount" "$mount_path" "kind" "$disk_kind" "source" "$source" "block_device" "$block_device")"
+        if [[ -z "$source" || -z "$block_device" ]]; then
+            validate::fail_disk_health "$mount_path" "$source" "$block_device" "cannot resolve mount source or block device" || return 1
+        fi
+        validate::check_duplicate_block_devices "$mount_path" "$source" "$block_device" || return 1
     done
 
     for mount_path in "${SSD_DIRS[@]}"; do
-        validate::check_disk_health "$mount_path" "SSD" || return 1
+        disk_kind='SSD'
+        source=$(storage::get_mount_source "$mount_path")
+        block_device=$(storage::get_block_device_name "$source")
+        trace::emit "disk_health" "duplicate_check" "$(trace::details "mount" "$mount_path" "kind" "$disk_kind" "source" "$source" "block_device" "$block_device")"
+        if [[ -z "$source" || -z "$block_device" ]]; then
+            validate::fail_disk_health "$mount_path" "$source" "$block_device" "cannot resolve mount source or block device" || return 1
+        fi
+        validate::check_duplicate_block_devices "$mount_path" "$source" "$block_device" || return 1
+    done
+}
+
+
+function validate::write_disk_health_task_results() {
+    local task_dir=$1
+    local rc=$2
+    local line=''
+
+    printf '%s\n' "$rc" > "${task_dir}/rc"
+    for line in "${EXPLAIN_DISK_HEALTH_LINES[@]}"; do
+        printf '%s\n' "$line" >> "${task_dir}/health"
+    done
+    for line in "${EXPLAIN_DISK_HEALTH_DETAIL_LINES[@]}"; do
+        printf '%s\n' "$line" >> "${task_dir}/details"
+    done
+}
+
+
+function validate::check_disk_health_task() {
+    local task_id=$1
+    local mount_path=$2
+    local disk_kind=$3
+    local task_dir=$4
+    local started=0
+    local rc=0
+    local duration=0
+
+    mkdir -p "$task_dir"
+    EXPLAIN_DISK_HEALTH_LINES=()
+    EXPLAIN_DISK_HEALTH_DETAIL_LINES=()
+
+    started=$(date +%s)
+    trace::emit "disk_health" "task_start" "$(trace::details_raw "task_id" "$task_id" "mount" "$(json::string "$mount_path")" "kind" "$(json::string "$disk_kind")")"
+    if validate::check_disk_health "$mount_path" "$disk_kind"; then
+        rc=0
+        duration=$(( $(date +%s) - started ))
+        trace::emit "disk_health" "task_done" "$(trace::details_raw "task_id" "$task_id" "mount" "$(json::string "$mount_path")" "kind" "$(json::string "$disk_kind")" "duration_seconds" "$duration")"
+    else
+        rc=$?
+        duration=$(( $(date +%s) - started ))
+        trace::emit "disk_health" "task_error" "$(trace::details_raw "task_id" "$task_id" "mount" "$(json::string "$mount_path")" "kind" "$(json::string "$disk_kind")" "rc" "$rc" "duration_seconds" "$duration")"
+    fi
+    validate::write_disk_health_task_results "$task_dir" "$rc"
+    return "$rc"
+}
+
+
+function validate::collect_disk_health_task() {
+    local task_id=$1
+    local mount_path=$2
+    local disk_kind=$3
+    local task_dir=$4
+    local rc=1
+    local line=''
+
+    if [[ -f "${task_dir}/rc" ]]; then
+        rc=$(<"${task_dir}/rc")
+    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -n "$line" ]] && EXPLAIN_DISK_HEALTH_LINES+=("$line")
+    done < "${task_dir}/health" 2>/dev/null
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -n "$line" ]] && EXPLAIN_DISK_HEALTH_DETAIL_LINES+=("$line")
+    done < "${task_dir}/details" 2>/dev/null
+
+    if (( rc == 0 )); then
+        trace::emit "disk_health" "task_collect" "$(trace::details_raw "task_id" "$task_id" "mount" "$(json::string "$mount_path")" "kind" "$(json::string "$disk_kind")" "rc" "$rc")"
+    else
+        trace::emit "disk_health" "task_collect_error" "$(trace::details_raw "task_id" "$task_id" "mount" "$(json::string "$mount_path")" "kind" "$(json::string "$disk_kind")" "rc" "$rc")"
+    fi
+
+    return "$rc"
+}
+
+
+function validate::check_all_disk_health() {
+    local mount_path=''
+    local task_specs=()
+    local task_spec=''
+    local task_id=0
+    local mount=''
+    local kind=''
+    local batch_start=0
+    local batch_end=0
+    local idx=0
+    local pid=0
+    local pids=()
+    local task_ids=()
+    local task_mounts=()
+    local task_kinds=()
+    local task_dirs=()
+    local tmp_root=''
+    local failed=0
+
+    validate::check_all_duplicate_block_devices || return 1
+
+    for mount_path in "${HDD_DIRS[@]}"; do
+        task_specs+=("${mount_path}|HDD")
     done
 
-    if (( ${#HDD_DIRS[@]} == 0 && ${#SSD_DIRS[@]} == 0 )); then
+    for mount_path in "${SSD_DIRS[@]}"; do
+        task_specs+=("${mount_path}|SSD")
+    done
+
+    if (( ${#task_specs[@]} == 0 )); then
         explain::record_disk_health "SKIPPED|<none>|unknown|no discovered disks"
+        return 0
     fi
+
+    tmp_root=$(mktemp -d "${TMPDIR:-/tmp}/prepare-disk-health.XXXXXX")
+    trace::emit "disk_health" "executor_start" "$(trace::details_raw "workers" "$DISK_HEALTH_PARALLEL" "tasks" "${#task_specs[@]}")"
+
+    while (( batch_start < ${#task_specs[@]} )); do
+        batch_end=$((batch_start + DISK_HEALTH_PARALLEL))
+        pids=()
+        task_ids=()
+        task_mounts=()
+        task_kinds=()
+        task_dirs=()
+
+        for ((idx = batch_start; idx < batch_end && idx < ${#task_specs[@]}; idx++)); do
+            task_spec=${task_specs[$idx]}
+            mount=${task_spec%|*}
+            kind=${task_spec##*|}
+            task_id=$((idx + 1))
+            task_ids+=("$task_id")
+            task_mounts+=("$mount")
+            task_kinds+=("$kind")
+            task_dirs+=("${tmp_root}/task-${task_id}")
+            trace::emit "disk_health" "task_submit" "$(trace::details_raw "task_id" "$task_id" "mount" "$(json::string "$mount")" "kind" "$(json::string "$kind")")"
+            validate::check_disk_health_task "$task_id" "$mount" "$kind" "${tmp_root}/task-${task_id}" &
+            pids+=("$!")
+        done
+
+        for pid in "${pids[@]}"; do
+            wait "$pid" || failed=1
+        done
+
+        for idx in "${!task_ids[@]}"; do
+            validate::collect_disk_health_task "${task_ids[$idx]}" "${task_mounts[$idx]}" "${task_kinds[$idx]}" "${task_dirs[$idx]}" || failed=1
+        done
+
+        batch_start=$batch_end
+    done
+
+    trace::emit "disk_health" "executor_done" "$(trace::details_raw "tasks" "${#task_specs[@]}" "failed" "$failed")"
+    (( failed == 0 ))
 }
 
 function validate::check_missing_resources() {
@@ -1821,13 +1781,26 @@ function cleanup::queue_symlink_target_purge() {
 
 function cleanup::run_pending_purges_for_mount() {
     local mount_root=$1
+    local task_id=$2
     local target=''
+    local started=0
+    local duration=0
 
+    started=$(date +%s)
+    trace::emit "purge" "task_start" "$(trace::details_raw "task_id" "$task_id" "mount_root" "$(json::string "$mount_root")")"
     for target in "${PENDING_PURGE_TARGETS[@]}"; do
         [[ "$(cleanup::get_mount_root "$target")" == "$mount_root" ]] || continue
+        trace::emit "purge" "target_start" "$(trace::details_raw "task_id" "$task_id" "mount_root" "$(json::string "$mount_root")" "target" "$(json::string "$target")")"
         log::warn "Purge data in symlink target: $target"
-        cleanup::remove_directory_contents "$target" || return 1
+        if ! cleanup::remove_directory_contents "$target"; then
+            duration=$(( $(date +%s) - started ))
+            trace::emit "purge" "task_error" "$(trace::details_raw "task_id" "$task_id" "mount_root" "$(json::string "$mount_root")" "target" "$(json::string "$target")" "duration_seconds" "$duration")"
+            return 1
+        fi
+        trace::emit "purge" "target_done" "$(trace::details_raw "task_id" "$task_id" "mount_root" "$(json::string "$mount_root")" "target" "$(json::string "$target")")"
     done
+    duration=$(( $(date +%s) - started ))
+    trace::emit "purge" "task_done" "$(trace::details_raw "task_id" "$task_id" "mount_root" "$(json::string "$mount_root")" "duration_seconds" "$duration")"
 }
 
 function cleanup::run_pending_purges() {
@@ -1837,6 +1810,10 @@ function cleanup::run_pending_purges() {
     local existing=''
     local pid=0
     local pids=()
+    local task_ids=()
+    local task_roots=()
+    local task_id=0
+    local idx=0
     local failed=0
 
     if (( PURGE_LINK_TARGET_DATA == 0 || ${#PENDING_PURGE_TARGETS[@]} == 0 )); then
@@ -1856,16 +1833,28 @@ function cleanup::run_pending_purges() {
         [[ -n "$mount_root" ]] && unique_mount_roots+=("$mount_root")
     done
 
+    trace::emit "purge" "executor_start" "$(trace::details_raw "workers" "${#unique_mount_roots[@]}" "tasks" "${#unique_mount_roots[@]}" "targets" "${#PENDING_PURGE_TARGETS[@]}")"
     for mount_root in "${unique_mount_roots[@]}"; do
-        cleanup::run_pending_purges_for_mount "$mount_root" &
+        task_id=$((task_id + 1))
+        trace::emit "purge" "task_submit" "$(trace::details_raw "task_id" "$task_id" "mount_root" "$(json::string "$mount_root")")"
+        cleanup::run_pending_purges_for_mount "$mount_root" "$task_id" &
         pids+=("$!")
+        task_ids+=("$task_id")
+        task_roots+=("$mount_root")
     done
 
-    for pid in "${pids[@]}"; do
-        wait "$pid" || failed=1
+    for idx in "${!pids[@]}"; do
+        pid=${pids[$idx]}
+        if wait "$pid"; then
+            trace::emit "purge" "task_collect" "$(trace::details_raw "task_id" "${task_ids[$idx]}" "mount_root" "$(json::string "${task_roots[$idx]}")" "rc" "0")"
+        else
+            failed=1
+            trace::emit "purge" "task_collect_error" "$(trace::details_raw "task_id" "${task_ids[$idx]}" "mount_root" "$(json::string "${task_roots[$idx]}")" "rc" "1")"
+        fi
     done
 
     PENDING_PURGE_TARGETS=()
+    trace::emit "purge" "executor_done" "$(trace::details_raw "tasks" "${#unique_mount_roots[@]}" "failed" "$failed")"
     (( failed == 0 ))
 }
 
@@ -1953,8 +1942,8 @@ function metadata::ensure_sqlite3() {
     fi
 
     log::warn "sqlite3 not found, install it with apt-get."
-    DEBIAN_FRONTEND=noninteractive apt-get update || return 1
-    DEBIAN_FRONTEND=noninteractive apt-get install -y sqlite3 || return 1
+    DEBIAN_FRONTEND=noninteractive apt-get update >&2 || return 1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y sqlite3 >&2 || return 1
 
     if ! command -v sqlite3 >/dev/null 2>&1; then
         log::error "sqlite3 installation finished but sqlite3 is still unavailable."
@@ -2633,9 +2622,22 @@ function init::main() {
     #   | write manifests    |
     #   | and finish         |
     #   +--------------------+
-    init::parse_args "$@" || return 1
+    if ! init::parse_args "$@"; then
+        explain::mark_failed "argument parsing failed"
+        explain::print_summary
+        return 1
+    fi
+    trace::emit "main" "start" "$(trace::details_raw "dry_run" "$DRY_RUN" "purge_link_target_data" "$PURGE_LINK_TARGET_DATA" "repair_missing_path_metadata" "$REPAIR_MISSING_PATH_METADATA" "disk_health_parallel" "$DISK_HEALTH_PARALLEL")"
     init::set_paths
+    trace::emit "load_config" "paths_set" "$(trace::details "tidelet_home" "$TIDELET_HOME_PATH" "engine_home" "$ENGINE_HOME_PATH")"
     init::load_disallowed_dirs
+    trace::emit "load_config" "disallowed_dirs_loaded" "$(trace::details_raw "count" "${#DISALLOWED_DIRS_ARR[@]}")"
+    if ! [[ "$DISK_HEALTH_PARALLEL" =~ ^[0-9]+$ ]] || (( DISK_HEALTH_PARALLEL < 1 )); then
+        explain::mark_failed "invalid disk health parallelism"
+        log::error "--disk-health-parallel must be a positive integer"
+        explain::print_summary
+        return 1
+    fi
     numa_count=$(init::detect_numa_count)
     EXPLAIN_NUMA_COUNT=$numa_count
 
@@ -2647,33 +2649,56 @@ function init::main() {
         log::info "DRY_RUN: $DRY_RUN"
     fi
 
+    trace::emit "discover_mounts" "start" "{}"
     storage::discover_mounts
+    trace::emit "discover_mounts" "done" "$(trace::details_raw "hdd_count" "${#HDD_DIRS[@]}" "ssd_count" "${#SSD_DIRS[@]}")"
+    trace::emit "validate_resources" "start" "$(trace::details_raw "numa_count" "$numa_count")"
     if ! validate::check_missing_resources "$numa_count"; then
+        explain::mark_failed "resource validation failed"
+        trace::emit "validate_resources" "error" "$(trace::details "reason" "resource validation failed")"
         explain::print_summary
         return 1
     fi
+    trace::emit "validate_resources" "done" "{}"
 
+    trace::emit "prepare_directories" "start" "{}"
     if ! init::prepare_directories "$numa_count"; then
+        explain::mark_failed "directory preparation failed"
+        trace::emit "prepare_directories" "error" "$(trace::details "reason" "directory preparation failed")"
         explain::print_summary
         return 1
     fi
+    trace::emit "prepare_directories" "done" "{}"
 
+    trace::emit "apply_hdd_layout" "start" "$(trace::details_raw "mounts" "${#HDD_DIRS[@]}")"
     if ! layout::apply_hdd_layout "$numa_count"; then
+        explain::mark_failed "HDD layout preparation failed"
+        trace::emit "apply_hdd_layout" "error" "$(trace::details "reason" "HDD layout preparation failed")"
         explain::print_summary
         return 1
     fi
+    trace::emit "apply_hdd_layout" "done" "{}"
 
+    trace::emit "apply_ssd_layout" "start" "$(trace::details_raw "mounts" "${#SSD_DIRS[@]}")"
     if ! layout::apply_ssd_layout "$numa_count"; then
+        explain::mark_failed "SSD layout preparation failed"
+        trace::emit "apply_ssd_layout" "error" "$(trace::details "reason" "SSD layout preparation failed")"
         explain::print_summary
         return 1
     fi
+    trace::emit "apply_ssd_layout" "done" "{}"
 
+    trace::emit "metadata_repair" "start" "$(trace::details_raw "enabled" "$REPAIR_MISSING_PATH_METADATA" "targets" "${#METADATA_REPAIR_TARGETS[@]}")"
     if ! metadata::repair_all; then
+        explain::mark_failed "metadata repair failed"
+        trace::emit "metadata_repair" "error" "$(trace::details "reason" "metadata repair failed")"
         explain::print_summary
         return 1
     fi
+    trace::emit "metadata_repair" "done" "{}"
 
     explain::print_summary
+    trace::emit "main" "done" "$(trace::details "status" "$EXPLAIN_STATUS")"
 
     if (( DRY_RUN == 0 )); then
         log::success "Disk layout initialization completed."
