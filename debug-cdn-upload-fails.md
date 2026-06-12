@@ -26,9 +26,25 @@ Started: 2026-06-12
 
 ## Evidence Log
 
-- Pending: inspect request path and code structure.
-- Pending: reproduce via browser/network and collect exact failing request payload/response.
+- Static chain: frontend uploads file content as JSON/base64 via `POST /api/agents/{agentId}/tasks`; coordinator handles `operation=file_put`.
+- Static 400 point: `CoordinatorHttpServer.handle` converts `IllegalArgumentException` into `400 {"ok":false,"error":...}`.
+- External browser/curl path to `http://[fdbd:dc05:11:634::45]:9966/` currently times out or returns an empty reply, while SSH-local coordinator API is responsive.
+- Runtime env on `fdbd:dc05:11:634::45`: `PULSE_COORDINATOR_ID=fdbd:dc05:11:634::45`, peers are bracketed URLs, but `PULSE_TASK_ROUTE_TEMPLATE` is absent.
+- Runtime owner split from local `/api/hosts` for `cdn2/cdn_new`: `fdbd:dc05:11:634::45=16`, `fdbd:dc05:13:10c::40=22`, `fdbd:dc07:0:810::44=12`.
+- Runtime reproduction on local coordinator:
+  - local-owner file upload to `fdbd:dc05:11:636::32` returned `200`.
+  - remote-owner file upload to `fdbd:dc02:1a:34::13` returned `400 {"error":"unsupported URI http://fdbd:dc07:0:810::44:9966/api/agents/fdbd%3Adc02%3A1a%3A34%3A%3A13/tasks","ok":false}`.
+
+## Analysis
+
+- H1 rejected: required upload fields are accepted for local-owner agents with the same payload.
+- H2 partially confirmed: failures correlate with remote-owner agents, not invalid target hosts.
+- H3 rejected: `target_dir=files` is accepted for local-owner upload.
+- H4 rejected: JSON/base64 payload shape is accepted for local-owner upload.
+- H5 refined: IPv6 identity breaks the coordinator-to-coordinator task route URL when the default route base is constructed from raw `coordinatorId`.
+- Root cause: `CoordinatorHttpServer.taskRouteBase` builds `http://` + raw IPv6 coordinator id + `:9966`, producing invalid URI like `http://fdbd:dc07:0:810::44:9966/...`. This throws `IllegalArgumentException`, which the HTTP handler returns as `400`.
 
 ## Decisions
 
-- Pending.
+- Fix should make the default task route base IPv6-safe by bracketing raw IPv6 host literals.
+- Deployment env already brackets `PULSE_COORDINATOR_PEERS`; the missing path is only the default `PULSE_TASK_ROUTE_TEMPLATE` fallback.
