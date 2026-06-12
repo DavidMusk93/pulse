@@ -64,3 +64,18 @@ Evaluate whether file distribution efficiency matches the expected group-leader 
 ## Report
 
 - `docs/report/file-distribution-efficiency-2026-06-12.md`
+
+## P0 Implementation
+
+- Added group-level file distribution metrics:
+  - `group.response_bytes`
+  - `group.file_payload_bytes`
+  - `group.file_payload_base64_bytes`
+  - `group.file_command_copy_count`
+  - `group.file_unique_content_count`
+  - `group.file_shared_lower_bound_bytes`
+- Added SQLite schema columns and backward-compatible `ALTER TABLE ... ADD COLUMN` migration.
+- Coordinator now computes metrics from actual batch heartbeat responses after per-agent messages are generated.
+- Verification:
+  - `mvn -Dtest=LocalMetricStorageTest test`
+  - `mvn -DskipTests package`

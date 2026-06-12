@@ -185,6 +185,12 @@ class LocalMetricStorageTest {
                     3,
                     2,
                     12,
+                    1_200,
+                    1_000,
+                    1_336,
+                    2,
+                    1,
+                    668,
                     "partial",
                     Map.of("leader_url", "http://[fd00::1]:9977", "plan_mismatch", 1, "plan_lag", 1)));
             storage.writeGroupLeader(new GroupLeaderMetricSample(
@@ -205,6 +211,12 @@ class LocalMetricStorageTest {
                     1,
                     1,
                     7,
+                    600,
+                    400,
+                    536,
+                    1,
+                    1,
+                    536,
                     "ok",
                     Map.of("leader_url", "http://[fd00::2]:9977", "plan_mismatch", 0, "plan_lag", 0)));
 
@@ -282,6 +294,27 @@ class LocalMetricStorageTest {
                     1_710_000_000_000L,
                     1_000,
                     10));
+            MetricQueryResult filePayloadBytes = storage.queryRange(new MetricQuery(
+                    "group.file_payload_bytes",
+                    List.of(),
+                    1_710_000_000_000L,
+                    1_710_000_000_000L,
+                    1_000,
+                    10));
+            MetricQueryResult fileCopyCount = storage.queryRange(new MetricQuery(
+                    "group.file_command_copy_count",
+                    List.of(),
+                    1_710_000_000_000L,
+                    1_710_000_000_000L,
+                    1_000,
+                    10));
+            MetricQueryResult sharedLowerBound = storage.queryRange(new MetricQuery(
+                    "group.file_shared_lower_bound_bytes",
+                    List.of(),
+                    1_710_000_000_000L,
+                    1_710_000_000_000L,
+                    1_000,
+                    10));
             assertEquals(1.0, stale.series().get(0).points().get(0).value());
             assertEquals(0.0, directFallback.series().get(0).points().get(0).value());
             assertEquals(1.0, unhealthy.series().get(0).points().get(0).value());
@@ -289,6 +322,9 @@ class LocalMetricStorageTest {
             assertEquals(1.0, planMismatch.series().get(0).points().get(0).value());
             assertEquals(1.0, planLag.series().get(0).points().get(0).value());
             assertEquals(12.0, groupArrival.series().get(0).points().get(0).value());
+            assertEquals(1_000.0, filePayloadBytes.series().get(0).points().get(0).value());
+            assertEquals(2.0, fileCopyCount.series().get(0).points().get(0).value());
+            assertEquals(668.0, sharedLowerBound.series().get(0).points().get(0).value());
         }
     }
 
@@ -362,10 +398,12 @@ class LocalMetricStorageTest {
             storage.writeGroupLeader(new GroupLeaderMetricSample(
                     1_710_000_000_000L, "cluster-a/area-a/001", "agent-leader", "fd00::1",
                     "cluster-a", "area-a", 7, 11, 10, 10, 0, 1, 0, 0, 3, 2, 12,
+                    0, 0, 0, 0, 0, 0,
                     "partial", Map.of("leader_url", "http://[fd00::1]:9977")));
             storage.writeGroupLeader(new GroupLeaderMetricSample(
                     1_710_000_005_000L, "cluster-a/area-a/001", "agent-leader", "fd00::1",
                     "cluster-a", "area-a", 7, 11, 20, 18, 1, 1, 0, 0, 4, 3, 10,
+                    0, 0, 0, 0, 0, 0,
                     "partial", Map.of("leader_url", "http://[fd00::1]:9977")));
 
             MetricQueryResult result = storage.queryRange(new MetricQuery(

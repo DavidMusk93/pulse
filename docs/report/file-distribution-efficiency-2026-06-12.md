@@ -194,14 +194,22 @@ per-group file object + leader fanout
 
 ### P0 可观测性
 
-先补运行时指标，不直接改分发语义：
+已补运行时指标，不直接改分发语义：
 
-- `file.submit_bytes_total`：UI/coordinator API 收到的 raw/base64 字节。
-- `file.command_payload_bytes_total`：coordinator 生成的 `cmd.file_put` payload 字节。
-- `file.command_copy_count`：同一 `content_sha256` 在一次批量中生成多少 agent copy。
-- `group.response_bytes`：coordinator 到 leader 的 heartbeat response 字节。
-- `group.leader_forward_bytes`：leader 到 follower 的 `/group/heartbeat` response 字节。
-- trace 增加 `group_id`、`leader_agent_id`、`content_sha256`，用于按文件聚合链路。
+- `group.response_bytes`：coordinator 生成的 group batch response 字节。
+- `group.file_payload_bytes`：本轮 group response 内 `cmd.file_put` raw bytes 累加。
+- `group.file_payload_base64_bytes`：本轮 group response 内 `cmd.file_put.content` base64 bytes 累加。
+- `group.file_command_copy_count`：本轮 group response 内 `cmd.file_put` copy 数。
+- `group.file_unique_content_count`：本轮 group response 内唯一 `content_sha256` 数。
+- `group.file_shared_lower_bound_bytes`：按唯一内容去重后的 base64 lower bound。
+- SQLite schema 已增加兼容迁移，旧 DB 启动时会自动 `ALTER TABLE` 补列。
+- 验证：`mvn -Dtest=LocalMetricStorageTest test` 和 `mvn -DskipTests package` 通过。
+
+仍待 P1/P2/P3 覆盖：
+
+- `file.submit_bytes_total` 需要 P1 batch submit 接口落地后更准确统计 submit 侧单份/多份内容。
+- `group.leader_forward_bytes` 需要 leader 侧本地 metric 或 state payload 增强，建议随 P2 leader fanout 一起补。
+- trace 增加 `group_id`、`leader_agent_id`、`content_sha256` 可随 P2 的 group file object 一并补齐。
 
 ### P1 降低提交侧压力
 
@@ -251,4 +259,3 @@ coordinator 内部用同一 `content_sha256` 和内容对象创建多个 target 
 当前系统功能正确、group heartbeat 有效，但文件分发效率只优化了控制面连接数，没有优化数据面字节数。
 
 若“coordinator 压力应该较低”指文件内容压力，当前实现不符合预期；应优先补指标确认生产规模放大情况，再实现 batch submit、group-level file object 和 binary heartbeat response。
-

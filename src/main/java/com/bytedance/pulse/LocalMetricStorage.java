@@ -80,7 +80,13 @@ final class LocalMetricStorage implements MetricStorage {
                 new MetricCatalogItem("group.plan_lag", "Group plan mismatch compatibility", "ratio"),
                 new MetricCatalogItem("group.leader_collect_ms", "Group leader collection time", "ms"),
                 new MetricCatalogItem("group.group_latency_ms", "Group send latency", "ms"),
-                new MetricCatalogItem("group.arrival_gap_ms", "Group local arrival gap", "ms"));
+                new MetricCatalogItem("group.arrival_gap_ms", "Group local arrival gap", "ms"),
+                new MetricCatalogItem("group.response_bytes", "Group coordinator response bytes", "bytes"),
+                new MetricCatalogItem("group.file_payload_bytes", "Group file payload raw bytes", "bytes"),
+                new MetricCatalogItem("group.file_payload_base64_bytes", "Group file payload base64 bytes", "bytes"),
+                new MetricCatalogItem("group.file_command_copy_count", "Group file command copies", "count"),
+                new MetricCatalogItem("group.file_unique_content_count", "Group unique file contents", "count"),
+                new MetricCatalogItem("group.file_shared_lower_bound_bytes", "Group shared file lower-bound bytes", "bytes"));
     }
 
     @Override
@@ -124,8 +130,11 @@ final class LocalMetricStorage implements MetricStorage {
                     bucket_ms, observed_at_ms, group_id, leader_agent_id, leader_ip, cluster, area,
                     group_generation, member_count, submitted_agent_count, accepted_agent_count,
                     rejected_agent_count, stale_member_count, missing_member_count, direct_fallback_count,
-                    leader_collect_ms, group_latency_ms, arrival_gap_ms, status, debug_json, stored_at_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    leader_collect_ms, group_latency_ms, arrival_gap_ms,
+                    response_bytes, file_payload_bytes, file_payload_base64_bytes,
+                    file_command_copy_count, file_unique_content_count, file_shared_lower_bound_bytes,
+                    status, debug_json, stored_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             int index = 1;
@@ -147,6 +156,12 @@ final class LocalMetricStorage implements MetricStorage {
             statement.setLong(index++, sample.leaderCollectMs());
             statement.setLong(index++, sample.groupLatencyMs());
             statement.setLong(index++, sample.arrivalGapMs());
+            statement.setLong(index++, sample.responseBytes());
+            statement.setLong(index++, sample.filePayloadBytes());
+            statement.setLong(index++, sample.filePayloadBase64Bytes());
+            statement.setLong(index++, sample.fileCommandCopyCount());
+            statement.setLong(index++, sample.fileUniqueContentCount());
+            statement.setLong(index++, sample.fileSharedLowerBoundBytes());
             statement.setString(index++, sample.status());
             statement.setString(index++, MAPPER.writeValueAsString(sample.debug()));
             statement.setLong(index, System.currentTimeMillis());
@@ -625,12 +640,24 @@ final class LocalMetricStorage implements MetricStorage {
                         leader_collect_ms INTEGER,
                         group_latency_ms INTEGER,
                         arrival_gap_ms INTEGER,
+                        response_bytes INTEGER NOT NULL DEFAULT 0,
+                        file_payload_bytes INTEGER NOT NULL DEFAULT 0,
+                        file_payload_base64_bytes INTEGER NOT NULL DEFAULT 0,
+                        file_command_copy_count INTEGER NOT NULL DEFAULT 0,
+                        file_unique_content_count INTEGER NOT NULL DEFAULT 0,
+                        file_shared_lower_bound_bytes INTEGER NOT NULL DEFAULT 0,
                         status TEXT NOT NULL,
                         debug_json TEXT,
                         stored_at_ms INTEGER NOT NULL,
                         PRIMARY KEY (group_id, observed_at_ms)
                     )
                     """);
+            ensureColumn(statement, "group_leader_sample", "response_bytes", "INTEGER NOT NULL DEFAULT 0");
+            ensureColumn(statement, "group_leader_sample", "file_payload_bytes", "INTEGER NOT NULL DEFAULT 0");
+            ensureColumn(statement, "group_leader_sample", "file_payload_base64_bytes", "INTEGER NOT NULL DEFAULT 0");
+            ensureColumn(statement, "group_leader_sample", "file_command_copy_count", "INTEGER NOT NULL DEFAULT 0");
+            ensureColumn(statement, "group_leader_sample", "file_unique_content_count", "INTEGER NOT NULL DEFAULT 0");
+            ensureColumn(statement, "group_leader_sample", "file_shared_lower_bound_bytes", "INTEGER NOT NULL DEFAULT 0");
             statement.execute("CREATE INDEX IF NOT EXISTS idx_group_leader_time ON group_leader_sample(bucket_ms, observed_at_ms)");
             statement.execute("CREATE INDEX IF NOT EXISTS idx_group_leader_cluster_time ON group_leader_sample(cluster, area, bucket_ms)");
             statement.execute("CREATE INDEX IF NOT EXISTS idx_group_leader_agent_time ON group_leader_sample(leader_agent_id, observed_at_ms)");
@@ -648,6 +675,17 @@ final class LocalMetricStorage implements MetricStorage {
                     """);
             statement.execute("CREATE INDEX IF NOT EXISTS idx_host_event_agent_time ON host_event(agent_id, observed_at_ms)");
             statement.execute("CREATE INDEX IF NOT EXISTS idx_host_event_type_time ON host_event(event_type, observed_at_ms)");
+        }
+    }
+
+    private static void ensureColumn(Statement statement, String table, String column, String definition) throws SQLException {
+        try {
+            statement.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
+        } catch (SQLException exception) {
+            String message = exception.getMessage() == null ? "" : exception.getMessage().toLowerCase();
+            if (!message.contains("duplicate column")) {
+                throw exception;
+            }
         }
     }
 
@@ -902,7 +940,13 @@ final class LocalMetricStorage implements MetricStorage {
         GROUP_PLAN_LAG("group.plan_lag", "COALESCE(CAST(json_extract(debug_json, '$.plan_lag') AS INTEGER), COALESCE(CAST(json_extract(debug_json, '$.plan_mismatch') AS INTEGER), 0))", "ratio", MetricSource.GROUP_LEADER),
         GROUP_COLLECT("group.leader_collect_ms", "leader_collect_ms", "ms", MetricSource.GROUP_LEADER),
         GROUP_LATENCY("group.group_latency_ms", "group_latency_ms", "ms", MetricSource.GROUP_LEADER),
-        GROUP_ARRIVAL_GAP("group.arrival_gap_ms", "arrival_gap_ms", "ms", MetricSource.GROUP_LEADER);
+        GROUP_ARRIVAL_GAP("group.arrival_gap_ms", "arrival_gap_ms", "ms", MetricSource.GROUP_LEADER),
+        GROUP_RESPONSE_BYTES("group.response_bytes", "response_bytes", "bytes", MetricSource.GROUP_LEADER),
+        GROUP_FILE_PAYLOAD_BYTES("group.file_payload_bytes", "file_payload_bytes", "bytes", MetricSource.GROUP_LEADER),
+        GROUP_FILE_PAYLOAD_BASE64_BYTES("group.file_payload_base64_bytes", "file_payload_base64_bytes", "bytes", MetricSource.GROUP_LEADER),
+        GROUP_FILE_COMMAND_COPY_COUNT("group.file_command_copy_count", "file_command_copy_count", "count", MetricSource.GROUP_LEADER),
+        GROUP_FILE_UNIQUE_CONTENT_COUNT("group.file_unique_content_count", "file_unique_content_count", "count", MetricSource.GROUP_LEADER),
+        GROUP_FILE_SHARED_LOWER_BOUND_BYTES("group.file_shared_lower_bound_bytes", "file_shared_lower_bound_bytes", "bytes", MetricSource.GROUP_LEADER);
 
         private final String name;
         private final String column;
@@ -1003,6 +1047,12 @@ record GroupLeaderMetricSample(
         long leaderCollectMs,
         long groupLatencyMs,
         long arrivalGapMs,
+        long responseBytes,
+        long filePayloadBytes,
+        long filePayloadBase64Bytes,
+        long fileCommandCopyCount,
+        long fileUniqueContentCount,
+        long fileSharedLowerBoundBytes,
         String status,
         Map<String, Object> debug) {
     GroupLeaderMetricSample {

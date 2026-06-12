@@ -1,5 +1,6 @@
 package com.bytedance.pulse;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
 import java.net.InetAddress;
 import java.util.ArrayList;
@@ -10,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class CoordinatorService {
@@ -18,6 +20,7 @@ public class CoordinatorService {
     private static final int MIN_AGENTS_FOR_GROUP_LEADER = 5;
     private static final long DEFAULT_HOST_SNAPSHOT_TTL_MS = 1_000;
     private static final long DEFAULT_GROUP_RECOMPUTE_INTERVAL_MS = 1_000;
+    private static final ObjectMapper MAPPER = JsonSupport.objectMapper();
 
     private final String coordinatorId;
     private final Clock clock;
@@ -67,7 +70,6 @@ public class CoordinatorService {
                 agentResponses.add(new AgentHeartbeatResponse(agent.agentId(), acceptedSeq, List.of()));
                 accepted++;
             }
-            writeGroupLeaderMetric(request, source, now, accepted);
             maybeRecomputeGroups(now, false);
             agentResponses = agentResponses.stream()
                     .map(response -> new AgentHeartbeatResponse(
@@ -75,6 +77,7 @@ public class CoordinatorService {
                             response.acceptedSeq(),
                             responseMessages(response.agentId())))
                     .toList();
+            writeGroupLeaderMetric(request, source, now, accepted, agentResponses);
             return HeartbeatResponse.batch(coordinatorId, agentResponses);
         }
 
@@ -334,10 +337,16 @@ public class CoordinatorService {
         return metricState;
     }
 
-    private void writeGroupLeaderMetric(HeartbeatRequest request, String groupId, long observedAtMs, int accepted) {
+    private void writeGroupLeaderMetric(
+            HeartbeatRequest request,
+            String groupId,
+            long observedAtMs,
+            int accepted,
+            List<AgentHeartbeatResponse> responses) {
         if (metricStorage == null) {
             return;
         }
+        FileDistributionMetric distributionMetric = fileDistributionMetric(responses);
         GroupView group = groupViews.get(groupId);
         List<String> expectedMembers = group == null ? List.of() : group.members();
         long staleMembers = expectedMembers.isEmpty()
@@ -380,16 +389,69 @@ public class CoordinatorService {
                     longState(leaderState, "leader_collect_ms"),
                     groupLatencyMs,
                     arrivalGapMs,
+                    distributionMetric.responseBytes(),
+                    distributionMetric.filePayloadBytes(),
+                    distributionMetric.filePayloadBase64Bytes(),
+                    distributionMetric.fileCommandCopyCount(),
+                    distributionMetric.fileUniqueContentCount(),
+                    distributionMetric.fileSharedLowerBoundBytes(),
                     status,
-                    Map.of(
-                            "leader_url", group == null ? "" : group.leaderUrl(),
-                            "expected_generation", expectedGeneration,
-                            "agent_plan_generation", agentPlanGeneration,
-                            "plan_generation_known", agentPlanGeneration > 0,
-                            "plan_mismatch", planMismatch,
-                            "plan_lag", planMismatch)));
+                    Map.ofEntries(
+                            Map.entry("leader_url", group == null ? "" : group.leaderUrl()),
+                            Map.entry("expected_generation", expectedGeneration),
+                            Map.entry("agent_plan_generation", agentPlanGeneration),
+                            Map.entry("plan_generation_known", agentPlanGeneration > 0),
+                            Map.entry("plan_mismatch", planMismatch),
+                            Map.entry("plan_lag", planMismatch),
+                            Map.entry("file_response_bytes", distributionMetric.responseBytes()),
+                            Map.entry("file_payload_bytes", distributionMetric.filePayloadBytes()),
+                            Map.entry("file_payload_base64_bytes", distributionMetric.filePayloadBase64Bytes()),
+                            Map.entry("file_command_copy_count", distributionMetric.fileCommandCopyCount()),
+                            Map.entry("file_unique_content_count", distributionMetric.fileUniqueContentCount()),
+                            Map.entry("file_shared_lower_bound_bytes", distributionMetric.fileSharedLowerBoundBytes()))));
         } catch (Exception exception) {
             System.err.printf("metric_group_write status=failed group_id=%s error=%s%n", groupId, exception.getMessage());
+        }
+    }
+
+    private static FileDistributionMetric fileDistributionMetric(List<AgentHeartbeatResponse> responses) {
+        long responseBytes = 0;
+        long filePayloadBytes = 0;
+        long filePayloadBase64Bytes = 0;
+        long fileCommandCopyCount = 0;
+        Map<String, Long> uniqueContents = new HashMap<>();
+        for (AgentHeartbeatResponse response : responses == null ? List.<AgentHeartbeatResponse>of() : responses) {
+            responseBytes += jsonBytes(response);
+            for (PulseMessage message : response.messages()) {
+                if (!"cmd.file_put".equals(message.type()) || message.payload() == null) {
+                    continue;
+                }
+                fileCommandCopyCount++;
+                long rawBytes = longValue(message.payload().get("content_bytes"));
+                String content = stringValue(message.payload().get("content"));
+                String contentSha256 = stringValue(message.payload().get("content_sha256"));
+                long base64Bytes = content.getBytes(StandardCharsets.UTF_8).length;
+                filePayloadBytes += rawBytes;
+                filePayloadBase64Bytes += base64Bytes;
+                String uniqueKey = contentSha256.isBlank() ? stringValue(message.payload().get("file_id")) : contentSha256;
+                uniqueContents.merge(uniqueKey, base64Bytes, Math::max);
+            }
+        }
+        long lowerBoundBytes = uniqueContents.values().stream().mapToLong(Long::longValue).sum();
+        return new FileDistributionMetric(
+                responseBytes,
+                filePayloadBytes,
+                filePayloadBase64Bytes,
+                fileCommandCopyCount,
+                uniqueContents.size(),
+                lowerBoundBytes);
+    }
+
+    private static long jsonBytes(Object value) {
+        try {
+            return MAPPER.writeValueAsBytes(value).length;
+        } catch (Exception ignored) {
+            return 0;
         }
     }
 
@@ -410,6 +472,24 @@ public class CoordinatorService {
             return fallback;
         }
         return value.toString();
+    }
+
+    private static String stringValue(Object value) {
+        return value == null ? "" : value.toString();
+    }
+
+    private static long longValue(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value == null || value.toString().isBlank()) {
+            return 0;
+        }
+        try {
+            return Long.parseLong(value.toString());
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
     }
 
     private static String metricIdentity(String agentId, Map<String, Object> state) {
@@ -946,5 +1026,14 @@ public class CoordinatorService {
         private String key() {
             return epoch + "/" + seq;
         }
+    }
+
+    private record FileDistributionMetric(
+            long responseBytes,
+            long filePayloadBytes,
+            long filePayloadBase64Bytes,
+            long fileCommandCopyCount,
+            long fileUniqueContentCount,
+            long fileSharedLowerBoundBytes) {
     }
 }
