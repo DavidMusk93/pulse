@@ -90,3 +90,15 @@ Evaluate whether file distribution efficiency matches the expected group-leader 
   - `mvn -Dtest=CoordinatorHttpServerTest#batchFilePutSubmitsOnePayloadForMultipleAgents+taskApiRoutesForwardedAgentRequestsToHeartbeatOwner test`
   - `npm run build`
   - `mvn -DskipTests package`
+
+## P2 Implementation
+
+- Added group-level heartbeat file payload compression for duplicate `cmd.file_put` content in the same batch heartbeat response.
+- Coordinator now emits one `cmd.group_file_put` to the group leader with base64 content and target descriptors, and replaces each target's inline command with a lightweight `cmd.file_put_ref`.
+- Group leader expands `cmd.group_file_put` locally back into standard per-agent `cmd.file_put` messages before serving leader self-work or follower `/group/heartbeat` pulls.
+- Per-agent semantics are preserved: each target keeps its own `message_id`, `file_id`, file name, target directory, sha256 verification, and `reply.file_received` acknowledgement.
+- P0 metrics now measure compressed responses, so `group.file_command_copy_count` and payload bytes drop to the group object count after compression.
+- Verification:
+  - `mvn -Dtest=CoordinatorServiceTest#batchHeartbeatCompressesDuplicateFilePayloadsIntoGroupFileMessage+groupLeaderExpandsGroupFileMessageForFollowers test`
+  - `mvn -DskipTests package`
+- Full `mvn -Dtest=CoordinatorServiceTest test` was also attempted and failed on existing non-P2 expectations around canonical host identity and legacy metric test assumptions; the two new P2 tests pass in isolation.

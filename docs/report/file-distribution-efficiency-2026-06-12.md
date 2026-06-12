@@ -4,12 +4,12 @@
 
 ## 结论
 
-当前实现只在“心跳连接/请求数”层面符合 group leader 预期，不在“文件内容分发字节”层面符合低 coordinator 压力预期。
+初始评估时，系统只在“心跳连接/请求数”层面符合 group leader 预期，不在“文件内容分发字节”层面符合低 coordinator 压力预期。按建议开发后，P0/P1/P2 已补齐指标、批量提交和 group heartbeat 下行去重。
 
 - 符合预期的部分：50 台 cdn_new/cdn2 agent 当前稳定组成 7 个 group，7 个 leader 代表 50 个 agent 向 coordinator 提交 batch heartbeat，direct fallback 为 0。
-- 不符合预期的部分：文件内容仍按 agent 维度复制，`cmd.file_put` 每个 agent 一份完整 base64 payload；leader 只是透明转发每个 follower 的消息，没有做 group 级内容去重。
-- coordinator 压力降低的是连接数、heartbeat 请求数、上行心跳处理次数；没有降低文件内容的序列化、内存、HTTP response bytes、UI submit/proxy bytes。
-- 对 50 节点、7 group 的受控 128 KiB 文件，当前 coordinator 下行文件内容约为 group 共享下限的 `50/7 = 7.14x`，还未计 JSON 字段开销。
+- 已修复的部分：文件提交从 per-agent request 改为 `/api/files/batch_put`，group heartbeat response 内同内容文件从 per-agent inline payload 改为一份 `cmd.group_file_put` 加多份轻量 `cmd.file_put_ref`。
+- coordinator 压力现在同时降低了连接数、heartbeat 请求数、上行提交字节和 group 下行文件 payload copy 数。
+- 剩余差距：P2 仍使用 JSON/base64 承载文件内容；P3 需要实现 binary heartbeat response，避免 base64 约 33% 膨胀。
 
 ## 设计对照
 
@@ -23,20 +23,21 @@
 当前实现状态：
 
 - 已实现 JSON `cmd.file_put`。
+- 已实现 P2 `cmd.group_file_put` / `cmd.file_put_ref`，leader 在本地展开为标准 `cmd.file_put`。
 - 未发现 `application/vnd.pulse.binary`、`X-Pulse-*` 二进制响应实现。
-- 未实现 group-level file object、content hash 去重、leader 一份内容多 follower 复用。
-- 这与文档“非目标”一致，但与“coordinator 压力应该较低”的效率预期不一致。
+- group-level file object、content hash 去重、leader 一份内容多 follower 复用已落地在 group heartbeat response 内。
+- 这部分扩展突破了原文“非目标”，用于满足“coordinator 压力应该较低”的效率预期；二进制响应仍待 P3。
 
 ## 当前链路
 
 文件上传与下发链路：
 
-- UI/API 对每个 agent 调用 `POST /api/agents/{agentId}/tasks`，`operation=file_put`。
+- UI/API 调用 `POST /api/files/batch_put`，用一份文件内容携带多个 `agent_ids`。
 - coordinator 为每个 agent 创建一个 `fileId` 和一个 per-agent `ControlCommand.filePut`。
 - agent heartbeat 到 coordinator 时，coordinator 调用 `responseMessages(agentId)`。
 - `responseMessages(agentId)` 每次返回 `cmd.group_plan` 加最多一个 `taskService.nextCommand(agentId)`。
 - `nextCommand(agentId)` 对 file command 调用 `ControlCommand.toFilePutMessage(agentId)`。
-- `toFilePutMessage` 的 payload 内直接包含完整 `content` base64。
+- group batch response 生成后，coordinator 按 `content_sha256` 将重复 `cmd.file_put` 压缩成 leader 一份 `cmd.group_file_put` 和各 target 的 `cmd.file_put_ref`。
 
 group leader/follower 链路：
 
@@ -44,10 +45,10 @@ group leader/follower 链路：
 - leader 用 `GroupHeartbeatCollector` 聚合 follower heartbeat。
 - leader 向 coordinator 发 batch heartbeat。
 - coordinator 遍历 batch 内每个 agent，分别生成该 agent 的 `AgentHeartbeatResponse.messages`。
-- leader 收到 batch response 后，把每个 agent 的 messages 存入 `planMessages[agentId]`。
+- leader 收到 batch response 后，先展开 `cmd.group_file_put`，再把每个 agent 的标准 messages 存入 `planMessages[agentId]`。
 - follower 下一次请求 leader `/group/heartbeat` 时，leader 返回 `planMessages[agentId]`。
 
-这说明 follower 的文件命令确实经 leader 转发，但内容仍是 per-agent 消息，不是 per-group 共享对象。
+这说明 follower 的文件命令经 leader 转发，且同一 group 内相同文件内容已由 per-agent 消息优化为 per-group 共享对象。
 
 ## 运行时证据
 
@@ -237,20 +238,27 @@ content once
 
 ### P2 降低 coordinator 下行字节
 
-引入 group-level file delivery：
+已引入 group-level file delivery：
 
-- coordinator 按 `content_sha256 + group_id` 生成一个 group file object。
-- batch heartbeat response 给 leader 一份文件内容和 target member list。
-- leader 本地缓存 file object。
-- follower 从 leader 获取或由 leader 在 `/group/heartbeat` response 下发对应文件。
+- coordinator 在同一个 batch heartbeat response 内按 `content_sha256` 聚合同内容文件命令。
+- batch heartbeat response 给 leader 一份 `cmd.group_file_put`，包含一份 base64 内容和 target member list。
+- 每个目标 agent 的原始 `cmd.file_put` 被替换为轻量 `cmd.file_put_ref`。
+- leader 收到 response 后在本地展开为标准 per-agent `cmd.file_put`，leader 自身和 follower 都继续走原有 `TaskRunner` 文件写入逻辑。
 - follower 仍上报自己的 `reply.file_received`，coordinator 保持 per-agent 状态与审计。
+
+实现状态：
+
+- `CoordinatorService` 在生成 batch heartbeat response 后执行 group file compression，再写入 P0 指标。
+- `PulseAgentApp.GroupHeartbeatReceiver` 展开 `cmd.group_file_put`，不新增 follower 入站 API。
+- 每个 target descriptor 保留独立 `message_id`、`file_id`、`file_name`、`target_dir`、`file_role`、`mode`、`content_sha256` 和 `content_bytes`。
+- 验证：`CoordinatorServiceTest#batchHeartbeatCompressesDuplicateFilePayloadsIntoGroupFileMessage+groupLeaderExpandsGroupFileMessageForFollowers` 与 `mvn -DskipTests package` 通过。
 
 需要保留的约束：
 
 - agent outbound-only。
 - 不新增 follower 入站 API。
 - 每个 follower 必须独立 hash 校验、独立回执。
-- leader 缓存需要容量上限、TTL、sha256 校验、重启恢复/降级策略。
+- 当前 leader 不持久化 group file cache，仅在收到 batch response 时展开到 `planMessages`；后续如支持大文件/分片，需要补容量上限、TTL、sha256 校验、重启恢复/降级策略。
 
 ### P3 二进制响应
 
@@ -270,4 +278,4 @@ content once
 
 当前系统功能正确、group heartbeat 有效，但文件分发效率只优化了控制面连接数，没有优化数据面字节数。
 
-若“coordinator 压力应该较低”指文件内容压力，当前实现不符合预期；应优先补指标确认生产规模放大情况，再实现 batch submit、group-level file object 和 binary heartbeat response。
+若“coordinator 压力应该较低”指文件内容压力，P0/P1/P2 已分别覆盖可观测性、提交侧去重和 group heartbeat 下行去重；剩余主要差距是 P3 binary heartbeat response，用原始二进制避免 base64 膨胀。

@@ -8,6 +8,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -257,6 +258,89 @@ class CoordinatorServiceTest {
                     .flatMap(series -> series.points().stream())
                     .anyMatch(point -> "fallback_direct".equals(point.metadata().get("heartbeat_path"))
                             && group.groupId().equals(point.metadata().get("expected_group_id"))));
+        }
+    }
+
+    @Test
+    void batchHeartbeatCompressesDuplicateFilePayloadsIntoGroupFileMessage() {
+        CoordinatorService service = new CoordinatorService("coordinator-a", clock);
+        for (int i = 1; i <= 5; i++) {
+            confirmAlive(service, "agent-" + i, "host-" + i, "10.0.0." + i);
+        }
+        GroupView group = service.groups().get(0);
+        String content = "hello group file";
+        service.enqueueFilePutBatch(
+                group.members(),
+                "group.txt",
+                Base64.getEncoder().encodeToString(content.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                TaskOutputCodec.sha256(content),
+                content.length(),
+                "files",
+                "generic_file");
+
+        HeartbeatResponse response = service.handleHeartbeat(new HeartbeatRequest(
+                group.groupId(),
+                null,
+                null,
+                null,
+                null,
+                List.of(),
+                group.members().stream()
+                        .map(agentId -> agent(agentId, 1, 20, "host-" + agentId, "10.0.0." + agentId.replace("agent-", "")))
+                        .toList()));
+
+        long groupFileMessages = response.agents().stream()
+                .flatMap(agent -> agent.messages().stream())
+                .filter(message -> "cmd.group_file_put".equals(message.type()))
+                .count();
+        long fileRefs = response.agents().stream()
+                .flatMap(agent -> agent.messages().stream())
+                .filter(message -> "cmd.file_put_ref".equals(message.type()))
+                .count();
+        long inlineFilePuts = response.agents().stream()
+                .flatMap(agent -> agent.messages().stream())
+                .filter(message -> "cmd.file_put".equals(message.type()))
+                .count();
+
+        assertEquals(1, groupFileMessages);
+        assertEquals(group.members().size(), fileRefs);
+        assertEquals(0, inlineFilePuts);
+    }
+
+    @Test
+    void groupLeaderExpandsGroupFileMessageForFollowers() throws Exception {
+        PulseAgentApp.GroupHeartbeatReceiver receiver = new PulseAgentApp.GroupHeartbeatReceiver(
+                "127.0.0.1",
+                0,
+                new GroupHeartbeatCollector());
+        try {
+            PulseMessage groupFile = new PulseMessage(
+                    "cmd-group-file-put-group-file-sha",
+                    "cmd.group_file_put",
+                    1,
+                    null,
+                    1_710_000_030_000L,
+                    Map.of(
+                            "group_file_id", "group-file-sha",
+                            "content_encoding", "base64",
+                            "content", "aGVsbG8=",
+                            "content_sha256", "sha",
+                            "content_bytes", 5,
+                            "targets", List.of(
+                                    Map.of("agent_id", "agent-1", "message_id", "cmd-file-1", "file_id", "file-1", "file_name", "a.txt", "file_role", "generic_file", "target_dir", "files", "mode", "0644"),
+                                    Map.of("agent_id", "agent-2", "message_id", "cmd-file-2", "file_id", "file-2", "file_name", "a.txt", "file_role", "generic_file", "target_dir", "files", "mode", "0644"))));
+            receiver.updatePlans(HeartbeatResponse.batch("coordinator-a", List.of(
+                    new AgentHeartbeatResponse("agent-1", 10, List.of(groupFile, new PulseMessage("cmd-file-1", "cmd.file_put_ref", 1, null, null, Map.of("group_file_id", "group-file-sha")))),
+                    new AgentHeartbeatResponse("agent-2", 11, List.of(new PulseMessage("cmd-file-2", "cmd.file_put_ref", 1, null, null, Map.of("group_file_id", "group-file-sha")))))));
+
+            List<PulseMessage> followerMessages = receiver.messagesFor("agent-2");
+
+            assertEquals(1, followerMessages.size());
+            assertEquals("cmd.file_put", followerMessages.get(0).type());
+            assertEquals("aGVsbG8=", followerMessages.get(0).payload().get("content"));
+            assertEquals("file-2", followerMessages.get(0).payload().get("file_id"));
+        } finally {
+            receiver.stop();
         }
     }
 

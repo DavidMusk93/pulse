@@ -77,6 +77,7 @@ public class CoordinatorService {
                             response.acceptedSeq(),
                             responseMessages(response.agentId())))
                     .toList();
+            agentResponses = compressGroupFileMessages(request, source, agentResponses);
             writeGroupLeaderMetric(request, source, now, accepted, agentResponses);
             return HeartbeatResponse.batch(coordinatorId, agentResponses);
         }
@@ -434,7 +435,9 @@ public class CoordinatorService {
         for (AgentHeartbeatResponse response : responses == null ? List.<AgentHeartbeatResponse>of() : responses) {
             responseBytes += jsonBytes(response);
             for (PulseMessage message : response.messages()) {
-                if (!"cmd.file_put".equals(message.type()) || message.payload() == null) {
+                if (!(("cmd.file_put".equals(message.type()) || "cmd.group_file_put".equals(message.type()))
+                        && message.payload() != null
+                        && message.payload().containsKey("content"))) {
                     continue;
                 }
                 fileCommandCopyCount++;
@@ -558,6 +561,108 @@ public class CoordinatorService {
                     .thenComparing(HostView::agentId));
         }
         return List.copyOf(hosts);
+    }
+
+    private List<AgentHeartbeatResponse> compressGroupFileMessages(
+            HeartbeatRequest request,
+            String groupId,
+            List<AgentHeartbeatResponse> responses) {
+        if (responses.isEmpty()) {
+            return responses;
+        }
+        String leaderAgentId = groupViews.containsKey(groupId)
+                ? groupViews.get(groupId).leaderAgentId()
+                : (request.agents().isEmpty() ? "" : request.agents().get(0).agentId());
+        if (leaderAgentId.isBlank()) {
+            return responses;
+        }
+        Map<String, List<FilePutTarget>> targetsBySha = new LinkedHashMap<>();
+        for (AgentHeartbeatResponse response : responses) {
+            for (PulseMessage message : response.messages()) {
+                if (!"cmd.file_put".equals(message.type()) || message.payload() == null) {
+                    continue;
+                }
+                String contentSha256 = stringValue(message.payload().get("content_sha256"));
+                String content = stringValue(message.payload().get("content"));
+                if (contentSha256.isBlank() || content.isBlank()) {
+                    continue;
+                }
+                targetsBySha.computeIfAbsent(contentSha256, ignored -> new ArrayList<>())
+                        .add(new FilePutTarget(response.agentId(), message));
+            }
+        }
+        Map<String, List<PulseMessage>> messagesByAgent = new LinkedHashMap<>();
+        for (AgentHeartbeatResponse response : responses) {
+            messagesByAgent.put(response.agentId(), new ArrayList<>(response.messages()));
+        }
+        boolean changed = false;
+        for (Map.Entry<String, List<FilePutTarget>> entry : targetsBySha.entrySet()) {
+            List<FilePutTarget> targets = entry.getValue();
+            if (targets.size() <= 1) {
+                continue;
+            }
+            changed = true;
+            String groupFileId = "group-file-" + entry.getKey();
+            PulseMessage first = targets.get(0).message();
+            PulseMessage groupFile = new PulseMessage(
+                    "cmd-group-file-put-" + groupFileId,
+                    "cmd.group_file_put",
+                    1,
+                    null,
+                    first.deadlineMs(),
+                    Map.ofEntries(
+                            Map.entry("group_file_id", groupFileId),
+                            Map.entry("content_encoding", "base64"),
+                            Map.entry("content", stringValue(first.payload().get("content"))),
+                            Map.entry("content_sha256", entry.getKey()),
+                            Map.entry("content_bytes", longValue(first.payload().get("content_bytes"))),
+                            Map.entry("targets", targets.stream()
+                                    .map(target -> targetDescriptor(target.agentId(), target.message()))
+                                    .toList())));
+            messagesByAgent.computeIfAbsent(leaderAgentId, ignored -> new ArrayList<>()).add(groupFile);
+            for (FilePutTarget target : targets) {
+                List<PulseMessage> messages = messagesByAgent.get(target.agentId());
+                for (int i = 0; i < messages.size(); i++) {
+                    if (Objects.equals(messages.get(i).messageId(), target.message().messageId())) {
+                        messages.set(i, filePutRef(groupFileId, target.message()));
+                    }
+                }
+            }
+        }
+        if (!changed) {
+            return responses;
+        }
+        return responses.stream()
+                .map(response -> new AgentHeartbeatResponse(
+                        response.agentId(),
+                        response.acceptedSeq(),
+                        List.copyOf(messagesByAgent.getOrDefault(response.agentId(), response.messages()))))
+                .toList();
+    }
+
+    private static Map<String, Object> targetDescriptor(String agentId, PulseMessage message) {
+        Map<String, Object> target = new LinkedHashMap<>(message.payload());
+        target.remove("content");
+        target.remove("content_encoding");
+        target.put("agent_id", agentId);
+        target.put("message_id", message.messageId());
+        if (message.deadlineMs() != null) {
+            target.put("deadline_ms", message.deadlineMs());
+        }
+        return target;
+    }
+
+    private static PulseMessage filePutRef(String groupFileId, PulseMessage message) {
+        return new PulseMessage(
+                message.messageId(),
+                "cmd.file_put_ref",
+                message.version(),
+                message.replyTo(),
+                message.deadlineMs(),
+                Map.of(
+                        "group_file_id", groupFileId,
+                        "file_id", stringValue(message.payload().get("file_id")),
+                        "content_sha256", stringValue(message.payload().get("content_sha256"))));
     }
 
     private static String stableHostIdentity(HostView host) {
@@ -1046,5 +1151,8 @@ public class CoordinatorService {
             long fileCommandCopyCount,
             long fileUniqueContentCount,
             long fileSharedLowerBoundBytes) {
+    }
+
+    private record FilePutTarget(String agentId, PulseMessage message) {
     }
 }

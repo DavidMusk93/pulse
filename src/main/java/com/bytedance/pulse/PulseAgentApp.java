@@ -11,7 +11,9 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -76,10 +78,7 @@ public final class PulseAgentApp {
             HeartbeatResponse response = client.sendForResponse("/heartbeat", batch);
             if (response != null) {
                 receiver.updatePlans(response);
-                response.agents().stream()
-                        .filter(agent -> leaderHeartbeat.agentId().equals(agent.agentId()))
-                        .findFirst()
-                        .ifPresent(agent -> taskRunner.handleMessages(agent.messages()));
+                taskRunner.handleMessages(receiver.messagesFor(leaderHeartbeat.agentId()));
             }
             Thread.sleep(intervalMs);
         }
@@ -127,11 +126,7 @@ public final class PulseAgentApp {
                 HeartbeatResponse response = client.sendForResponse("/heartbeat", batch);
                 if (response != null) {
                     receiver.updatePlans(response);
-                    List<PulseMessage> selfMessages = response.agents().stream()
-                                    .filter(agent -> heartbeat.agentId().equals(agent.agentId()))
-                                    .findFirst()
-                                    .map(AgentHeartbeatResponse::messages)
-                                    .orElse(List.of());
+                    List<PulseMessage> selfMessages = receiver.messagesFor(heartbeat.agentId());
                     taskRunner.handleMessages(selfMessages);
                     currentPlan = planFromMessages(heartbeat.agentId(), selfMessages).orElse(currentPlan);
                 }
@@ -482,10 +477,89 @@ public final class PulseAgentApp {
         }
 
         void updatePlans(HeartbeatResponse response) {
+            Map<String, List<PulseMessage>> expanded = expandGroupFileMessages(response);
             for (AgentHeartbeatResponse agent : response.agents()) {
-                if (!agent.messages().isEmpty()) {
-                    planMessages.put(agent.agentId(), agent.messages());
+                List<PulseMessage> messages = expanded.getOrDefault(agent.agentId(), agent.messages());
+                if (!messages.isEmpty()) {
+                    planMessages.put(agent.agentId(), messages);
                 }
+            }
+        }
+
+        List<PulseMessage> messagesFor(String agentId) {
+            return planMessages.getOrDefault(agentId, List.of());
+        }
+
+        private static Map<String, List<PulseMessage>> expandGroupFileMessages(HeartbeatResponse response) {
+            Map<String, List<PulseMessage>> messagesByAgent = new LinkedHashMap<>();
+            Map<String, PulseMessage> groupFiles = new LinkedHashMap<>();
+            for (AgentHeartbeatResponse agent : response.agents()) {
+                List<PulseMessage> filtered = new ArrayList<>();
+                for (PulseMessage message : agent.messages()) {
+                    if ("cmd.group_file_put".equals(message.type())) {
+                        groupFiles.put(stringPayload(message, "group_file_id"), message);
+                    } else if (!"cmd.file_put_ref".equals(message.type())) {
+                        filtered.add(message);
+                    }
+                }
+                messagesByAgent.put(agent.agentId(), filtered);
+            }
+            for (PulseMessage groupFile : groupFiles.values()) {
+                Object rawTargets = groupFile.payload() == null ? null : groupFile.payload().get("targets");
+                if (!(rawTargets instanceof List<?> targets)) {
+                    continue;
+                }
+                for (Object rawTarget : targets) {
+                    if (!(rawTarget instanceof Map<?, ?> target)) {
+                        continue;
+                    }
+                    String agentId = stringValue(target.get("agent_id"));
+                    if (agentId.isBlank()) {
+                        continue;
+                    }
+                    messagesByAgent.computeIfAbsent(agentId, ignored -> new ArrayList<>()).add(expandFilePut(groupFile, target));
+                }
+            }
+            return messagesByAgent;
+        }
+
+        private static PulseMessage expandFilePut(PulseMessage groupFile, Map<?, ?> target) {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            target.forEach((key, value) -> payload.put(String.valueOf(key), value));
+            payload.remove("message_id");
+            payload.remove("deadline_ms");
+            payload.put("content_encoding", "base64");
+            payload.put("content", groupFile.payload().get("content"));
+            payload.put("content_sha256", groupFile.payload().get("content_sha256"));
+            payload.put("content_bytes", groupFile.payload().get("content_bytes"));
+            return new PulseMessage(
+                    stringValue(target.get("message_id")),
+                    "cmd.file_put",
+                    1,
+                    null,
+                    longObject(target.get("deadline_ms")),
+                    payload);
+        }
+
+        private static String stringPayload(PulseMessage message, String key) {
+            return message.payload() == null ? "" : stringValue(message.payload().get(key));
+        }
+
+        private static String stringValue(Object value) {
+            return value == null ? "" : value.toString();
+        }
+
+        private static Long longObject(Object value) {
+            if (value instanceof Number number) {
+                return number.longValue();
+            }
+            if (value == null || value.toString().isBlank()) {
+                return null;
+            }
+            try {
+                return Long.parseLong(value.toString());
+            } catch (NumberFormatException ignored) {
+                return null;
             }
         }
 
