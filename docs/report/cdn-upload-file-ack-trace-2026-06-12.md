@@ -124,3 +124,9 @@ DETAILS_NON_RECEIVED
 - Code: `GroupHeartbeatCollector.hasUrgentMessage` now treats `reply.file_received` as urgent.
 - Test: `GroupHeartbeatCollectorTest#flushDecisionClassifiesSelfDueFirstAgentDueUrgentAndBatchFull` now covers file ack urgent flush.
 - Verification: `mvn -Dtest=GroupHeartbeatCollectorTest test` passed, 3 tests, 0 failures.
+- Deployment: full `cdn_new` rollout passed, `total=50 ok=50 fail=0`.
+- Deployed JAR SHA: `ee47865eecead79b8a3e3c2721d059783c1bcdb40b3c7961c4f0b73d74d44762`.
+- Post-deploy probe:
+  - Submit `urgent-postfix-probe.txt`: `total=50 ok=50 fail=0`.
+  - After 12s during restart/plan convergence: `31 received`, `19 delivering`.
+  - After an additional 35s: `50 received`, no non-received details.
