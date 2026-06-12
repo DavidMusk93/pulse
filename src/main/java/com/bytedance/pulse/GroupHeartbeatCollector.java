@@ -91,7 +91,7 @@ public class GroupHeartbeatCollector {
 
     private static boolean hasUrgentMessage(AgentHeartbeat heartbeat) {
         return heartbeat.messages().stream().anyMatch(message -> switch (message.type()) {
-            case "reply.task_accepted", "reply.task_result", "reply.task_result_chunk" -> true;
+            case "reply.file_received", "reply.task_accepted", "reply.task_result", "reply.task_result_chunk" -> true;
             case "reply.task_output_append" -> message.payload() != null && Boolean.TRUE.equals(message.payload().get("urgent"));
             default -> message.payload() != null && "true".equals(String.valueOf(message.payload().get("urgent")));
         });

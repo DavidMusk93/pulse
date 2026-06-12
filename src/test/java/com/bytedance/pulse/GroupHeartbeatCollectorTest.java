@@ -71,6 +71,19 @@ class GroupHeartbeatCollectorTest {
         assertTrue(urgent.shouldFlush());
         assertEquals(GroupFlushTrigger.URGENT_MESSAGE, urgent.trigger());
 
+        GroupHeartbeatCollector fileAckCollector = new GroupHeartbeatCollector();
+        fileAckCollector.batch("group", leader, 1_000, 7);
+        fileAckCollector.record(heartbeatWithMessage("agent-file", 1, new PulseMessage(
+                "file-received-agent-file",
+                "reply.file_received",
+                1,
+                "cmd-file-put-1",
+                null,
+                Map.of("file_id", "file-1", "status", "received"))), 2_000);
+        GroupFlushDecision fileAck = fileAckCollector.flushDecision(leader, 3_000, 5_000, 3_000, 7, 100, 1024 * 1024);
+        assertTrue(fileAck.shouldFlush());
+        assertEquals(GroupFlushTrigger.URGENT_MESSAGE, fileAck.trigger());
+
         GroupHeartbeatCollector fullCollector = new GroupHeartbeatCollector();
         fullCollector.batch("group", leader, 1_000, 7);
         fullCollector.record(heartbeat("agent-3", 1), 2_000);

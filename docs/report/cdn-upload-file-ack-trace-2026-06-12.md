@@ -114,8 +114,13 @@ DETAILS_NON_RECEIVED
 
 ## 建议
 
-- 补设计一致性修复：把 `reply.file_received` 加入 `GroupHeartbeatCollector.hasUrgentMessage` 的 urgent 类型。
-- 增加测试：当 follower 上报 `reply.file_received` 时，group collector 的 flush decision 应返回 `URGENT_MESSAGE`。
+- 已补设计一致性修复：把 `reply.file_received` 加入 `GroupHeartbeatCollector.hasUrgentMessage` 的 urgent 类型。
+- 已增加测试：当 follower 上报 `reply.file_received` 时，group collector 的 flush decision 返回 `URGENT_MESSAGE`。
 - UI 侧显示应拆分 submit/delivering/received 三段，避免“已提交但待回执”被误解为失败。
 - coordinator trace 应在 UI 展示最近 `file.enqueued`、`delivering`、`file.received_by_agent` 时间差，便于定位是哪一段慢。
 
+## Follow-up Fix
+
+- Code: `GroupHeartbeatCollector.hasUrgentMessage` now treats `reply.file_received` as urgent.
+- Test: `GroupHeartbeatCollectorTest#flushDecisionClassifiesSelfDueFirstAgentDueUrgentAndBatchFull` now covers file ack urgent flush.
+- Verification: `mvn -Dtest=GroupHeartbeatCollectorTest test` passed, 3 tests, 0 failures.
