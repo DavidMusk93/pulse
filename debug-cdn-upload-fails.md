@@ -57,3 +57,27 @@ Started: 2026-06-12
 - Diagnostics: no VS Code diagnostics in modified Java files.
 - Focused verification passed: `mvn -Dtest=CoordinatorHttpServerTest#defaultTaskRouteHostBracketsIpv6CoordinatorIds test`.
 - Broader `mvn -Dtest=CoordinatorHttpServerTest test` currently has unrelated existing failures in heartbeat/metrics tests, not in the route-host regression path.
+
+## Deployment
+
+- Commit deployed: `1bcb6e6 Fix IPv6 coordinator task routing`.
+- Built artifact: `target/pulse-0.1.0-SNAPSHOT.jar`.
+- JAR SHA: `13555e7a6c74f3dc5e20504ec3223091e086488b67c70268ac0e05e2ca344666`.
+- Coordinators deployed and restarted successfully:
+  - `fdbd:dc05:11:634::45`
+  - `fdbd:dc05:13:10c::40`
+  - `fdbd:dc07:0:810::44`
+
+## Post-Fix Evidence
+
+- Same local-owner probe on `fdbd:dc05:11:634::45` returned `200 OK`.
+- Same remote-owner probe that previously returned `400 unsupported URI http://fdbd:dc07:0:810::44:9966/...` now returned `200 OK` with `file.enqueued`.
+- Full `cdn2/cdn_new` small-file submit probe from `fdbd:dc05:11:634::45`:
+  - total: `50`
+  - ok: `50`
+  - fail: `0`
+
+## Current Status
+
+- Root cause fixed and deployed.
+- Upload submission no longer fails immediately for remote-owner agents due to IPv6 route URI construction.
