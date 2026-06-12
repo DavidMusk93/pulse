@@ -156,3 +156,5 @@ UI fix:
 - `file_transfers.status=received` is classified as success.
 - `delivering` and `received` now have explicit UI labels/colors.
 - Verification: `npm run build` passed.
+- Commit: `6fe7839 Fix file upload batch receipt summary`.
+- Coordinator UI deployment: 3/3 coordinators active with JAR SHA `2de8200b207e0cda30aa20d4d2d354aacb7317cd80da35cafd4d8c064de2cdee`.
