@@ -9,6 +9,7 @@ import java.net.InetSocketAddress;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -334,7 +335,7 @@ public final class PulseAgentApp {
                             .POST(HttpRequest.BodyPublishers.ofString(body))
                             .build();
                     long sendStartedNs = System.nanoTime();
-                    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                    HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
                     long sendMs = elapsedMsSince(sendStartedNs);
                     lastEncodeMs = encodeMs;
                     lastSendMs = sendMs;
@@ -357,13 +358,18 @@ public final class PulseAgentApp {
                                         successCount);
                             }
                         }
+                        if (BinaryHeartbeatCodec.isBinary(response.headers())) {
+                            return BinaryHeartbeatCodec.decode(
+                                    BinaryHeartbeatCodec.HttpResponseLike.of(response.headers(), response.body()),
+                                    mapper);
+                        }
                         return mapper.readValue(response.body(), HeartbeatResponse.class);
                     }
                     System.err.printf(
                             "heartbeat status=bad_response coordinator=%s code=%d body=%s%n",
                             baseUrl,
                             response.statusCode(),
-                            response.body());
+                            new String(response.body(), StandardCharsets.UTF_8));
                 } catch (Exception exception) {
                     System.err.printf(
                             "heartbeat status=failed coordinator=%s error=%s%n",
@@ -470,6 +476,9 @@ public final class PulseAgentApp {
                         "group-leader",
                         request.seq() == null ? 0 : request.seq(),
                         planMessages.getOrDefault(request.agentId(), List.of()));
+                if (BinaryHeartbeatCodec.writeIfBinary(exchange, response, mapper)) {
+                    return;
+                }
                 send(exchange, 200, mapper.writeValueAsString(response));
             } catch (Exception exception) {
                 send(exchange, 400, "{\"ok\":false,\"error\":\"" + exception.getMessage() + "\"}");

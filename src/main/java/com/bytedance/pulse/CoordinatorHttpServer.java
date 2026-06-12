@@ -104,6 +104,9 @@ public class CoordinatorHttpServer {
                 } catch (Exception exception) {
                     System.err.printf("heartbeat_fwd status=unexpected_error error=%s%n", exception.getMessage());
                 }
+                if (BinaryHeartbeatCodec.writeIfBinary(exchange, response, mapper)) {
+                    return;
+                }
                 writeJson(exchange, 200, response);
                 return;
             }

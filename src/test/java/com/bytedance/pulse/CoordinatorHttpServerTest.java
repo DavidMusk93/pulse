@@ -1017,6 +1017,82 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
+    void heartbeatEndpointCanReturnBinaryFilePayload() throws Exception {
+        String content = "hello binary heartbeat";
+        String encoded = Base64.getEncoder().encodeToString(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        postJson("/api/files/batch_put", """
+                {
+                  "agent_ids": ["agent-1"],
+                  "file_name": "binary.txt",
+                  "content_base64": "__CONTENT__",
+                  "content_sha256": "__SHA__",
+                  "content_bytes": __BYTES__,
+                  "target_dir": "files",
+                  "file_role": "generic_file"
+                }
+                """
+                .replace("__CONTENT__", encoded)
+                .replace("__SHA__", TaskOutputCodec.sha256(content))
+                .replace("__BYTES__", String.valueOf(content.length())));
+        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/heartbeat"))
+                .timeout(Duration.ofSeconds(2))
+                .header("content-type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("""
+                        {
+                          "agent_id": "agent-1",
+                          "epoch": 1,
+                          "seq": 42,
+                          "ttl_ms": 15000,
+                          "messages": []
+                        }
+                        """))
+                .build();
+
+        HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+
+        assertEquals(200, response.statusCode());
+        assertTrue(response.headers().firstValue("content-type").orElse("").contains(BinaryHeartbeatCodec.CONTENT_TYPE));
+        assertEquals(content, new String(response.body(), java.nio.charset.StandardCharsets.UTF_8));
+        HeartbeatResponse decoded = BinaryHeartbeatCodec.decode(
+                BinaryHeartbeatCodec.HttpResponseLike.of(response.headers(), response.body()),
+                mapper);
+        assertEquals(42, decoded.acceptedSeq());
+        assertEquals("cmd.group_plan", decoded.messages().get(0).type());
+        PulseMessage file = decoded.messages().stream()
+                .filter(message -> "cmd.file_put".equals(message.type()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("binary.txt", file.payload().get("file_name"));
+        assertEquals(encoded, file.payload().get("content"));
+    }
+
+    @Test
+    void agentHeartbeatClientParsesBinaryFilePayload() throws Exception {
+        AtomicInteger hits = new AtomicInteger();
+        HttpServer stub = binaryHeartbeatStub(hits);
+        stub.start();
+        try {
+            PulseAgentApp.HeartbeatClient heartbeatClient = new PulseAgentApp.HeartbeatClient(
+                    List.of("http://127.0.0.1:" + stub.getAddress().getPort()),
+                    Duration.ofSeconds(1));
+
+            HeartbeatResponse response = heartbeatClient.sendForResponse(
+                    "/heartbeat",
+                    new HeartbeatRequest(null, "agent-1", 1L, 42L, 15_000L, List.of(), List.of()));
+
+            assertEquals(1, hits.get());
+            PulseMessage file = response.messages().stream()
+                    .filter(message -> "cmd.file_put".equals(message.type()))
+                    .findFirst()
+                    .orElseThrow();
+            assertEquals("binary.txt", file.payload().get("file_name"));
+            assertEquals("aGVsbG8=", file.payload().get("content"));
+        } finally {
+            stub.stop(0);
+        }
+    }
+
+    @Test
     void dynamicFollowerReusesLeaderHeartbeatClient() {
         PulseAgentApp.FollowerLeaderClientCache cache =
                 new PulseAgentApp.FollowerLeaderClientCache(Duration.ofSeconds(1));
@@ -1111,6 +1187,35 @@ class CoordinatorHttpServerTest {
             try (var output = exchange.getResponseBody()) {
                 output.write(body);
             }
+        });
+        return server;
+    }
+
+    private static HttpServer binaryHeartbeatStub(AtomicInteger hits) throws IOException {
+        ObjectMapper mapper = JsonSupport.objectMapper();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/heartbeat", exchange -> {
+            hits.incrementAndGet();
+            String content = "hello";
+            HeartbeatResponse response = HeartbeatResponse.single("stub", 42, List.of(new PulseMessage(
+                    "cmd-file-1",
+                    "cmd.file_put",
+                    1,
+                    null,
+                    null,
+                    Map.ofEntries(
+                            Map.entry("task_id", ""),
+                            Map.entry("file_id", "file-1"),
+                            Map.entry("agent_id", "agent-1"),
+                            Map.entry("file_name", "binary.txt"),
+                            Map.entry("file_role", "generic_file"),
+                            Map.entry("target_dir", "files"),
+                            Map.entry("content_encoding", "base64"),
+                            Map.entry("content", Base64.getEncoder().encodeToString(content.getBytes(java.nio.charset.StandardCharsets.UTF_8))),
+                            Map.entry("content_sha256", TaskOutputCodec.sha256(content)),
+                            Map.entry("content_bytes", content.length()),
+                            Map.entry("mode", "0644")))));
+            BinaryHeartbeatCodec.writeIfBinary(exchange, response, mapper);
         });
         return server;
     }

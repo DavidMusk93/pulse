@@ -102,3 +102,15 @@ Evaluate whether file distribution efficiency matches the expected group-leader 
   - `mvn -Dtest=CoordinatorServiceTest#batchHeartbeatCompressesDuplicateFilePayloadsIntoGroupFileMessage+groupLeaderExpandsGroupFileMessageForFollowers test`
   - `mvn -DskipTests package`
 - Full `mvn -Dtest=CoordinatorServiceTest test` was also attempted and failed on existing non-P2 expectations around canonical host identity and legacy metric test assumptions; the two new P2 tests pass in isolation.
+
+## P3 Implementation
+
+- Added `BinaryHeartbeatCodec` for `application/vnd.pulse.binary` heartbeat responses.
+- Coordinator `/heartbeat` now keeps JSON as the default response, but when a single-agent heartbeat response contains exactly one inline base64 `cmd.file_put`, it sends raw file bytes as the HTTP body with `X-Pulse-*` metadata headers.
+- Agent `HeartbeatClient` now reads heartbeat responses as bytes, detects `application/vnd.pulse.binary`, validates `X-Pulse-Content-Length` and `X-Pulse-Content-Sha256`, and reconstructs the original `HeartbeatResponse` / `cmd.file_put` for the existing `AgentTaskRunner`.
+- Group leader `/group/heartbeat` uses the same binary writer for single follower file responses, reducing leader-to-follower base64 expansion without changing follower APIs.
+- Non-file companion messages, such as `cmd.group_plan`, are preserved in `X-Pulse-Companion-Messages` so binary file delivery does not drop plan updates.
+- Current P3 scope intentionally does not convert multi-agent coordinator batch responses to binary because the design format carries one file body per response; P2 still reduces those coordinator batch responses to one group file object before JSON/base64 transport.
+- Verification:
+  - `mvn -Dtest=CoordinatorHttpServerTest#heartbeatEndpointCanReturnBinaryFilePayload+agentHeartbeatClientParsesBinaryFilePayload test`
+  - `mvn -DskipTests package`

@@ -4,12 +4,13 @@
 
 ## 结论
 
-初始评估时，系统只在“心跳连接/请求数”层面符合 group leader 预期，不在“文件内容分发字节”层面符合低 coordinator 压力预期。按建议开发后，P0/P1/P2 已补齐指标、批量提交和 group heartbeat 下行去重。
+初始评估时，系统只在“心跳连接/请求数”层面符合 group leader 预期，不在“文件内容分发字节”层面符合低 coordinator 压力预期。按建议开发后，P0/P1/P2/P3 已补齐指标、批量提交、group heartbeat 下行去重和单文件二进制响应。
 
 - 符合预期的部分：50 台 cdn_new/cdn2 agent 当前稳定组成 7 个 group，7 个 leader 代表 50 个 agent 向 coordinator 提交 batch heartbeat，direct fallback 为 0。
 - 已修复的部分：文件提交从 per-agent request 改为 `/api/files/batch_put`，group heartbeat response 内同内容文件从 per-agent inline payload 改为一份 `cmd.group_file_put` 加多份轻量 `cmd.file_put_ref`。
 - coordinator 压力现在同时降低了连接数、heartbeat 请求数、上行提交字节和 group 下行文件 payload copy 数。
-- 剩余差距：P2 仍使用 JSON/base64 承载文件内容；P3 需要实现 binary heartbeat response，避免 base64 约 33% 膨胀。
+- P3 已补单文件二进制 heartbeat response：单 agent / follower 文件响应可用 raw bytes body，避免该段 wire 上的 base64 膨胀。
+- 剩余差距：multi-agent coordinator batch response 仍使用 JSON/base64 承载 P2 group file object，因为设计中的 binary response 一次只承载一个文件 body。
 
 ## 设计对照
 
@@ -24,9 +25,9 @@
 
 - 已实现 JSON `cmd.file_put`。
 - 已实现 P2 `cmd.group_file_put` / `cmd.file_put_ref`，leader 在本地展开为标准 `cmd.file_put`。
-- 未发现 `application/vnd.pulse.binary`、`X-Pulse-*` 二进制响应实现。
+- 已实现 `application/vnd.pulse.binary`、`X-Pulse-*` 二进制响应和 agent client 解码。
 - group-level file object、content hash 去重、leader 一份内容多 follower 复用已落地在 group heartbeat response 内。
-- 这部分扩展突破了原文“非目标”，用于满足“coordinator 压力应该较低”的效率预期；二进制响应仍待 P3。
+- group fanout 扩展突破了原文“非目标”，用于满足“coordinator 压力应该较低”的效率预期；P3 二进制响应已覆盖单文件 response，batch group object 仍保留 JSON 兼容路径。
 
 ## 当前链路
 
@@ -206,11 +207,11 @@ per-group file object + leader fanout
 - SQLite schema 已增加兼容迁移，旧 DB 启动时会自动 `ALTER TABLE` 补列。
 - 验证：`mvn -Dtest=LocalMetricStorageTest test` 和 `mvn -DskipTests package` 通过。
 
-仍待 P1/P2/P3 覆盖：
+后续可继续增强：
 
-- `file.submit_bytes_total` 需要 P1 batch submit 接口落地后更准确统计 submit 侧单份/多份内容。
-- `group.leader_forward_bytes` 需要 leader 侧本地 metric 或 state payload 增强，建议随 P2 leader fanout 一起补。
-- trace 增加 `group_id`、`leader_agent_id`、`content_sha256` 可随 P2 的 group file object 一并补齐。
+- `file.submit_bytes_total` 可基于 P1 batch submit 接口补更准确的 submit 侧单份/多份内容统计。
+- `group.leader_forward_bytes` 可基于 P2/P3 的 leader fanout 与 binary follower response 补 leader 本地转发字节统计。
+- trace 可继续增加 `group_id`、`leader_agent_id`、`content_sha256`，方便把 group file object 与回执串联。
 
 ### P1 降低提交侧压力
 
@@ -262,20 +263,33 @@ content once
 
 ### P3 二进制响应
 
-实现设计文档中的 binary heartbeat response：
+已实现设计文档中的单文件 binary heartbeat response：
 
-- 小文件可继续 JSON/base64。
-- 大文件用原始二进制 body，避免 base64 33% 膨胀。
-- 与 P2 结合后，coordinator 下行从 `N * base64(file)` 降到 `G * raw(file)`。
+- JSON/base64 仍是默认兼容路径。
+- 当单 agent heartbeat response 内恰好有一个 `cmd.file_put` inline payload 时，HTTP response 使用 `Content-Type: application/vnd.pulse.binary`。
+- raw 文件字节直接作为 body，`X-Pulse-File-*`、`X-Pulse-Content-*`、`X-Pulse-Message-*` headers 保留 envelope 元数据。
+- agent client 验证 `X-Pulse-Content-Length` 与 `X-Pulse-Content-Sha256` 后，重建原有 `cmd.file_put` 给 `AgentTaskRunner`，落盘/回执状态机不变。
+- `cmd.group_plan` 等 companion messages 通过 `X-Pulse-Companion-Messages` 保留，避免 binary 文件响应丢失 plan 更新。
+- group leader 的 `/group/heartbeat` follower response 复用同一 binary writer，因此 follower 拉取单个文件时不再走 base64 wire body。
+
+当前限制：
+
+- coordinator 的 multi-agent batch heartbeat response 仍是 JSON，因为设计规定一个 binary heartbeat response 只能承载一个文件；P2 已把 batch 内同内容文件降为一个 group object，避免重新回到 per-agent copy。
+- 若后续要求 `coordinator -> leader` 的 P2 group object 也使用 raw bytes，需要扩展 binary envelope 或新增单文件 group object response negotiation。
+
+验证：
+
+- `mvn -Dtest=CoordinatorHttpServerTest#heartbeatEndpointCanReturnBinaryFilePayload+agentHeartbeatClientParsesBinaryFilePayload test`
+- `mvn -DskipTests package`
 
 以本次 50 节点、7 group、128 KiB probe 粗估：
 
 - 当前：约 `8.7M` base64 chars，不含 JSON。
 - P2 group 去重：约 `1.2M` base64 chars，不含 JSON。
-- P2 + P3：约 `917KiB` raw bytes。
+- P2 + P3 完整覆盖后的理论值：约 `917KiB` raw bytes；当前实现已覆盖单文件和 leader-to-follower 段，coordinator batch group object 段仍是 base64。
 
 ## 最终判断
 
 当前系统功能正确、group heartbeat 有效，但文件分发效率只优化了控制面连接数，没有优化数据面字节数。
 
-若“coordinator 压力应该较低”指文件内容压力，P0/P1/P2 已分别覆盖可观测性、提交侧去重和 group heartbeat 下行去重；剩余主要差距是 P3 binary heartbeat response，用原始二进制避免 base64 膨胀。
+若“coordinator 压力应该较低”指文件内容压力，P0/P1/P2/P3 已分别覆盖可观测性、提交侧去重、group heartbeat 下行去重和单文件二进制响应；剩余主要差距是 multi-agent batch group object 的 raw binary envelope。
