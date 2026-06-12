@@ -30,8 +30,8 @@ class CoordinatorServiceTest {
         assertTrue(response.ok());
         assertEquals(42, response.acceptedSeq());
         HostView host = service.hosts().get(0);
-        assertEquals("agent-1", host.agentId());
-        assertEquals("host-a", host.host());
+        assertEquals("10.0.0.1", host.agentId());
+        assertEquals("10.0.0.1", host.host());
         assertEquals("10.0.0.1", host.ip());
         assertEquals("cluster-a", host.cluster());
         assertEquals("area-a", host.area());
@@ -71,14 +71,14 @@ class CoordinatorServiceTest {
 
             MetricQueryResult gaps = storage.queryRange(new MetricQuery(
                     "heartbeat.seq_gap",
-                    List.of("agent-1"),
+                    List.of("10.0.0.1"),
                     1_710_000_000_000L,
                     1_710_000_010_000L,
                     1_000,
                     10));
             MetricQueryResult arrivals = storage.queryRange(new MetricQuery(
                     "heartbeat.arrival_gap_ms",
-                    List.of("agent-1"),
+                    List.of("10.0.0.1"),
                     1_710_000_000_000L,
                     1_710_000_010_000L,
                     1_000,
@@ -88,7 +88,7 @@ class CoordinatorServiceTest {
             assertEquals(List.of(0.0, 10_000.0), arrivals.series().get(0).points().stream().map(MetricPoint::value).toList());
             assertEquals(List.of(19.0, 21.0), storage.queryRange(new MetricQuery(
                             "agent.thread_count",
-                            List.of("agent-1"),
+                            List.of("10.0.0.1"),
                             1_710_000_000_000L,
                             1_710_000_010_000L,
                             1_000,
@@ -111,7 +111,7 @@ class CoordinatorServiceTest {
 
         HostView host = service.hosts().get(0);
         assertEquals(42, host.seq());
-        assertEquals("host-new", host.host());
+        assertEquals("10.0.0.42", host.host());
     }
 
     @Test
@@ -124,7 +124,7 @@ class CoordinatorServiceTest {
         HostView host = service.hosts().get(0);
         assertEquals(2, host.epoch());
         assertEquals(1, host.seq());
-        assertEquals("host-new-epoch", host.host());
+        assertEquals("10.0.0.2", host.host());
     }
 
     @Test
@@ -243,9 +243,12 @@ class CoordinatorServiceTest {
             assertEquals(0.0, planMismatch.series().get(0).points().get(0).value());
             assertEquals(0.0, planLag.series().get(0).points().get(0).value());
 
+            List<String> memberIps = group.members().stream()
+                    .map(agentId -> "10.0.0." + agentId.replace("agent-", ""))
+                    .toList();
             MetricQueryResult heartbeatPaths = storage.queryRange(new MetricQuery(
                     "heartbeat.arrival_gap_ms",
-                    group.members(),
+                    memberIps,
                     1_710_000_010_000L,
                     1_710_000_010_000L,
                     1_000,
@@ -465,7 +468,7 @@ class CoordinatorServiceTest {
         service.handleHeartbeat(singleHeartbeat("agent-8", 1, 4, "host-8", "10.0.0.8"));
 
         HostView warmedMember = service.hosts().stream()
-                .filter(host -> "agent-7".equals(host.agentId()))
+                .filter(host -> "10.0.0.7".equals(host.agentId()))
                 .findFirst()
                 .orElseThrow();
         assertEquals("warming", warmedMember.status());
@@ -480,7 +483,7 @@ class CoordinatorServiceTest {
         confirmAliveFromSeq(service, "agent-8", "host-8", "10.0.0.8", 101);
 
         HostView expiredMember = service.hosts().stream()
-                .filter(host -> "agent-7".equals(host.agentId()))
+                .filter(host -> "10.0.0.7".equals(host.agentId()))
                 .findFirst()
                 .orElseThrow();
         assertEquals("expired", expiredMember.status());
@@ -754,13 +757,14 @@ class CoordinatorServiceTest {
         assertEquals(1, response.accepted());
         assertEquals(1, response.merged());
         HostView host = service.hosts().get(0);
-        assertEquals("host-1", host.host());
+        assertEquals("agent-1", host.host());
         assertEquals("cdn2/yg/000", host.source());
         assertEquals("coordinator-a", host.coordinatorId());
         assertEquals("coordinator-a", service.agentCoordinatorId("agent-1").orElseThrow());
         assertEquals("direct", host.groupId());
         assertEquals("direct", host.groupMode());
-        assertEquals(1, host.state().size());
+        assertEquals(2, host.state().size());
+        assertEquals("agent-1", host.state().get("host"));
     }
 
     @Test
@@ -787,7 +791,7 @@ class CoordinatorServiceTest {
         HostView host = service.hosts().get(0);
         assertEquals(12, host.seq());
         assertEquals("alive", host.status());
-        assertEquals("host-1", host.host());
+        assertEquals("10.0.0.1", host.host());
         assertEquals("cluster-a", host.cluster());
         assertEquals("coordinator-a", host.coordinatorId());
         assertEquals(3, host.heartbeatConfirmations());

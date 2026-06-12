@@ -97,7 +97,7 @@ class CoordinatorHttpServerTest {
 
         HttpResponse<String> hosts = get("/api/hosts");
         assertEquals(200, hosts.statusCode());
-        assertTrue(hosts.body().contains("host-a"));
+        assertTrue(hosts.body().contains("10.0.0.1"));
         assertTrue(hosts.body().contains("last_observed_age_ms"));
         assertTrue(hosts.body().contains("group_id"));
         assertTrue(hosts.body().contains("group_mode"));
@@ -140,7 +140,7 @@ class CoordinatorHttpServerTest {
         assertTrue(catalog.body().contains("group.plan_lag"));
         assertTrue(catalog.body().contains("group.arrival_gap_ms"));
 
-        HttpResponse<String> range = get("/api/metrics/query_range?metric=agent.thread_count&agents=agent-1&start_ms=1710000000000&end_ms=1710000000000&step_ms=1000&point_limit=10");
+        HttpResponse<String> range = get("/api/metrics/query_range?metric=agent.thread_count&agents=10.0.0.1&start_ms=1710000000000&end_ms=1710000000000&step_ms=1000&point_limit=10");
         assertEquals(200, range.statusCode());
         JsonNode body = mapper.readTree(range.body());
         assertTrue(body.get("query_id").asText().startsWith("q-"));
@@ -151,7 +151,7 @@ class CoordinatorHttpServerTest {
         assertEquals(10, body.get("point_limit").asInt());
         assertEquals("avg", body.get("sample_policy").asText());
         assertEquals(false, body.get("truncated").asBoolean());
-        assertEquals("agent-1", body.get("series").get(0).get("labels").get("agent_id").asText());
+        assertEquals("10.0.0.1", body.get("series").get(0).get("labels").get("agent_id").asText());
         assertEquals(19.0, body.get("series").get(0).get("points").get(0).get("value").asDouble());
     }
 
@@ -1037,6 +1037,7 @@ class CoordinatorHttpServerTest {
         HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/heartbeat"))
                 .timeout(Duration.ofSeconds(2))
                 .header("content-type", "application/json")
+                .header("accept", BinaryHeartbeatCodec.CONTENT_TYPE)
                 .POST(HttpRequest.BodyPublishers.ofString("""
                         {
                           "agent_id": "agent-1",

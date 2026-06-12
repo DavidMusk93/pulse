@@ -23,6 +23,9 @@ final class BinaryHeartbeatCodec {
 
     static boolean writeIfBinary(HttpExchange exchange, HeartbeatResponse response, ObjectMapper mapper)
             throws IOException {
+        if (!acceptsBinary(exchange)) {
+            return false;
+        }
         Optional<EncodedBinaryHeartbeat> encoded = encode(response, mapper);
         if (encoded.isEmpty()) {
             return false;
@@ -35,6 +38,11 @@ final class BinaryHeartbeatCodec {
             output.write(body);
         }
         return true;
+    }
+
+    private static boolean acceptsBinary(HttpExchange exchange) {
+        return exchange.getRequestHeaders().getOrDefault("Accept", List.of()).stream()
+                .anyMatch(value -> value.contains(CONTENT_TYPE) || value.contains("*/*"));
     }
 
     static Optional<EncodedBinaryHeartbeat> encode(HeartbeatResponse response, ObjectMapper mapper)

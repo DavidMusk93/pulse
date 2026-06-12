@@ -332,6 +332,7 @@ public final class PulseAgentApp {
                     HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path))
                             .timeout(timeout)
                             .header("content-type", "application/json")
+                            .header("accept", "application/json, " + BinaryHeartbeatCodec.CONTENT_TYPE)
                             .POST(HttpRequest.BodyPublishers.ofString(body))
                             .build();
                     long sendStartedNs = System.nanoTime();
