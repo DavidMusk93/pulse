@@ -267,13 +267,14 @@ function statusLabel(status?: string) {
   return ({
     queued: '队列中', delivered: '已下发', accepted: '已接收', running: '执行中',
     completed: '已完成', failed: '失败', rejected: '已拒绝', timed_out: '超时', timeout: '超时',
+    delivering: '下发中', received: '已回执',
     alive: '在线', warming: '确认中', expired: '过期'
   } as Record<string, string>)[status || ''] || status || '-';
 }
 
 function statusColor(status?: string): 'success' | 'processing' | 'warning' | 'error' | 'default' {
-  if (status === 'alive' || status === 'completed') return 'success';
-  if (status === 'running' || status === 'accepted' || status === 'delivered') return 'processing';
+  if (status === 'alive' || status === 'completed' || status === 'received') return 'success';
+  if (status === 'running' || status === 'accepted' || status === 'delivered' || status === 'delivering') return 'processing';
   if (status === 'warming' || status === 'queued') return 'warning';
   if (status === 'expired' || status === 'failed' || status === 'timeout' || status === 'timed_out') return 'error';
   return 'default';
@@ -308,6 +309,20 @@ function taskIdsFromSettledResults(hosts: HostView[], results: PromiseSettledRes
     if (taskId) taskIds[agentId(hosts[index])] = taskId;
   });
   return taskIds;
+}
+
+function fileIdsFromSettledResults(hosts: HostView[], results: PromiseSettledResult<TaskSnapshot>[]) {
+  const fileIds: Record<string, string> = {};
+  results.forEach((result, index) => {
+    if (result.status !== 'fulfilled') return;
+    const files = (result.value.file_transfers || []).filter((file: any) => file.file_role !== 'shell_script');
+    const latest = files
+      .slice()
+      .sort((left: any, right: any) => numberField(right, 'created_at_ms', 'createdAtMs') - numberField(left, 'created_at_ms', 'createdAtMs'))[0];
+    const fileId = latest?.file_id || latest?.fileId;
+    if (fileId) fileIds[agentId(hosts[index])] = fileId;
+  });
+  return fileIds;
 }
 
 function clusterExecutionSummary(hosts: HostView[], summary: BatchSubmitSummary | null, snapshots: Record<string, TaskSnapshot>): ClusterExecutionSummary {
@@ -363,7 +378,7 @@ function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot, expectedTa
     };
   }
   const taskMatches = (item: any) => expectedTaskId
-    ? item?.task_id === expectedTaskId || item?.taskId === expectedTaskId
+    ? item?.task_id === expectedTaskId || item?.taskId === expectedTaskId || item?.file_id === expectedTaskId || item?.fileId === expectedTaskId
     : !hasBatch;
   const completion = (snapshot?.completion_queue || []).find(taskMatches);
   const execution = (snapshot?.execution_queue || []).find(taskMatches)
@@ -379,7 +394,7 @@ function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot, expectedTa
   const hasFailure = ['failed', 'timeout', 'timed_out', 'rejected'].includes(rawStatus)
     || (exitCode !== undefined && exitCode !== null && Number(exitCode) !== 0)
     || !!item?.runner_error;
-  const hasSuccess = !!completion && !hasFailure && (rawStatus === 'completed' || exitCode === 0 || exitCode === '0');
+  const hasSuccess = !hasFailure && ((!!completion && (rawStatus === 'completed' || exitCode === 0 || exitCode === '0')) || (!!file && rawStatus === 'received'));
   const hasRunning = !!execution && ['accepted', 'running'].includes(rawStatus || String(execution?.status || ''))
     || (!!stream && !completion);
   const status: ClusterExecutionRow['status'] = hasFailure ? 'failed' : hasSuccess ? 'success' : hasRunning ? 'running' : 'pending';
@@ -994,7 +1009,7 @@ function App() {
             succeeded: targets.length - failed.length,
             failed: failed.length,
             failedAgents: failedAgentsFromSettledResults(targets, results),
-            taskIds: {},
+            taskIds: fileIdsFromSettledResults(targets, results),
             message: failed.length ? `文件上传提交部分失败：${targets.length - failed.length}/${targets.length}` : `文件上传已提交：${targets.length}/${targets.length}`,
             errors: failed.map(result => friendlyErrorText((result as PromiseRejectedResult).reason)).slice(0, 8),
             updatedAt: Date.now(),

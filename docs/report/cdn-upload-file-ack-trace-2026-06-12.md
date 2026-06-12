@@ -130,3 +130,29 @@ DETAILS_NON_RECEIVED
   - Submit `urgent-postfix-probe.txt`: `total=50 ok=50 fail=0`.
   - After 12s during restart/plan convergence: `31 received`, `19 delivering`.
   - After an additional 35s: `50 received`, no non-received details.
+
+## UI Pending Evidence And Fix
+
+User reported that tests were still shown as all pending. Runtime evidence from coordinator contradicted the UI:
+
+```text
+STATUS_COUNTS
+     50 received
+FILE_COUNTS
+     50 otf.tar.gz
+NON_RECEIVED
+```
+
+Frontend root cause:
+
+- File upload batch summary did not preserve the submitted `file_id`.
+- `clusterExecutionRow` only matched `task_id`, so file-only uploads in a batch had no matched item and fell through to `pending`.
+- Success classification only considered task completions, not `file_transfers.status=received`.
+
+UI fix:
+
+- File upload submit now stores latest submitted generic file `file_id` per agent.
+- Cluster row matching now accepts `file_id`/`fileId`.
+- `file_transfers.status=received` is classified as success.
+- `delivering` and `received` now have explicit UI labels/colors.
+- Verification: `npm run build` passed.
