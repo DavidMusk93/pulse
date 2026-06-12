@@ -213,7 +213,7 @@ per-group file object + leader fanout
 
 ### P1 降低提交侧压力
 
-把“批量文件上传”从 per-agent submit 改成批量 API：
+已把“批量文件上传”从 per-agent submit 改成批量 API：
 
 ```text
 POST /api/files/batch_put
@@ -221,7 +221,19 @@ targets=[agentIds...]
 content once
 ```
 
-coordinator 内部用同一 `content_sha256` 和内容对象创建多个 target transfer，避免 UI 到 coordinator 传 50 次同一文件。
+实现状态：
+
+- UI 文件上传现在只发送一次 `agent_ids + content`。
+- coordinator 按 owner coordinator 分组，本地批量入队，remote owner 每个 owner 只转发一次 batch body。
+- `RemoteTaskService.enqueueFilePutBatch` 只 decode/hash 校验一次内容，再生成多个 per-agent transfer。
+- 仍保持 per-agent `file_id`、per-agent trace、per-agent `reply.file_received`。
+- 验证：`CoordinatorHttpServerTest#batchFilePutSubmitsOnePayloadForMultipleAgents+taskApiRoutesForwardedAgentRequestsToHeartbeatOwner`、`npm run build`、`mvn -DskipTests package` 通过。
+
+效果：
+
+- UI 到入口 coordinator：从 `N * file` 降到 `1 * file`。
+- 入口 coordinator 到 remote owner：从 `remoteAgentCount * file` 降到 `remoteOwnerCount * file`。
+- coordinator 到 group leader/agent 的下行仍是 per-agent file command，留给 P2。
 
 ### P2 降低 coordinator 下行字节
 

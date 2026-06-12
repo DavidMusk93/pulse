@@ -18,6 +18,7 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -152,6 +153,10 @@ public class CoordinatorHttpServer {
                 }
                 return;
             }
+            if ("POST".equals(method) && "/api/files/batch_put".equals(path)) {
+                writeJson(exchange, 200, handleBatchFilePut(exchange, readBody(exchange)));
+                return;
+            }
             if ("GET".equals(method) && path.startsWith("/api/agents/") && path.endsWith("/tasks/stream")) {
                 String agentId = path.substring("/api/agents/".length(), path.length() - "/tasks/stream".length());
                 if (proxyTaskRequestIfNeeded(exchange, agentId, null, true)) {
@@ -240,6 +245,98 @@ public class CoordinatorHttpServer {
 
     private void writeTaskSnapshotStream(HttpExchange exchange, String agentId) throws IOException {
         writeTaskSnapshotStream(exchange, List.of(agentId));
+    }
+
+    private Map<String, Object> handleBatchFilePut(HttpExchange exchange, String rawBody) throws Exception {
+        Map<?, ?> body = mapper.readValue(rawBody, Map.class);
+        List<String> agentIds = parseStringList(body.get("agent_ids"));
+        if (agentIds.isEmpty()) {
+            throw new IllegalArgumentException("agent_ids is required");
+        }
+        Map<String, Object> snapshots = new LinkedHashMap<>();
+        List<String> failedAgents = new ArrayList<>();
+        Map<String, String> errors = new LinkedHashMap<>();
+        Map<String, List<String>> remoteAgents = new LinkedHashMap<>();
+        List<String> localAgents = new ArrayList<>();
+        boolean routed = "1".equals(exchange.getRequestHeaders().getFirst("x-pulse-task-routed"));
+        for (String agentId : agentIds) {
+            Optional<String> owner = service.agentCoordinatorId(agentId);
+            if (!routed && owner.isPresent() && !owner.get().equals(service.coordinatorId())) {
+                remoteAgents.computeIfAbsent(owner.get(), ignored -> new ArrayList<>()).add(agentId);
+            } else {
+                localAgents.add(agentId);
+            }
+        }
+        if (!localAgents.isEmpty()) {
+            snapshots.putAll(service.enqueueFilePutBatch(
+                    localAgents,
+                    stringBody(body, "file_name"),
+                    stringBody(body, "content_base64"),
+                    stringBody(body, "content_sha256"),
+                    longBody(body, "content_bytes"),
+                    stringBody(body, "target_dir"),
+                    stringBody(body, "file_role")));
+        }
+        for (Map.Entry<String, List<String>> entry : remoteAgents.entrySet()) {
+            Map<String, Object> remoteResult = routeBatchFilePut(entry.getKey(), entry.getValue(), body);
+            Object remoteSnapshots = remoteResult.get("snapshots");
+            if (remoteSnapshots instanceof Map<?, ?> snapshotMap) {
+                snapshotMap.forEach((agentId, snapshot) -> snapshots.put(String.valueOf(agentId), snapshot));
+            }
+            failedAgents.addAll(parseStringList(remoteResult.get("failed_agents")));
+            Object remoteErrors = remoteResult.get("errors");
+            if (remoteErrors instanceof Map<?, ?> errorMap) {
+                errorMap.forEach((agentId, error) -> errors.put(String.valueOf(agentId), String.valueOf(error)));
+            }
+        }
+        for (String agentId : agentIds) {
+            if (!snapshots.containsKey(agentId) && !failedAgents.contains(agentId)) {
+                failedAgents.add(agentId);
+                errors.put(agentId, "missing snapshot");
+            }
+        }
+        return Map.of(
+                "ok", failedAgents.isEmpty(),
+                "total", agentIds.size(),
+                "succeeded", agentIds.size() - failedAgents.size(),
+                "failed", failedAgents.size(),
+                "failed_agents", failedAgents,
+                "errors", errors,
+                "snapshots", snapshots);
+    }
+
+    private Map<String, Object> routeBatchFilePut(String coordinatorId, List<String> agentIds, Map<?, ?> originalBody)
+            throws IOException, InterruptedException {
+        URI uri = taskRouteResolver.apply(coordinatorId, URI.create("/api/files/batch_put"));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("agent_ids", agentIds);
+        body.put("file_name", stringBody(originalBody, "file_name"));
+        body.put("content_base64", stringBody(originalBody, "content_base64"));
+        body.put("content_sha256", stringBody(originalBody, "content_sha256"));
+        body.put("content_bytes", longBody(originalBody, "content_bytes"));
+        body.put("target_dir", stringBody(originalBody, "target_dir"));
+        body.put("file_role", stringBody(originalBody, "file_role"));
+        String requestBody = mapper.writeValueAsString(body);
+        HttpRequest request = HttpRequest.newBuilder(uri)
+                .timeout(Duration.ofMillis(positiveLong("PULSE_TASK_ROUTE_TIMEOUT_MS", 5_000)))
+                .header("x-pulse-task-routed", "1")
+                .header("content-type", "application/json; charset=utf-8")
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                .build();
+        HttpResponse<String> response = routeClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            Map<String, String> errors = new LinkedHashMap<>();
+            agentIds.forEach(agentId -> errors.put(agentId, response.body()));
+            return Map.of(
+                    "ok", false,
+                    "total", agentIds.size(),
+                    "succeeded", 0,
+                    "failed", agentIds.size(),
+                    "failed_agents", agentIds,
+                    "errors", errors,
+                    "snapshots", Map.of());
+        }
+        return mapper.readValue(response.body(), Map.class);
     }
 
     private void writeTaskSnapshotStream(HttpExchange exchange, List<String> agentIds) throws IOException {
@@ -741,6 +838,29 @@ public class CoordinatorHttpServer {
         }
         return Arrays.stream(value.trim().split("\\s+"))
                 .filter(part -> !part.isBlank())
+                .toList();
+    }
+
+    private static List<String> parseStringList(Object rawValues) {
+        if (rawValues == null) {
+            return List.of();
+        }
+        if (rawValues instanceof List<?> values) {
+            return values.stream()
+                    .map(String::valueOf)
+                    .map(String::trim)
+                    .filter(value -> !value.isBlank())
+                    .distinct()
+                    .toList();
+        }
+        String value = rawValues.toString();
+        if (value.isBlank()) {
+            return List.of();
+        }
+        return Arrays.stream(value.split(","))
+                .map(String::trim)
+                .filter(part -> !part.isBlank())
+                .distinct()
                 .toList();
     }
 

@@ -114,6 +114,38 @@ public class RemoteTaskService {
             String targetDir,
             String fileRole) {
         byte[] content = decodeContent(contentBase64, contentSha256, contentBytes);
+        return enqueueFilePutDecoded(agentId, fileName, content, contentSha256, targetDir, fileRole);
+    }
+
+    public synchronized Map<String, TaskSnapshot> enqueueFilePutBatch(
+            List<String> agentIds,
+            String fileName,
+            String contentBase64,
+            String contentSha256,
+            long contentBytes,
+            String targetDir,
+            String fileRole) {
+        if (agentIds == null || agentIds.isEmpty()) {
+            throw new IllegalArgumentException("agent_ids is required");
+        }
+        byte[] content = decodeContent(contentBase64, contentSha256, contentBytes);
+        Map<String, TaskSnapshot> snapshots = new LinkedHashMap<>();
+        for (String agentId : agentIds) {
+            if (agentId == null || agentId.isBlank()) {
+                throw new IllegalArgumentException("agent_id is required");
+            }
+            snapshots.put(agentId, enqueueFilePutDecoded(agentId, fileName, content, contentSha256, targetDir, fileRole));
+        }
+        return snapshots;
+    }
+
+    private TaskSnapshot enqueueFilePutDecoded(
+            String agentId,
+            String fileName,
+            byte[] content,
+            String contentSha256,
+            String targetDir,
+            String fileRole) {
         String safeName = safeFileName(fileName);
         String normalizedTarget = normalizeTargetDir(targetDir);
         String normalizedRole = normalizeFileRole(fileRole);

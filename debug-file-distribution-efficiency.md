@@ -79,3 +79,14 @@ Evaluate whether file distribution efficiency matches the expected group-leader 
 - Verification:
   - `mvn -Dtest=LocalMetricStorageTest test`
   - `mvn -DskipTests package`
+
+## P1 Implementation
+
+- Added `POST /api/files/batch_put`.
+- UI file upload now sends one request with `agent_ids` and one file payload instead of one request per target.
+- Coordinator partitions targets by owner coordinator and forwards one batch request per remote owner.
+- `RemoteTaskService.enqueueFilePutBatch` decodes and validates content once, then creates per-agent transfer records.
+- Verification:
+  - `mvn -Dtest=CoordinatorHttpServerTest#batchFilePutSubmitsOnePayloadForMultipleAgents+taskApiRoutesForwardedAgentRequestsToHeartbeatOwner test`
+  - `npm run build`
+  - `mvn -DskipTests package`

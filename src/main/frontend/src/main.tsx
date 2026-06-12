@@ -93,6 +93,17 @@ type TaskSnapshot = {
   output_streams?: any[];
 };
 
+type BatchFilePutResponse = {
+  ok?: boolean;
+  total?: number;
+  succeeded?: number;
+  failed?: number;
+  failed_agents?: string[];
+  failedAgents?: string[];
+  errors?: Record<string, string>;
+  snapshots?: Record<string, TaskSnapshot>;
+};
+
 const loadAverageWindowMs = 5 * 60 * 1000;
 const palette = [205, 188, 168, 146, 126, 95, 48, 215, 200, 178];
 const loadWindows = new Map<string, { windowStart: number; displayAvg: number; sampledAtMs: number }>();
@@ -321,6 +332,20 @@ function fileIdsFromSettledResults(hosts: HostView[], results: PromiseSettledRes
       .sort((left: any, right: any) => numberField(right, 'created_at_ms', 'createdAtMs') - numberField(left, 'created_at_ms', 'createdAtMs'))[0];
     const fileId = latest?.file_id || latest?.fileId;
     if (fileId) fileIds[agentId(hosts[index])] = fileId;
+  });
+  return fileIds;
+}
+
+function fileIdsFromSnapshots(hosts: HostView[], snapshots: Record<string, TaskSnapshot>) {
+  const fileIds: Record<string, string> = {};
+  hosts.forEach(host => {
+    const id = agentId(host);
+    const files = (snapshots[id]?.file_transfers || []).filter((file: any) => file.file_role !== 'shell_script');
+    const latest = files
+      .slice()
+      .sort((left: any, right: any) => numberField(right, 'created_at_ms', 'createdAtMs') - numberField(left, 'created_at_ms', 'createdAtMs'))[0];
+    const fileId = latest?.file_id || latest?.fileId;
+    if (fileId) fileIds[id] = fileId;
   });
   return fileIds;
 }
@@ -997,25 +1022,36 @@ function App() {
         onFilePut={async payload => {
           const targets = activeCluster?.hosts || (activeHost ? [activeHost] : []);
           if (!targets.length) return;
-          const results = await submitToTargets(targets, () => ({ operation: 'file_put', file_role: 'generic_file', target_dir: payload.target_dir || 'files', ...payload }));
-          const first = results.find((result): result is PromiseFulfilledResult<TaskSnapshot> => result.status === 'fulfilled');
-          if (first) setSnapshot(first.value);
-          const snapshots = snapshotsFromSettledResults(targets, results);
+          const response = await fetchJsonWithRetry<BatchFilePutResponse>('/api/files/batch_put', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              agent_ids: targets.map(agentId),
+              file_role: 'generic_file',
+              target_dir: payload.target_dir || 'files',
+              ...payload
+            })
+          });
+          const snapshots = response.snapshots || {};
+          const firstSnapshot = Object.values(snapshots)[0];
+          if (firstSnapshot) setSnapshot(firstSnapshot);
           setClusterSnapshots(snapshots);
-          const failed = results.filter(result => result.status === 'rejected');
+          const failedAgents = response.failed_agents || response.failedAgents || [];
+          const failed = failedAgents.length;
+          const errors = response.errors || {};
           setBatchSummary({
             kind: '文件上传',
             total: targets.length,
-            succeeded: targets.length - failed.length,
-            failed: failed.length,
-            failedAgents: failedAgentsFromSettledResults(targets, results),
-            taskIds: fileIdsFromSettledResults(targets, results),
-            message: failed.length ? `文件上传提交部分失败：${targets.length - failed.length}/${targets.length}` : `文件上传已提交：${targets.length}/${targets.length}`,
-            errors: failed.map(result => friendlyErrorText((result as PromiseRejectedResult).reason)).slice(0, 8),
+            succeeded: targets.length - failed,
+            failed,
+            failedAgents,
+            taskIds: fileIdsFromSnapshots(targets, snapshots),
+            message: failed ? `文件上传提交部分失败：${targets.length - failed}/${targets.length}` : `文件上传已提交：${targets.length}/${targets.length}`,
+            errors: Object.entries(errors).map(([agent, error]) => `${agent}: ${error}`).slice(0, 8),
             updatedAt: Date.now(),
             snapshots
           });
-          setOutput(failed.length ? `文件上传提交部分失败: ${failed.length}/${targets.length}` : '文件上传已入队，等待 agent 心跳确认。');
+          setOutput(failed ? `文件上传提交部分失败: ${failed}/${targets.length}` : '文件上传已批量入队，等待 agent 心跳确认。');
         }}
         onShellRun={async (payload, args) => {
           const targets = activeCluster?.hosts || (activeHost ? [activeHost] : []);

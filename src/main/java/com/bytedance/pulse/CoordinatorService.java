@@ -184,6 +184,17 @@ public class CoordinatorService {
         return taskService.enqueueShellScript(agentId, fileName, contentBase64, contentSha256, contentBytes, args);
     }
 
+    public Map<String, TaskSnapshot> enqueueFilePutBatch(
+            List<String> agentIds,
+            String fileName,
+            String contentBase64,
+            String contentSha256,
+            long contentBytes,
+            String targetDir,
+            String fileRole) {
+        return taskService.enqueueFilePutBatch(agentIds, fileName, contentBase64, contentSha256, contentBytes, targetDir, fileRole);
+    }
+
     public TaskSnapshot keepCompletion(String agentId, String taskId) {
         return taskService.keepCompletion(agentId, taskId);
     }

@@ -679,6 +679,36 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
+    void batchFilePutSubmitsOnePayloadForMultipleAgents() throws Exception {
+        String content = "batch";
+        String encoded = Base64.getEncoder().encodeToString(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String sha = TaskOutputCodec.sha256(content);
+
+        HttpResponse<String> response = postJson("/api/files/batch_put", """
+                {"agent_ids":["agent-1","agent-2"],"file_name":"batch.txt","file_role":"generic_file","target_dir":"files","content_base64":"%s","content_sha256":"%s","content_bytes":5}
+                """.formatted(encoded, sha));
+
+        assertEquals(200, response.statusCode());
+        JsonNode json = mapper.readTree(response.body());
+        assertTrue(json.get("ok").asBoolean());
+        assertEquals(2, json.get("total").asInt());
+        assertEquals(2, json.get("succeeded").asInt());
+        assertEquals("queued", json.get("snapshots").get("agent-1").get("file_transfers").get(0).get("status").asText());
+        assertEquals("queued", json.get("snapshots").get("agent-2").get("file_transfers").get(0).get("status").asText());
+
+        JsonNode firstCommand = mapper.readTree(postJson("/heartbeat", """
+                {"agent_id":"agent-1","epoch":1,"seq":10,"ttl_ms":15000,"messages":[]}
+                """).body()).get("messages").get(1);
+        JsonNode secondCommand = mapper.readTree(postJson("/heartbeat", """
+                {"agent_id":"agent-2","epoch":1,"seq":10,"ttl_ms":15000,"messages":[]}
+                """).body()).get("messages").get(1);
+        assertEquals("cmd.file_put", firstCommand.get("type").asText());
+        assertEquals("cmd.file_put", secondCommand.get("type").asText());
+        assertEquals(sha, firstCommand.get("payload").get("content_sha256").asText());
+        assertEquals(sha, secondCommand.get("payload").get("content_sha256").asText());
+    }
+
+    @Test
     void taskApiRoutesForwardedAgentRequestsToHeartbeatOwner() throws Exception {
         server.stop();
         CoordinatorService ownerService = new CoordinatorService(
@@ -742,6 +772,14 @@ class CoordinatorHttpServerTest {
             assertEquals(200, routedFilePut.statusCode());
             JsonNode fileBody = mapper.readTree(routedFilePut.body());
             assertEquals("queued", fileBody.get("file_transfers").get(0).get("status").asText());
+
+            HttpResponse<String> routedBatchFilePut = postJson("/api/files/batch_put", """
+                    {"agent_ids":["agent-routed"],"file_name":"batch-routed.txt","file_role":"generic_file","target_dir":"files","content_base64":"%s","content_sha256":"%s","content_bytes":17}
+                    """.formatted(encoded, sha));
+            assertEquals(200, routedBatchFilePut.statusCode());
+            JsonNode batchBody = mapper.readTree(routedBatchFilePut.body());
+            assertTrue(batchBody.get("ok").asBoolean());
+            assertEquals("queued", batchBody.get("snapshots").get("agent-routed").get("file_transfers").get(0).get("status").asText());
 
             HttpRequest streamRequest = HttpRequest.newBuilder(URI.create(baseUrl + "/api/tasks/stream?agents=agent-routed"))
                     .timeout(Duration.ofSeconds(2))
