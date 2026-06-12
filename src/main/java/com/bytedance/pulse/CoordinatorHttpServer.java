@@ -707,7 +707,15 @@ public class CoordinatorHttpServer {
             return String.format(template, coordinatorId);
         }
         long port = positiveLong("PULSE_PORT", 9966);
-        return "http://" + coordinatorId + ":" + port;
+        return "http://" + routeHost(coordinatorId) + ":" + port;
+    }
+
+    static String routeHost(String coordinatorId) {
+        String value = coordinatorId == null ? "" : coordinatorId.trim();
+        if (value.contains(":") && !(value.startsWith("[") && value.endsWith("]"))) {
+            return "[" + value + "]";
+        }
+        return value;
     }
 
     private static List<String> peerUrlsFromEnvironment() {

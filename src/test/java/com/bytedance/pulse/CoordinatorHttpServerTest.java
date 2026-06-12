@@ -780,6 +780,13 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
+    void defaultTaskRouteHostBracketsIpv6CoordinatorIds() {
+        assertEquals("[fdbd:dc07:0:810::44]", CoordinatorHttpServer.routeHost("fdbd:dc07:0:810::44"));
+        assertEquals("[fdbd:dc07:0:810::44]", CoordinatorHttpServer.routeHost("[fdbd:dc07:0:810::44]"));
+        assertEquals("coordinator-a", CoordinatorHttpServer.routeHost("coordinator-a"));
+    }
+
+    @Test
     void metricQueryAggregatesPeerCoordinatorResults() throws Exception {
         server.stop();
         metricStorage.close();

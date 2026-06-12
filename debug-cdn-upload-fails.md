@@ -48,3 +48,12 @@ Started: 2026-06-12
 
 - Fix should make the default task route base IPv6-safe by bracketing raw IPv6 host literals.
 - Deployment env already brackets `PULSE_COORDINATOR_PEERS`; the missing path is only the default `PULSE_TASK_ROUTE_TEMPLATE` fallback.
+
+## Fix Log
+
+- Code fix: `CoordinatorHttpServer.taskRouteBase` now uses `routeHost(coordinatorId)`.
+- `routeHost` wraps raw IPv6 coordinator IDs in `[]` and leaves already-bracketed IPv6 or hostname IDs unchanged.
+- Regression test added: `CoordinatorHttpServerTest#defaultTaskRouteHostBracketsIpv6CoordinatorIds`.
+- Diagnostics: no VS Code diagnostics in modified Java files.
+- Focused verification passed: `mvn -Dtest=CoordinatorHttpServerTest#defaultTaskRouteHostBracketsIpv6CoordinatorIds test`.
+- Broader `mvn -Dtest=CoordinatorHttpServerTest test` currently has unrelated existing failures in heartbeat/metrics tests, not in the route-host regression path.
