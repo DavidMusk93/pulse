@@ -41,6 +41,7 @@ public class CoordinatorHttpServer {
     private final ArrayDeque<SseEvent> metricEventCache = new ArrayDeque<>();
     private final AtomicLong metricEventSequence = new AtomicLong();
     private final int metricEventCacheLimit;
+    private final int taskOutputPreviewChars;
 
     public CoordinatorHttpServer(CoordinatorService service, int port) throws IOException {
         this(service, "127.0.0.1", port);
@@ -75,6 +76,7 @@ public class CoordinatorHttpServer {
         this.taskRouteResolver = taskRouteResolver;
         this.metricPeerUrls = metricPeerUrls == null ? List.of() : List.copyOf(metricPeerUrls);
         this.metricEventCacheLimit = positiveInt("PULSE_METRIC_SSE_CACHE_EVENTS", 256);
+        this.taskOutputPreviewChars = positiveInt("PULSE_TASK_OUTPUT_PREVIEW_CHARS", 8 * 1024);
         this.server = HttpServer.create(new InetSocketAddress(bindHost, port), httpBacklog());
         this.server.createContext("/", this::handle);
         this.server.setExecutor(httpExecutor());
@@ -178,7 +180,7 @@ public class CoordinatorHttpServer {
                     if (proxyTaskRequestIfNeeded(exchange, agentId, null, false)) {
                         return;
                     }
-                    writeJson(exchange, 200, service.taskSnapshot(agentId));
+                    writeJson(exchange, 200, taskSnapshotView(service.taskSnapshot(agentId)));
                     return;
                 }
                 if ("POST".equals(method)) {
@@ -189,46 +191,59 @@ public class CoordinatorHttpServer {
                     Map<?, ?> body = mapper.readValue(rawBody, Map.class);
                     String operation = stringBody(body, "operation");
                     if ("file_put".equals(operation)) {
-                        writeJson(exchange, 200, service.enqueueFilePut(
+                        writeJson(exchange, 200, taskSnapshotView(service.enqueueFilePut(
                                 agentId,
                                 stringBody(body, "file_name"),
                                 stringBody(body, "content_base64"),
                                 stringBody(body, "content_sha256"),
                                 longBody(body, "content_bytes"),
                                 stringBody(body, "target_dir"),
-                                stringBody(body, "file_role")));
+                                stringBody(body, "file_role"))));
                         return;
                     }
                     if ("shell_script".equals(operation)) {
-                        writeJson(exchange, 200, service.enqueueShellScript(
+                        writeJson(exchange, 200, taskSnapshotView(service.enqueueShellScript(
                                 agentId,
                                 stringBody(body, "file_name"),
                                 stringBody(body, "content_base64"),
                                 stringBody(body, "content_sha256"),
                                 longBody(body, "content_bytes"),
-                                parseArgs(body.get("args"))));
+                                parseArgs(body.get("args")))));
                         return;
                     }
                     Object taskType = body.get("task_type");
                     if (taskType == null || taskType.toString().isBlank()) {
                         throw new IllegalArgumentException("task_type is required");
                     }
-                    writeJson(exchange, 200, service.enqueueTask(agentId, taskType.toString(), parseArgs(body.get("args"))));
+                    writeJson(exchange, 200, taskSnapshotView(service.enqueueTask(agentId, taskType.toString(), parseArgs(body.get("args")))));
                     return;
                 }
             }
             Optional<TaskCompletionAction> completionAction = completionAction(path);
+            if ("GET".equals(method) && completionAction.isPresent() && "output".equals(completionAction.get().action())) {
+                TaskCompletionAction action = completionAction.get();
+                if (proxyTaskRequestIfNeeded(
+                        exchange,
+                        action.agentId(),
+                        null,
+                        false,
+                        positiveLong("PULSE_TASK_OUTPUT_ROUTE_TIMEOUT_MS", 60_000))) {
+                    return;
+                }
+                writeTaskCompletionOutputJson(exchange, action.agentId(), action.taskId());
+                return;
+            }
             if ("POST".equals(method) && completionAction.isPresent()) {
                 TaskCompletionAction action = completionAction.get();
                 if (proxyTaskRequestIfNeeded(exchange, action.agentId(), readBody(exchange), false)) {
                     return;
                 }
                 if ("keep".equals(action.action())) {
-                    writeJson(exchange, 200, service.keepCompletion(action.agentId(), action.taskId()));
+                    writeJson(exchange, 200, taskSnapshotView(service.keepCompletion(action.agentId(), action.taskId())));
                     return;
                 }
                 if ("pop".equals(action.action())) {
-                    writeJson(exchange, 200, service.popCompletion(action.agentId(), action.taskId()));
+                    writeJson(exchange, 200, taskSnapshotView(service.popCompletion(action.agentId(), action.taskId())));
                     return;
                 }
             }
@@ -271,14 +286,15 @@ public class CoordinatorHttpServer {
             }
         }
         if (!localAgents.isEmpty()) {
-            snapshots.putAll(service.enqueueFilePutBatch(
+            service.enqueueFilePutBatch(
                     localAgents,
                     stringBody(body, "file_name"),
                     stringBody(body, "content_base64"),
                     stringBody(body, "content_sha256"),
                     longBody(body, "content_bytes"),
                     stringBody(body, "target_dir"),
-                    stringBody(body, "file_role")));
+                    stringBody(body, "file_role"))
+                    .forEach((agentId, snapshot) -> snapshots.put(agentId, taskSnapshotView(snapshot)));
         }
         for (Map.Entry<String, List<String>> entry : remoteAgents.entrySet()) {
             Map<String, Object> remoteResult = routeBatchFilePut(entry.getKey(), entry.getValue(), body);
@@ -702,10 +718,65 @@ public class CoordinatorHttpServer {
         }
     }
 
-    private TaskSnapshot taskSnapshotForHttp(HttpExchange exchange, String agentId) throws IOException {
+    private void writeTaskCompletionOutputJson(HttpExchange exchange, String agentId, String taskId) throws IOException {
+        Optional<TaskResult> result = service.taskCompletion(agentId, taskId);
+        if (result.isEmpty()) {
+            writeJson(exchange, 404, Map.of("ok", false, "error", "not_found"));
+            return;
+        }
+        writeJson(exchange, 200, taskResultView(result.get(), true));
+    }
+
+    private TaskSnapshotView taskSnapshotView(TaskSnapshot snapshot) {
+        return new TaskSnapshotView(
+                snapshot.agentId(),
+                snapshot.executionQueue(),
+                snapshot.completionQueue().stream()
+                        .map(result -> taskResultView(result, false))
+                        .toList(),
+                snapshot.traces(),
+                snapshot.taskTypes(),
+                snapshot.fileTransfers(),
+                snapshot.outputStreams());
+    }
+
+    private TaskResultView taskResultView(TaskResult result, boolean fullOutput) {
+        String output = result.output() == null ? "" : result.output();
+        boolean inline = fullOutput || output.length() <= taskOutputPreviewChars;
+        String visibleOutput = inline ? output : output.substring(0, Math.min(taskOutputPreviewChars, output.length()));
+        return new TaskResultView(
+                result.taskId(),
+                result.traceId(),
+                result.agentId(),
+                result.taskType(),
+                result.status(),
+                result.exitCode(),
+                result.startedAtMs(),
+                result.finishedAtMs(),
+                result.durationMs(),
+                visibleOutput,
+                result.outputType(),
+                result.outputEncoding(),
+                result.outputSha256(),
+                result.outputBytes(),
+                result.outputLines(),
+                result.runnerError(),
+                inline,
+                !inline,
+                output.length(),
+                taskOutputUrl(result.agentId(), result.taskId()));
+    }
+
+    private static String taskOutputUrl(String agentId, String taskId) {
+        String encodedAgentId = URLEncoder.encode(agentId, StandardCharsets.UTF_8).replace("+", "%20");
+        String encodedTaskId = URLEncoder.encode(taskId, StandardCharsets.UTF_8).replace("+", "%20");
+        return "/api/agents/" + encodedAgentId + "/tasks/completions/" + encodedTaskId + "/output";
+    }
+
+    private Object taskSnapshotForHttp(HttpExchange exchange, String agentId) throws IOException {
         Optional<URI> target = taskSnapshotRouteUri(exchange, agentId);
         if (target.isEmpty()) {
-            return service.taskSnapshot(agentId);
+            return taskSnapshotView(service.taskSnapshot(agentId));
         }
         try {
             HttpRequest request = HttpRequest.newBuilder(target.get())
@@ -715,18 +786,18 @@ public class CoordinatorHttpServer {
                     .build();
             HttpResponse<String> response = routeClient.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                return mapper.readValue(response.body(), TaskSnapshot.class);
+                return mapper.readValue(response.body(), Map.class);
             }
             System.err.printf("task_snapshot_route status=bad_response agent_id=%s target=%s code=%d body=%s%n",
                     agentId, target.get(), response.statusCode(), response.body());
-            return service.taskSnapshot(agentId);
+            return taskSnapshotView(service.taskSnapshot(agentId));
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IOException("task snapshot route interrupted", exception);
         } catch (Exception exception) {
             System.err.printf("task_snapshot_route status=failed agent_id=%s target=%s error=%s%n",
                     agentId, target.get(), exception.getMessage());
-            return service.taskSnapshot(agentId);
+            return taskSnapshotView(service.taskSnapshot(agentId));
         }
     }
 
@@ -748,6 +819,20 @@ public class CoordinatorHttpServer {
             String agentId,
             String body,
             boolean streamResponse) throws IOException, InterruptedException {
+        return proxyTaskRequestIfNeeded(
+                exchange,
+                agentId,
+                body,
+                streamResponse,
+                positiveLong("PULSE_TASK_ROUTE_TIMEOUT_MS", 5_000));
+    }
+
+    private boolean proxyTaskRequestIfNeeded(
+            HttpExchange exchange,
+            String agentId,
+            String body,
+            boolean streamResponse,
+            long routeTimeoutMs) throws IOException, InterruptedException {
         Optional<URI> target = taskRouteUri(exchange, agentId);
         if (target.isEmpty()) {
             return false;
@@ -756,7 +841,7 @@ public class CoordinatorHttpServer {
                 ? HttpRequest.BodyPublishers.noBody()
                 : HttpRequest.BodyPublishers.ofString(body);
         HttpRequest.Builder builder = HttpRequest.newBuilder(target.get())
-                .timeout(Duration.ofMillis(positiveLong("PULSE_TASK_ROUTE_TIMEOUT_MS", 5_000)))
+                .timeout(Duration.ofMillis(routeTimeoutMs))
                 .header("x-pulse-task-routed", "1")
                 .method(exchange.getRequestMethod(), publisher);
         if (body != null) {
@@ -986,6 +1071,37 @@ public class CoordinatorHttpServer {
         }
         return Optional.of(new TaskCompletionAction(agentId, rest.substring(0, separator), rest.substring(separator + 1)));
     }
+
+    private record TaskSnapshotView(
+            String agentId,
+            List<RemoteTask> executionQueue,
+            List<TaskResultView> completionQueue,
+            List<TaskTraceLogEntry> traces,
+            List<String> taskTypes,
+            List<FileTransferStatus> fileTransfers,
+            List<TaskStreamSnapshot> outputStreams) {}
+
+    private record TaskResultView(
+            String taskId,
+            String traceId,
+            String agentId,
+            String taskType,
+            String status,
+            Integer exitCode,
+            long startedAtMs,
+            long finishedAtMs,
+            long durationMs,
+            String output,
+            String outputType,
+            String outputEncoding,
+            String outputSha256,
+            long outputBytes,
+            long outputLines,
+            String runnerError,
+            boolean outputInline,
+            boolean outputPreview,
+            int outputChars,
+            String outputUrl) {}
 
     private record TaskCompletionAction(String agentId, String taskId, String action) {}
 

@@ -148,6 +148,10 @@ public class CoordinatorService {
         return taskService.snapshot(agentId);
     }
 
+    public Optional<TaskResult> taskCompletion(String agentId, String taskId) {
+        return taskService.completion(agentId, taskId);
+    }
+
     public Optional<String> agentCoordinatorId(String agentId) {
         if (agentId == null || agentId.isBlank()) {
             return Optional.empty();

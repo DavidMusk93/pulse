@@ -709,6 +709,69 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
+    void taskSnapshotCompactsLargeCompletionOutputAndOutputEndpointReturnsFullOutput() throws Exception {
+        HttpResponse<String> enqueue = postJson("/api/agents/agent-1/tasks", """
+                {"task_type":"prepare_disk_layout_dry_run"}
+                """);
+        assertEquals(200, enqueue.statusCode());
+
+        HeartbeatResponse heartbeat = mapper.readValue(postJson("/heartbeat", """
+                {"agent_id":"agent-1","epoch":1,"seq":10,"ttl_ms":15000,"messages":[]}
+                """).body(), HeartbeatResponse.class);
+        PulseMessage command = heartbeat.messages().stream()
+                .filter(message -> "cmd.task_execute".equals(message.type()))
+                .findFirst()
+                .orElseThrow();
+        String output = "x".repeat(20_000);
+        PulseMessage result = new PulseMessage(
+                "result-agent-1-11",
+                "reply.task_result",
+                1,
+                command.messageId(),
+                null,
+                Map.ofEntries(
+                        Map.entry("task_id", command.payload().get("task_id")),
+                        Map.entry("trace_id", command.payload().get("trace_id")),
+                        Map.entry("task_type", command.payload().get("task_type")),
+                        Map.entry("status", "completed"),
+                        Map.entry("exit_code", 0),
+                        Map.entry("started_at_ms", 1),
+                        Map.entry("finished_at_ms", 2),
+                        Map.entry("duration_ms", 1),
+                        Map.entry("output", output),
+                        Map.entry("output_type", "text"),
+                        Map.entry("output_encoding", "identity"),
+                        Map.entry("output_sha256", TaskOutputCodec.sha256(output)),
+                        Map.entry("output_bytes", output.getBytes(java.nio.charset.StandardCharsets.UTF_8).length),
+                        Map.entry("output_chunked", false),
+                        Map.entry("output_chunk_count", 0),
+                        Map.entry("runner_error", "")));
+        postJson("/heartbeat", mapper.writeValueAsString(new HeartbeatRequest(
+                null,
+                "agent-1",
+                1L,
+                11L,
+                15_000L,
+                List.of(result),
+                List.of())));
+
+        JsonNode snapshot = mapper.readTree(get("/api/agents/agent-1/tasks").body());
+        JsonNode completion = snapshot.get("completion_queue").get(0);
+        assertEquals(command.payload().get("task_id").toString(), completion.get("task_id").asText());
+        assertTrue(!completion.get("output_inline").asBoolean());
+        assertTrue(completion.get("output_preview").asBoolean());
+        assertTrue(completion.get("output").asText().length() < output.length());
+        assertEquals(output.length(), completion.get("output_chars").asInt());
+        assertEquals(output.getBytes(java.nio.charset.StandardCharsets.UTF_8).length, completion.get("output_bytes").asLong());
+
+        JsonNode fullOutput = mapper.readTree(get(completion.get("output_url").asText()).body());
+        assertTrue(fullOutput.get("output_inline").asBoolean());
+        assertTrue(!fullOutput.get("output_preview").asBoolean());
+        assertEquals(output, fullOutput.get("output").asText());
+        assertEquals(TaskOutputCodec.sha256(output), fullOutput.get("output_sha256").asText());
+    }
+
+    @Test
     void taskApiRoutesForwardedAgentRequestsToHeartbeatOwner() throws Exception {
         server.stop();
         CoordinatorService ownerService = new CoordinatorService(

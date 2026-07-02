@@ -105,6 +105,8 @@ type BatchFilePutResponse = {
 };
 
 const loadAverageWindowMs = 5 * 60 * 1000;
+const maxInlineRenderChars = 1024 * 1024;
+const maxJsonParseChars = 2 * 1024 * 1024;
 const palette = [205, 188, 168, 146, 126, 95, 48, 215, 200, 178];
 const loadWindows = new Map<string, { windowStart: number; displayAvg: number; sampledAtMs: number }>();
 const clusterCollapseStorageKey = 'pulse.cluster-collapse.v1';
@@ -730,11 +732,38 @@ function App() {
   const [collapsedClusters, setCollapsedClusters] = useState<Record<string, boolean>>(() => loadCollapsedClusters());
   const viewport = useRef({ left: 0, top: 0 });
   const snapshotVersionRef = useRef('');
+  const outputRequestRef = useRef('');
+  const outputCacheRef = useRef<Record<string, string>>({});
   const scrollingRef = useRef(false);
   const scrollIdleTimerRef = useRef<number | null>(null);
   const pendingHostsRef = useRef<HostView[] | null>(null);
   const activeTargetHost = activeHost || activeCluster?.hosts[0] || null;
   const clusterAgentKey = useMemo(() => (activeCluster?.hosts || []).map(agentId).join(','), [activeCluster?.name, activeCluster?.hosts]);
+
+  async function loadCompletionOutput(agentIdValue: string, result: any) {
+    const taskId = result?.task_id || result?.taskId;
+    if (!agentIdValue || !taskId) return;
+    const key = `${agentIdValue}:${taskId}:${result.output_sha256 || result.outputSha256 || ''}`;
+    if (outputCacheRef.current[key]) {
+      setOutput(current => current === outputCacheRef.current[key] ? current : outputCacheRef.current[key]);
+      return;
+    }
+    outputRequestRef.current = key;
+    try {
+      const url = result.output_url || result.outputUrl || `/api/agents/${encodeURIComponent(agentIdValue)}/tasks/completions/${encodeURIComponent(taskId)}/output`;
+      const full = await fetchJson<any>(url);
+      const fullOutput = completionOutput(full);
+      outputCacheRef.current[key] = fullOutput;
+      if (outputRequestRef.current === key) {
+        setOutput(current => current === fullOutput ? current : fullOutput);
+      }
+    } catch (err) {
+      if (outputRequestRef.current === key) {
+        const preview = completionOutput(result);
+        setOutput(`${preview}${preview ? '\n\n' : ''}[完整输出加载失败: ${err instanceof Error ? err.message : String(err)}]`);
+      }
+    }
+  }
 
   function applyTaskSnapshot(data: TaskSnapshot) {
     const version = snapshotVersion(data);
@@ -743,7 +772,27 @@ function App() {
       setSnapshot(data);
     }
     const latest = newestCompletion(data);
-    const latestOutput = latest ? completionOutput(latest) : '';
+    if (!latest) {
+      outputRequestRef.current = '';
+      setOutput(current => current === '' ? current : '');
+      return;
+    }
+    const latestOutput = completionOutput(latest);
+    const latestAgent = data.agent_id || data.agentId || latest.agent_id || latest.agentId || '';
+    const latestTaskId = latest.task_id || latest.taskId || '';
+    const outputKey = `${latestAgent}:${latestTaskId}:${latest.output_sha256 || latest.outputSha256 || ''}`;
+    if (latest.output_inline === false || latest.outputInline === false) {
+      if (outputCacheRef.current[outputKey]) {
+        const cached = outputCacheRef.current[outputKey];
+        setOutput(current => current === cached ? current : cached);
+      } else {
+        const loading = `${latestOutput}${latestOutput ? '\n\n' : ''}[完整输出加载中...]`;
+        setOutput(current => current === loading ? current : loading);
+        void loadCompletionOutput(latestAgent, latest);
+      }
+      return;
+    }
+    outputRequestRef.current = outputKey;
     setOutput(current => current === latestOutput ? current : latestOutput);
   }
 
@@ -2292,11 +2341,16 @@ const CompletionViewer = memo(function CompletionViewer({ value, meta }: { value
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [wrap, setWrap] = useState(true);
-  const parsed = useMemo(() => parseJsonOutput(value), [value]);
+  const canParseJson = value.length <= maxJsonParseChars;
+  const parsed = useMemo(() => canParseJson ? parseJsonOutput(value) : { ok: false, formatted: value }, [canParseJson, value]);
   const display = mode === 'json' && parsed.ok ? parsed.formatted : value;
+  const renderLimited = display.length > maxInlineRenderChars;
+  const renderDisplay = renderLimited
+    ? `${display.slice(0, maxInlineRenderChars)}\n\n[输出过大，界面仅渲染前 ${formatBytes(maxInlineRenderChars)}；完整输出已加载，可用“拷贝”获取。]`
+    : display;
   const outputType = String(meta?.output_type ?? meta?.outputType ?? meta?.stream_id ?? '').toLowerCase();
   const markdownHint = useMemo(() => outputType === 'markdown' || looksLikeMarkdown(value), [outputType, value]);
-  const matches = useMemo(() => deferredQuery ? countMatches(display, deferredQuery) : 0, [display, deferredQuery]);
+  const matches = useMemo(() => deferredQuery ? countMatches(renderDisplay, deferredQuery) : 0, [renderDisplay, deferredQuery]);
   return <div className="completion-viewer">
     <Flex className="completion-toolbar" justify="space-between" align="center" gap={8}>
       <Space size={8}>
@@ -2312,6 +2366,7 @@ const CompletionViewer = memo(function CompletionViewer({ value, meta }: { value
           ]}
         />
         {parsed.ok && <Tag color="blue">JSON</Tag>}
+        {renderLimited && <Tag color="gold">已加载完整输出，渲染前 {formatBytes(maxInlineRenderChars)}</Tag>}
         {markdownHint && <Tag color="purple">Markdown</Tag>}
         {deferredQuery && <Tag color={matches > 0 ? 'green' : 'red'}>{matches} 匹配</Tag>}
       </Space>
@@ -2322,11 +2377,11 @@ const CompletionViewer = memo(function CompletionViewer({ value, meta }: { value
       </Space>
     </Flex>
     {mode === 'markdown'
-      ? value
-        ? <div className="task-output markdown-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(value) }} />
+      ? renderDisplay
+        ? <div className="task-output markdown-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(renderDisplay) }} />
         : <Empty className="output-empty" image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无命令输出" />
       : <LineNumberedOutput
-          value={display}
+          value={renderDisplay}
           mode={mode}
           query={deferredQuery}
           wrap={wrap}

@@ -431,6 +431,10 @@ public class RemoteTaskService {
         return snapshot(agentId);
     }
 
+    public synchronized Optional<TaskResult> completion(String agentId, String taskId) {
+        return latestCompletion(agentId, taskId);
+    }
+
     public synchronized TaskSnapshot popCompletion(String agentId, String taskId) {
         if (!queue(agentId).isEmpty() || !controlQueue(agentId).isEmpty() || !inFlight(agentId).isEmpty()) {
             return snapshot(agentId);
