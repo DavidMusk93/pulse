@@ -698,9 +698,13 @@ function taskVersion(task: any) {
   ].join(':');
 }
 
+function completionStack(snapshot: TaskSnapshot | null) {
+  return snapshot?.completion_queue || [];
+}
+
 function newestCompletion(snapshot: TaskSnapshot | null) {
-  const completions = snapshot?.completion_queue || [];
-  return completions.length ? completions[completions.length - 1] : null;
+  const completions = completionStack(snapshot);
+  return completions[0] || null;
 }
 
 function snapshotVersion(snapshot: TaskSnapshot | null) {
@@ -1082,7 +1086,10 @@ function App() {
           setOutput(failed.length ? `Shell 执行提交部分失败: ${failed.length}/${targets.length}` : 'Shell 执行已入队，等待 agent 串行执行。');
         }}
         onPop={async () => {
-          if (!activeTargetHost || !snapshot?.completion_queue?.[0]) {
+          const running = activeTargetHost
+            ? activeHostTasks(activeTargetHost).length > 0 || (snapshot?.execution_queue || []).length > 0
+            : false;
+          if (!activeTargetHost || running || !snapshot?.completion_queue?.[0]) {
             if (activeTargetHost) await refreshSnapshot(activeTargetHost);
             return;
           }
@@ -1894,9 +1901,11 @@ function TaskModal(props: {
   const unlockClicks = useRef<number[]>([]);
   const tasks = activeHostTasks(props.host || undefined);
   const agentTask = tasks[0];
-  const completions = props.snapshot?.completion_queue || [];
+  const completions = completionStack(props.snapshot);
   const executions = props.snapshot?.execution_queue || [];
   const latestCompletion = newestCompletion(props.snapshot);
+  const hasRunningTask = tasks.length > 0 || executions.length > 0;
+  const canPop = completions.length > 0 && !hasRunningTask;
   const streamLog = latestCompletion ? null : streamForTask(props.snapshot, agentTask?.task_id || executions[0]?.task_id);
   const visibleTraces = (props.snapshot?.traces || []).slice(0, 4);
   const completionText = props.output || (latestCompletion ? completionOutput(latestCompletion) : (streamLog ? streamOutput(streamLog) : ''));
@@ -1933,6 +1942,8 @@ function TaskModal(props: {
             onFilePut={props.onFilePut}
             onShellRun={props.onShellRun}
             onPop={props.onPop}
+            stackSize={completions.length}
+            canPop={canPop}
           />
         </Card>
         <Card title={isClusterRun ? '目标集群' : '目标节点'}>
@@ -1949,7 +1960,22 @@ function TaskModal(props: {
             {currentTaskId && <Typography.Text className="task-id-text" copyable={{ text: currentTaskId }}>task_id: {currentTaskId}</Typography.Text>}
           </Space>
         </Card>
-        <Card title="结果队列"><Statistic value={completions.length} /></Card>
+        <Card title="结果栈">
+          <Space direction="vertical" size={8} className="task-state-card">
+            <Statistic title="stack size" value={completions.length} />
+            {completions.length > 0 ? <List
+              size="small"
+              dataSource={completions.slice(0, 5)}
+              renderItem={(item: any, index) => <List.Item>
+                <Space direction="vertical" size={2}>
+                  <Space><Tag color={index === 0 ? 'blue' : 'default'}>{index === 0 ? 'top' : `#${index + 1}`}</Tag><Tag color={statusColor(item.status)}>{statusLabel(item.status)}</Tag></Space>
+                  <Typography.Text className="task-id-text">{taskLabels[item.task_type] || item.task_type || '-'}</Typography.Text>
+                  <Typography.Text className="task-id-text">task_id: {item.task_id || '-'}</Typography.Text>
+                </Space>
+              </List.Item>}
+            /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无完成结果" />}
+          </Space>
+        </Card>
         <Card title="文件上传" data-testid="file-upload-status-card">
           {fileTransfers.length > 0 ? <List
             dataSource={fileTransfers}
@@ -2014,7 +2040,9 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
   onRun,
   onFilePut,
   onShellRun,
-  onPop
+  onPop,
+  stackSize,
+  canPop
 }: {
   taskType: string;
   setTaskType: (value: string) => void;
@@ -2023,6 +2051,8 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
   onFilePut: (payload: any) => Promise<void>;
   onShellRun: (payload: any, args: string[]) => Promise<void>;
   onPop: () => Promise<void>;
+  stackSize: number;
+  canPop: boolean;
 }) {
   const [taskArgs, setTaskArgs] = useState(defaultTaskArgs);
   const [file, setFile] = useState<File | null>(null);
@@ -2065,7 +2095,7 @@ const TaskCommandPanel = memo(function TaskCommandPanel({
       <Flex gap={8} align="center">
       <Select value={taskType} onChange={setTaskType} className="task-select" options={Object.entries(taskLabels).map(([value, label]) => ({ value, label }))}/>
       <Button type="primary" onClick={() => onRun(parsedArgs)}>执行</Button>
-      <Button onClick={onPop} icon={<InboxOutlined />}>弹出结果</Button>
+      <Button onClick={onPop} icon={<InboxOutlined />} disabled={!canPop}>弹出结果 · {stackSize}</Button>
       </Flex>
       {argsUnlocked && <div className="task-args-panel">
         <Typography.Text className="task-args-title">自定义参数</Typography.Text>

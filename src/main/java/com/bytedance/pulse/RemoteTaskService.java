@@ -3,6 +3,7 @@ package com.bytedance.pulse;
 import java.time.Clock;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -54,7 +55,7 @@ public class RemoteTaskService {
         return new TaskSnapshot(
                 agentId,
                 List.copyOf(queue(agentId)),
-                List.copyOf(completions(agentId)),
+                completionStack(agentId),
                 traceLogs.values().stream()
                         .flatMap(List::stream)
                         .filter(entry -> agentId.equals(entry.agentId()))
@@ -433,11 +434,14 @@ public class RemoteTaskService {
     }
 
     public synchronized TaskSnapshot popCompletion(String agentId, String taskId) {
+        if (!queue(agentId).isEmpty() || !controlQueue(agentId).isEmpty() || !inFlight(agentId).isEmpty()) {
+            return snapshot(agentId);
+        }
         ArrayDeque<TaskResult> completions = completions(agentId);
-        TaskResult head = completions.peekFirst();
-        if (head != null && head.taskId().equals(taskId)) {
-            completions.removeFirst();
-            trace(head, "task.completion_popped", "ui", "pulse-ui", Map.of("queue_head", true));
+        TaskResult top = completions.peekLast();
+        if (top != null && top.taskId().equals(taskId)) {
+            completions.removeLast();
+            trace(top, "task.completion_popped", "ui", "pulse-ui", Map.of("stack_top", true));
         }
         return snapshot(agentId);
     }
@@ -446,6 +450,13 @@ public class RemoteTaskService {
         return completions(agentId).stream()
                 .filter(result -> result.taskId().equals(taskId))
                 .findFirst();
+    }
+
+    private List<TaskResult> completionStack(String agentId) {
+        ArrayDeque<TaskResult> completions = completions(agentId);
+        List<TaskResult> stack = new ArrayList<>(completions);
+        Collections.reverse(stack);
+        return List.copyOf(stack);
     }
 
     private Queue<RemoteTask> queue(String agentId) {

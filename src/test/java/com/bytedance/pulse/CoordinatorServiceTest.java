@@ -603,7 +603,7 @@ class CoordinatorServiceTest {
     }
 
     @Test
-    void popCompletionRemovesOnlyQueueHeadAndKeepsNextResultVisible() {
+    void popCompletionRemovesStackTopAndKeepsOlderResultVisible() {
         MutableClock mutableClock = new MutableClock(Instant.ofEpochMilli(1_710_000_000_000L));
         CoordinatorService service = new CoordinatorService("coordinator-a", mutableClock);
         service.enqueueTask("agent-1", "prepare_disk_layout_dry_run");
@@ -617,15 +617,31 @@ class CoordinatorServiceTest {
 
         TaskSnapshot beforePop = service.taskSnapshot("agent-1");
         assertEquals(2, beforePop.completionQueue().size());
-        assertEquals("first-result", beforePop.completionQueue().get(0).output());
-        assertEquals("second-result", beforePop.completionQueue().get(1).output());
+        assertEquals("second-result", beforePop.completionQueue().get(0).output());
+        assertEquals("first-result", beforePop.completionQueue().get(1).output());
 
         TaskSnapshot afterPop = service.popCompletion("agent-1", beforePop.completionQueue().get(0).taskId());
 
         assertEquals(1, afterPop.completionQueue().size());
-        assertEquals("second-result", afterPop.completionQueue().get(0).output());
+        assertEquals("first-result", afterPop.completionQueue().get(0).output());
         assertTrue(afterPop.traces().size() <= 4);
         assertTrue(afterPop.traces().stream().anyMatch(trace -> "task.completion_popped".equals(trace.event())));
+    }
+
+    @Test
+    void popCompletionDoesNotPopWhileTaskIsQueued() {
+        CoordinatorService service = new CoordinatorService("coordinator-a", clock);
+        service.enqueueTask("agent-1", "prepare_disk_layout_dry_run");
+        PulseMessage first = taskCommand(service, "agent-1", 10);
+        completeTask(service, first, "first-result", 11);
+        service.enqueueTask("agent-1", "analyze_block_layout_dry_run");
+
+        TaskSnapshot beforePop = service.taskSnapshot("agent-1");
+        TaskSnapshot afterPop = service.popCompletion("agent-1", beforePop.completionQueue().get(0).taskId());
+
+        assertEquals(1, afterPop.completionQueue().size());
+        assertEquals("first-result", afterPop.completionQueue().get(0).output());
+        assertEquals(1, afterPop.executionQueue().size());
     }
 
     @Test
