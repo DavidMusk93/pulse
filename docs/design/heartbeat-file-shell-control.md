@@ -232,7 +232,6 @@ shell 脚本必须先通过 `cmd.file_put` 成功下发，再执行：
     "env": {
       "PULSE_TASK_ID": "task-01"
     },
-    "timeout_ms": 600000,
     "created_at_ms": 1710000000000
   }
 }
@@ -247,6 +246,7 @@ shell 脚本必须先通过 `cmd.file_put` 成功下发，再执行：
 - `env` 只允许安全 key：`[A-Z_][A-Z0-9_]*`，禁止覆盖 `PATH`、`LD_PRELOAD`、`JAVA_TOOL_OPTIONS` 等高危变量，除非后续有专门白名单。
 - 同一 agent 的 shell task 与现有 remote task 共用同一个串行 runner，并发度固定为 `1`。
 - shell 输出继续使用 `reply.task_output_append` 和 `reply.task_result`，不引入新输出协议。
+- `deadline_ms` 只表示消息生命周期/出队期限，不是 agent 子进程执行超时；shell task 执行不得由 coordinator 隐式超时强杀。
 
 ### `reply.task_accepted` 与 `reply.task_result`
 
@@ -294,7 +294,7 @@ AgentControlState {
 
 ControlItem =
   FilePut(file_id, file_name, bytes/spool_ref, target_dir, sha256)
-  ShellExecute(task_id, script_file_id, args, timeout_ms)
+  ShellExecute(task_id, script_file_id, work_dir, args)
 
 FileTransfer.status =
   queued

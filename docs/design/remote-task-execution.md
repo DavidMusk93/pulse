@@ -305,7 +305,6 @@ coordinator 通过 heartbeat response 下发。
     "task_type": "prepare_disk_layout_dry_run",
     "script_path": "/data24/otf/pulse/tasks/prepare-disk-layout.sh",
     "args": ["--dry-run"],
-    "timeout_ms": 600000,
     "created_at_ms": 1710000000000
   }
 }
@@ -317,6 +316,7 @@ coordinator 通过 heartbeat response 下发。
 - `args` 必须包含且只能以 dry-run 安全参数为主；第一版固定为 `["--dry-run"]`。
 - agent 需要再次校验 `script_path` 与 `task_type` 是否匹配 allowlist。
 - agent 不信任 coordinator 下发的任意 path 或 args。
+- `deadline_ms` 只表示消息生命周期/出队期限，不是 agent 子进程执行超时；task 执行不得由 coordinator 隐式超时强杀。
 
 ### `reply.task_accepted`
 
