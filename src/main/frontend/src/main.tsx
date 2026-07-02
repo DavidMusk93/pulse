@@ -733,6 +733,7 @@ function App() {
   const viewport = useRef({ left: 0, top: 0 });
   const snapshotVersionRef = useRef('');
   const outputRequestRef = useRef('');
+  const outputSourceRef = useRef<EventSource | null>(null);
   const outputCacheRef = useRef<Record<string, string>>({});
   const scrollingRef = useRef(false);
   const scrollIdleTimerRef = useRef<number | null>(null);
@@ -740,17 +741,15 @@ function App() {
   const activeTargetHost = activeHost || activeCluster?.hosts[0] || null;
   const clusterAgentKey = useMemo(() => (activeCluster?.hosts || []).map(agentId).join(','), [activeCluster?.name, activeCluster?.hosts]);
 
-  async function loadCompletionOutput(agentIdValue: string, result: any) {
-    const taskId = result?.task_id || result?.taskId;
-    if (!agentIdValue || !taskId) return;
-    const key = `${agentIdValue}:${taskId}:${result.output_sha256 || result.outputSha256 || ''}`;
-    if (outputCacheRef.current[key]) {
-      setOutput(current => current === outputCacheRef.current[key] ? current : outputCacheRef.current[key]);
-      return;
-    }
-    outputRequestRef.current = key;
+  function closeOutputStream() {
+    outputSourceRef.current?.close();
+    outputSourceRef.current = null;
+  }
+
+  async function loadCompletionOutputFallback(agentIdValue: string, result: any, key: string) {
     try {
-      const url = result.output_url || result.outputUrl || `/api/agents/${encodeURIComponent(agentIdValue)}/tasks/completions/${encodeURIComponent(taskId)}/output`;
+      const taskId = result?.task_id || result?.taskId;
+      const url = `/api/agents/${encodeURIComponent(agentIdValue)}/tasks/completions/${encodeURIComponent(taskId)}/output`;
       const full = await fetchJson<any>(url);
       const fullOutput = completionOutput(full);
       outputCacheRef.current[key] = fullOutput;
@@ -765,6 +764,58 @@ function App() {
     }
   }
 
+  function streamCompletionOutput(agentIdValue: string, result: any) {
+    const taskId = result?.task_id || result?.taskId;
+    if (!agentIdValue || !taskId) return;
+    const key = `${agentIdValue}:${taskId}:${result.output_sha256 || result.outputSha256 || ''}`;
+    if (outputCacheRef.current[key]) {
+      setOutput(current => current === outputCacheRef.current[key] ? current : outputCacheRef.current[key]);
+      return;
+    }
+    if (outputRequestRef.current === key && outputSourceRef.current) {
+      return;
+    }
+    outputRequestRef.current = key;
+    closeOutputStream();
+    if (!('EventSource' in window)) {
+      void loadCompletionOutputFallback(agentIdValue, result, key);
+      return;
+    }
+    const preview = completionOutput(result);
+    const chunks: string[] = [];
+    const streamUrl = result.output_stream_url || result.outputStreamUrl
+      || `/api/agents/${encodeURIComponent(agentIdValue)}/tasks/completions/${encodeURIComponent(taskId)}/output_stream`;
+    const source = new EventSource(streamUrl);
+    outputSourceRef.current = source;
+    const finish = () => {
+      const fullOutput = chunks.join('');
+      outputCacheRef.current[key] = fullOutput;
+      if (outputRequestRef.current === key) {
+        setOutput(current => current === fullOutput ? current : fullOutput);
+      }
+      source.close();
+      if (outputSourceRef.current === source) {
+        outputSourceRef.current = null;
+      }
+    };
+    source.addEventListener('completion.output_start', () => {
+      if (outputRequestRef.current === key) {
+        setOutput(preview ? `${preview}\n\n[完整输出流式加载中...]` : '[完整输出流式加载中...]');
+      }
+    });
+    source.addEventListener('completion.output_chunk', (event: MessageEvent<string>) => {
+      if (outputRequestRef.current !== key) return;
+      const payload = JSON.parse(event.data);
+      chunks.push(String(payload.chunk || ''));
+      const current = chunks.join('');
+      setOutput(previous => previous === current ? previous : current);
+    });
+    source.addEventListener('completion.output_end', finish);
+    source.onerror = () => {
+      // EventSource reconnects automatically and sends Last-Event-ID, which is the next output offset.
+    };
+  }
+
   function applyTaskSnapshot(data: TaskSnapshot) {
     const version = snapshotVersion(data);
     if (snapshotVersionRef.current !== version) {
@@ -774,6 +825,7 @@ function App() {
     const latest = newestCompletion(data);
     if (!latest) {
       outputRequestRef.current = '';
+      closeOutputStream();
       setOutput(current => current === '' ? current : '');
       return;
     }
@@ -786,13 +838,16 @@ function App() {
         const cached = outputCacheRef.current[outputKey];
         setOutput(current => current === cached ? current : cached);
       } else {
-        const loading = `${latestOutput}${latestOutput ? '\n\n' : ''}[完整输出加载中...]`;
-        setOutput(current => current === loading ? current : loading);
-        void loadCompletionOutput(latestAgent, latest);
+        if (outputRequestRef.current !== outputKey || !outputSourceRef.current) {
+          const loading = `${latestOutput}${latestOutput ? '\n\n' : ''}[完整输出流式加载中...]`;
+          setOutput(current => current === loading ? current : loading);
+        }
+        streamCompletionOutput(latestAgent, latest);
       }
       return;
     }
     outputRequestRef.current = outputKey;
+    closeOutputStream();
     setOutput(current => current === latestOutput ? current : latestOutput);
   }
 
@@ -828,7 +883,10 @@ function App() {
   useEffect(() => {
     refreshHosts();
     const timer = window.setInterval(refreshHosts, 5000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      closeOutputStream();
+    };
   }, []);
 
   useEffect(() => {
@@ -942,6 +1000,7 @@ function App() {
   const avgLoad = hosts.length ? hosts.reduce((sum, host) => sum + averageLoad(host), 0) / hosts.length : 0;
   const handleHostRun = useCallback((host: HostView) => {
     snapshotVersionRef.current = '';
+    closeOutputStream();
     setActiveHost(host);
     setActiveCluster(null);
     setSnapshot(null);
@@ -951,6 +1010,7 @@ function App() {
   }, []);
   const handleClusterRun = useCallback((cluster: string, clusterHosts: HostView[]) => {
     snapshotVersionRef.current = '';
+    closeOutputStream();
     setActiveHost(null);
     setActiveCluster({ name: cluster, hosts: sortHosts(clusterHosts) });
     setSnapshot(null);

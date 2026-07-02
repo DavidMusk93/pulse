@@ -763,8 +763,16 @@ class CoordinatorHttpServerTest {
         assertTrue(completion.get("output").asText().length() < output.length());
         assertEquals(output.length(), completion.get("output_chars").asInt());
         assertEquals(output.getBytes(java.nio.charset.StandardCharsets.UTF_8).length, completion.get("output_bytes").asLong());
+        assertTrue(completion.hasNonNull("output_stream_url"));
 
-        JsonNode fullOutput = mapper.readTree(get(completion.get("output_url").asText()).body());
+        String streamedOutput = readCompletionOutputStream(completion.get("output_stream_url").asText());
+        assertEquals(output, streamedOutput);
+        String resumedOutput = readCompletionOutputStream(completion.get("output_stream_url").asText() + "?offset=10000");
+        assertEquals(output.substring(10_000), resumedOutput);
+
+        JsonNode fullOutput = mapper.readTree(get("/api/agents/agent-1/tasks/completions/"
+                + completion.get("task_id").asText()
+                + "/output").body());
         assertTrue(fullOutput.get("output_inline").asBoolean());
         assertTrue(!fullOutput.get("output_preview").asBoolean());
         assertEquals(output, fullOutput.get("output").asText());
@@ -1204,6 +1212,41 @@ class CoordinatorHttpServerTest {
     private HttpResponse<String> get(String path) throws Exception {
         HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path)).GET().build();
         return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private String readCompletionOutputStream(String path) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path))
+                .timeout(Duration.ofSeconds(2))
+                .GET()
+                .build();
+        HttpResponse<java.io.InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        assertEquals(200, response.statusCode());
+        StringBuilder output = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.body()))) {
+            String event = "";
+            String data = "";
+            for (int i = 0; i < 200; i++) {
+                String line = reader.readLine();
+                if (line == null) {
+                    break;
+                }
+                if (line.startsWith("event: ")) {
+                    event = line.substring("event: ".length());
+                } else if (line.startsWith("data: ")) {
+                    data = line.substring("data: ".length());
+                } else if (line.isBlank()) {
+                    if ("completion.output_chunk".equals(event)) {
+                        output.append(mapper.readTree(data).get("chunk").asText());
+                    }
+                    if ("completion.output_end".equals(event)) {
+                        return output.toString();
+                    }
+                    event = "";
+                    data = "";
+                }
+            }
+        }
+        return output.toString();
     }
 
     private HttpResponse<String> postJson(String path, String body) throws Exception {

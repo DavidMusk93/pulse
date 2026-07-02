@@ -220,6 +220,19 @@ public class CoordinatorHttpServer {
                 }
             }
             Optional<TaskCompletionAction> completionAction = completionAction(path);
+            if ("GET".equals(method) && completionAction.isPresent() && "output_stream".equals(completionAction.get().action())) {
+                TaskCompletionAction action = completionAction.get();
+                if (proxyTaskRequestIfNeeded(
+                        exchange,
+                        action.agentId(),
+                        null,
+                        true,
+                        positiveLong("PULSE_TASK_OUTPUT_ROUTE_TIMEOUT_MS", 60_000))) {
+                    return;
+                }
+                writeTaskCompletionOutputStream(exchange, action.agentId(), action.taskId());
+                return;
+            }
             if ("GET".equals(method) && completionAction.isPresent() && "output".equals(completionAction.get().action())) {
                 TaskCompletionAction action = completionAction.get();
                 if (proxyTaskRequestIfNeeded(
@@ -727,6 +740,64 @@ public class CoordinatorHttpServer {
         writeJson(exchange, 200, taskResultView(result.get(), true));
     }
 
+    private void writeTaskCompletionOutputStream(HttpExchange exchange, String agentId, String taskId) throws IOException {
+        Optional<TaskResult> result = service.taskCompletion(agentId, taskId);
+        if (result.isEmpty()) {
+            writeJson(exchange, 404, Map.of("ok", false, "error", "not_found"));
+            return;
+        }
+        TaskResult taskResult = result.get();
+        String output = taskResult.output() == null ? "" : taskResult.output();
+        int chunkChars = positiveInt("PULSE_TASK_OUTPUT_SSE_CHARS", 32 * 1024);
+        int offset = completionOutputOffset(exchange, output.length());
+        exchange.getResponseHeaders().set("content-type", "text/event-stream; charset=utf-8");
+        exchange.getResponseHeaders().set("cache-control", "no-cache");
+        exchange.getResponseHeaders().set("connection", "keep-alive");
+        exchange.getResponseHeaders().set("x-accel-buffering", "no");
+        exchange.sendResponseHeaders(200, 0);
+        try (OutputStream response = exchange.getResponseBody()) {
+            writeSse(response, new SseEvent(String.valueOf(offset), "completion.output_start", mapper.writeValueAsString(Map.of(
+                    "task_id", taskResult.taskId(),
+                    "agent_id", taskResult.agentId(),
+                    "output_bytes", taskResult.outputBytes(),
+                    "output_chars", output.length(),
+                    "output_sha256", taskResult.outputSha256(),
+                    "offset", offset))));
+            while (offset < output.length()) {
+                int nextOffset = Math.min(output.length(), offset + chunkChars);
+                writeSse(response, new SseEvent(String.valueOf(nextOffset), "completion.output_chunk", mapper.writeValueAsString(Map.of(
+                        "task_id", taskResult.taskId(),
+                        "agent_id", taskResult.agentId(),
+                        "offset", offset,
+                        "next_offset", nextOffset,
+                        "chunk", output.substring(offset, nextOffset),
+                        "done", nextOffset >= output.length()))));
+                offset = nextOffset;
+            }
+            writeSse(response, new SseEvent(String.valueOf(output.length()), "completion.output_end", mapper.writeValueAsString(Map.of(
+                    "task_id", taskResult.taskId(),
+                    "agent_id", taskResult.agentId(),
+                    "output_bytes", taskResult.outputBytes(),
+                    "output_chars", output.length(),
+                    "output_sha256", taskResult.outputSha256(),
+                    "done", true))));
+        }
+    }
+
+    private int completionOutputOffset(HttpExchange exchange, int outputLength) {
+        String raw = Optional.ofNullable(exchange.getRequestHeaders().getFirst("Last-Event-ID"))
+                .orElse(queryValue(exchange.getRequestURI(), "offset"));
+        if (raw == null || raw.isBlank()) {
+            return 0;
+        }
+        try {
+            int offset = Integer.parseInt(raw.trim());
+            return Math.max(0, Math.min(offset, outputLength));
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
+    }
+
     private TaskSnapshotView taskSnapshotView(TaskSnapshot snapshot) {
         return new TaskSnapshotView(
                 snapshot.agentId(),
@@ -764,13 +835,13 @@ public class CoordinatorHttpServer {
                 inline,
                 !inline,
                 output.length(),
-                taskOutputUrl(result.agentId(), result.taskId()));
+                taskOutputStreamUrl(result.agentId(), result.taskId()));
     }
 
-    private static String taskOutputUrl(String agentId, String taskId) {
+    private static String taskOutputStreamUrl(String agentId, String taskId) {
         String encodedAgentId = URLEncoder.encode(agentId, StandardCharsets.UTF_8).replace("+", "%20");
         String encodedTaskId = URLEncoder.encode(taskId, StandardCharsets.UTF_8).replace("+", "%20");
-        return "/api/agents/" + encodedAgentId + "/tasks/completions/" + encodedTaskId + "/output";
+        return "/api/agents/" + encodedAgentId + "/tasks/completions/" + encodedTaskId + "/output_stream";
     }
 
     private Object taskSnapshotForHttp(HttpExchange exchange, String agentId) throws IOException {
@@ -1101,7 +1172,7 @@ public class CoordinatorHttpServer {
             boolean outputInline,
             boolean outputPreview,
             int outputChars,
-            String outputUrl) {}
+            String outputStreamUrl) {}
 
     private record TaskCompletionAction(String agentId, String taskId, String action) {}
 
