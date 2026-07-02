@@ -18,7 +18,7 @@ public class RemoteTaskService {
     private static final int MAX_COMPLETIONS_PER_AGENT = 50;
     private static final int MAX_TRACES_PER_AGENT = 4;
     private static final long MAX_INLINE_FILE_BYTES = 256 * 1024;
-    private static final long DEFAULT_TASK_TIMEOUT_MS = 600_000;
+    private static final long DEFAULT_TASK_DEADLINE_MS = 600_000;
     private final Clock clock;
     private final Map<String, Queue<RemoteTask>> executionQueues = new ConcurrentHashMap<>();
     private final Map<String, Queue<ControlCommand>> controlQueues = new ConcurrentHashMap<>();
@@ -98,7 +98,7 @@ public class RemoteTaskService {
                 null,
                 null,
                 null,
-                now + DEFAULT_TASK_TIMEOUT_MS,
+                now + DEFAULT_TASK_DEADLINE_MS,
                 "pulse-ui",
                 1);
         queue(agentId).add(task);
@@ -163,7 +163,7 @@ public class RemoteTaskService {
                 contentSha256,
                 content.length,
                 "shell_script".equals(normalizedRole) ? "0700" : "0644",
-                now + DEFAULT_TASK_TIMEOUT_MS);
+                now + DEFAULT_TASK_DEADLINE_MS);
         controlQueue(agentId).add(command);
         fileTransfers(agentId).put(fileId, new FileTransferStatus(
                 fileId,
@@ -208,7 +208,7 @@ public class RemoteTaskService {
                 contentSha256,
                 content.length,
                 "0700",
-                now + DEFAULT_TASK_TIMEOUT_MS);
+                now + DEFAULT_TASK_DEADLINE_MS);
         RemoteTask task = new RemoteTask(
                 taskId,
                 traceId,
@@ -222,7 +222,7 @@ public class RemoteTaskService {
                 null,
                 null,
                 null,
-                now + DEFAULT_TASK_TIMEOUT_MS,
+                now + DEFAULT_TASK_DEADLINE_MS,
                 "pulse-ui",
                 1);
         ControlCommand shellCommand = ControlCommand.shellExecute(
@@ -230,8 +230,7 @@ public class RemoteTaskService {
                 task,
                 fileId,
                 contentSha256,
-                "workspace",
-                DEFAULT_TASK_TIMEOUT_MS);
+                "workspace");
         Queue<ControlCommand> queue = controlQueue(agentId);
         queue.add(fileCommand);
         queue.add(shellCommand);
@@ -327,7 +326,6 @@ public class RemoteTaskService {
                         "task_type", delivered.taskType(),
                         "script_path", delivered.scriptPath(),
                         "args", delivered.args(),
-                        "timeout_ms", DEFAULT_TASK_TIMEOUT_MS,
                         "created_at_ms", delivered.createdAtMs())));
     }
 
@@ -765,7 +763,6 @@ record ControlCommand(
         String mode,
         RemoteTask task,
         String workDir,
-        long timeoutMs,
         long deadlineMs) {
     static ControlCommand filePut(
             String messageId,
@@ -793,7 +790,6 @@ record ControlCommand(
                 mode,
                 null,
                 "",
-                0,
                 deadlineMs);
     }
 
@@ -802,8 +798,7 @@ record ControlCommand(
             RemoteTask task,
             String fileId,
             String scriptSha256,
-            String workDir,
-            long timeoutMs) {
+            String workDir) {
         return new ControlCommand(
                 "shell_execute",
                 messageId,
@@ -818,7 +813,6 @@ record ControlCommand(
                 "0700",
                 task,
                 workDir,
-                timeoutMs,
                 task.deadlineMs());
     }
 
@@ -859,7 +853,6 @@ record ControlCommand(
                         "script_sha256", contentSha256,
                         "work_dir", workDir,
                         "args", delivered.args(),
-                        "timeout_ms", timeoutMs,
                         "created_at_ms", delivered.createdAtMs()));
     }
 }

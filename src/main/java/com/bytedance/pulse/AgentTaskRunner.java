@@ -15,7 +15,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class AgentTaskRunner {
@@ -24,8 +23,6 @@ public class AgentTaskRunner {
     private static final int STREAM_CHUNK_CHARS = 32 * 1024;
     private static final int MAX_STREAM_CHUNKS_PER_DRAIN = 32;
     private static final int REPLY_REPLAY_SENDS = 3;
-    private static final long DEFAULT_TASK_TIMEOUT_MS = 600_000;
-    private static final int DEFAULT_OUTPUT_MAX_CHARS = 256 * 1024;
     private static final int DEFAULT_PENDING_REPLY_MAX = 512;
     private final String agentId;
     private final Clock clock;
@@ -40,7 +37,6 @@ public class AgentTaskRunner {
     private final Set<String> acceptedTasks = ConcurrentHashMap.newKeySet();
     private final Map<String, RunningTask> runningTasks = new ConcurrentHashMap<>();
     private final Map<String, ReceivedFile> receivedFiles = new ConcurrentHashMap<>();
-    private final int maxOutputChars;
     private final int maxPendingReplies;
 
     public AgentTaskRunner(String agentId, Clock clock) {
@@ -49,19 +45,17 @@ public class AgentTaskRunner {
                 clock,
                 System.getenv().getOrDefault("PULSE_TASK_DIR", "/data24/otf/pulse/tasks"),
                 Math.max(1, Integer.parseInt(System.getenv().getOrDefault("PULSE_TASK_MAX_CONCURRENCY", "1"))),
-                envInt("PULSE_TASK_OUTPUT_MAX_CHARS", DEFAULT_OUTPUT_MAX_CHARS),
                 envInt("PULSE_AGENT_PENDING_REPLY_MAX", DEFAULT_PENDING_REPLY_MAX));
     }
 
     AgentTaskRunner(String agentId, Clock clock, String taskDir) {
-        this(agentId, clock, taskDir, 1, DEFAULT_OUTPUT_MAX_CHARS, DEFAULT_PENDING_REPLY_MAX);
+        this(agentId, clock, taskDir, 1, DEFAULT_PENDING_REPLY_MAX);
     }
 
-    AgentTaskRunner(String agentId, Clock clock, String taskDir, int concurrency, int maxOutputChars, int maxPendingReplies) {
+    AgentTaskRunner(String agentId, Clock clock, String taskDir, int concurrency, int maxPendingReplies) {
         this.agentId = agentId;
         this.clock = clock;
         this.taskDir = taskDir;
-        this.maxOutputChars = Math.max(8 * 1024, maxOutputChars);
         this.maxPendingReplies = Math.max(32, maxPendingReplies);
         String defaultWorkDir = Path.of(taskDir).getParent() == null
                 ? "/data24/otf/pulse/agent"
@@ -160,7 +154,6 @@ public class AgentTaskRunner {
         String traceId = stringValue(payload, "trace_id");
         String fileId = stringValue(payload, "script_file_id");
         String expectedSha = stringValue(payload, "script_sha256");
-        long timeoutMs = longValue(payload, "timeout_ms", DEFAULT_TASK_TIMEOUT_MS);
         if (taskId.isBlank() || !acceptedTasks.add(taskId)) {
             return;
         }
@@ -177,7 +170,7 @@ public class AgentTaskRunner {
             return;
         }
         long acceptedAt = clock.millis();
-        runningTasks.put(taskId, new RunningTask(taskId, traceId, "shell_script", "accepted", acceptedAt, null, timeoutMs));
+        runningTasks.put(taskId, new RunningTask(taskId, traceId, "shell_script", "accepted", acceptedAt, null));
         enqueuePending(new PendingReply(new PulseMessage(
                 "reply-task-accepted-" + agentId + "-" + taskId,
                 "reply.task_accepted",
@@ -191,7 +184,7 @@ public class AgentTaskRunner {
                         "task_type", "shell_script",
                         "status", "accepted",
                         "accepted_at_ms", acceptedAt)), REPLY_REPLAY_SENDS));
-        executor.submit(() -> executeScript(message.messageId(), taskId, traceId, "shell_script", file.path(), args, timeoutMs, workspaceDir));
+        executor.submit(() -> executeScript(message.messageId(), taskId, traceId, "shell_script", file.path(), args, workspaceDir));
     }
 
     private void handleTask(PulseMessage message) {
@@ -200,7 +193,6 @@ public class AgentTaskRunner {
         String traceId = stringValue(payload, "trace_id");
         String taskType = stringValue(payload, "task_type");
         String scriptPath = stringValue(payload, "script_path");
-        long timeoutMs = longValue(payload, "timeout_ms", DEFAULT_TASK_TIMEOUT_MS);
         if (taskId.isBlank() || !acceptedTasks.add(taskId)) {
             return;
         }
@@ -217,7 +209,7 @@ public class AgentTaskRunner {
             return;
         }
         long acceptedAt = clock.millis();
-        runningTasks.put(taskId, new RunningTask(taskId, traceId, taskType, "accepted", acceptedAt, null, timeoutMs));
+        runningTasks.put(taskId, new RunningTask(taskId, traceId, taskType, "accepted", acceptedAt, null));
         enqueuePending(new PendingReply(new PulseMessage(
                 "reply-task-accepted-" + agentId + "-" + taskId,
                 "reply.task_accepted",
@@ -231,11 +223,11 @@ public class AgentTaskRunner {
                         "task_type", taskType,
                         "status", "accepted",
                         "accepted_at_ms", acceptedAt)), REPLY_REPLAY_SENDS));
-        executor.submit(() -> execute(message.messageId(), taskId, traceId, definition, args, timeoutMs));
+        executor.submit(() -> execute(message.messageId(), taskId, traceId, definition, args));
     }
 
-    private void execute(String replyTo, String taskId, String traceId, TaskDefinition definition, List<String> args, long timeoutMs) {
-        executeScript(replyTo, taskId, traceId, definition.taskType(), Path.of(definition.scriptPath()), args, timeoutMs, null);
+    private void execute(String replyTo, String taskId, String traceId, TaskDefinition definition, List<String> args) {
+        executeScript(replyTo, taskId, traceId, definition.taskType(), Path.of(definition.scriptPath()), args, null);
     }
 
     private void executeScript(
@@ -245,12 +237,11 @@ public class AgentTaskRunner {
             String taskType,
             Path scriptPath,
             List<String> args,
-            long timeoutMs,
             Path processWorkDir) {
         long started = clock.millis();
         runningTasks.computeIfPresent(taskId, (ignored, task) -> task.withRunning(started));
         Process process = null;
-        BoundedOutput output = new BoundedOutput(maxOutputChars);
+        CapturedOutput output = new CapturedOutput();
         Thread outputReader = null;
         try {
             if (!Files.isRegularFile(scriptPath)) {
@@ -274,25 +265,8 @@ public class AgentTaskRunner {
             outputReader = new Thread(() -> readOutput(taskId, runningProcess, output), "pulse-task-output-" + taskId);
             outputReader.setDaemon(true);
             outputReader.start();
-            boolean finished = process.waitFor(Math.max(1, timeoutMs), TimeUnit.MILLISECONDS);
+            process.waitFor();
             long finishedAt = clock.millis();
-            if (!finished) {
-                process.destroyForcibly();
-                joinQuietly(outputReader);
-                String currentOutput = output.snapshot();
-                enqueueResultMessages(resultMessages(
-                        replyTo,
-                        taskId,
-                        traceId,
-                        taskType,
-                        "timed_out",
-                        null,
-                        started,
-                        finishedAt,
-                        appendError(currentOutput, "task timed out"),
-                        "task timed out"));
-                return;
-            }
             joinQuietly(outputReader);
             int exitCode = process.exitValue();
             String finalOutput = output.snapshot();
@@ -317,7 +291,7 @@ public class AgentTaskRunner {
         }
     }
 
-    private void readOutput(String taskId, Process process, BoundedOutput output) {
+    private void readOutput(String taskId, Process process, CapturedOutput output) {
         char[] buffer = new char[STREAM_CHUNK_CHARS];
         try (java.io.Reader reader = new java.io.InputStreamReader(process.getInputStream(), java.nio.charset.StandardCharsets.UTF_8)) {
             int read;
@@ -647,38 +621,22 @@ public class AgentTaskRunner {
 
     private record ReceivedFile(String fileId, String taskId, Path path, String sha256, long bytes, boolean executable) {}
 
-    static final class BoundedOutput {
-        private final int maxChars;
+    static final class CapturedOutput {
         private final StringBuilder value;
-        private long droppedChars;
 
-        BoundedOutput(int maxChars) {
-            this.maxChars = Math.max(1, maxChars);
-            this.value = new StringBuilder(Math.min(this.maxChars, 8 * 1024));
+        CapturedOutput() {
+            this.value = new StringBuilder(8 * 1024);
         }
 
         synchronized void append(String chunk) {
             if (chunk == null || chunk.isEmpty()) {
                 return;
             }
-            int remaining = maxChars - value.length();
-            if (remaining <= 0) {
-                droppedChars += chunk.length();
-                return;
-            }
-            if (chunk.length() <= remaining) {
-                value.append(chunk);
-                return;
-            }
-            value.append(chunk, 0, remaining);
-            droppedChars += chunk.length() - remaining;
+            value.append(chunk);
         }
 
         synchronized String snapshot() {
-            if (droppedChars <= 0) {
-                return value.toString();
-            }
-            return value + "\n[pulse output truncated dropped_chars=" + droppedChars + "]\n";
+            return value.toString();
         }
     }
 
@@ -689,7 +647,6 @@ public class AgentTaskRunner {
         private final String status;
         private final long acceptedAtMs;
         private final Long startedAtMs;
-        private final long timeoutMs;
         private final SpscArrayQueue<OutputChunk> outputQueue = new SpscArrayQueue<>(1024);
         private long streamSeq;
         private long streamOffset;
@@ -699,18 +656,17 @@ public class AgentTaskRunner {
         private Long lastOutputAtMs;
         private boolean backpressureActive;
 
-        private RunningTask(String taskId, String traceId, String taskType, String status, long acceptedAtMs, Long startedAtMs, long timeoutMs) {
+        private RunningTask(String taskId, String traceId, String taskType, String status, long acceptedAtMs, Long startedAtMs) {
             this.taskId = taskId;
             this.traceId = traceId;
             this.taskType = taskType;
             this.status = status;
             this.acceptedAtMs = acceptedAtMs;
             this.startedAtMs = startedAtMs;
-            this.timeoutMs = timeoutMs;
         }
 
         RunningTask withRunning(long startedAtMs) {
-            return new RunningTask(taskId, traceId, taskType, "running", acceptedAtMs, startedAtMs, timeoutMs);
+            return new RunningTask(taskId, traceId, taskType, "running", acceptedAtMs, startedAtMs);
         }
 
         long acceptedAtMs() {
@@ -757,7 +713,6 @@ public class AgentTaskRunner {
             payload.put("started_at_ms", startedAtMs == null ? "" : startedAtMs);
             payload.put("updated_at_ms", now);
             payload.put("runtime_ms", startedAtMs == null ? 0 : Math.max(0, now - startedAtMs));
-            payload.put("timeout_ms", timeoutMs);
             payload.put("stream_bytes", streamBytes);
             payload.put("stream_chunks", streamChunks);
             payload.put("stream_lines", streamLines);

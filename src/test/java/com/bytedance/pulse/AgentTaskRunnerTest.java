@@ -103,28 +103,20 @@ class AgentTaskRunnerTest {
     }
 
     @Test
-    void capsFinalTaskOutputInMemory() throws Exception {
+    void keepsFullFinalTaskOutput() throws Exception {
         Path script = taskDir.resolve("prepare-disk-layout.sh");
         Files.writeString(script, "python3 - <<'PY'\nprint('x' * 10000)\nPY\n");
-        AgentTaskRunner runner = new AgentTaskRunner("agent-1", fixedClock(), taskDir.toString(), 1, 64, 128);
+        AgentTaskRunner runner = new AgentTaskRunner("agent-1", fixedClock(), taskDir.toString(), 1, 128);
 
         runner.handleMessages(List.of(command("task-1", "prepare_disk_layout_dry_run", script.toString(), List.of())));
 
         PulseMessage result = awaitResult(runner);
-        String output = result.payload().get("output").toString();
+        String output = TaskOutputCodec.decode(
+                result.payload().get("output").toString(),
+                result.payload().get("output_encoding").toString());
         assertEquals("completed", result.payload().get("status"));
-        assertTrue(output.length() < 9_000);
-    }
-
-    @Test
-    void boundedOutputMarksDroppedChars() {
-        AgentTaskRunner.BoundedOutput output = new AgentTaskRunner.BoundedOutput(4);
-
-        output.append("abcdef");
-
-        String snapshot = output.snapshot();
-        assertTrue(snapshot.startsWith("abcd"));
-        assertTrue(snapshot.contains("pulse output truncated"));
+        assertTrue(output.contains("x".repeat(10_000)));
+        assertTrue(!output.contains("pulse output truncated"));
     }
 
     private static PulseMessage command(String taskId, String taskType, String scriptPath, List<String> args) {
@@ -140,8 +132,7 @@ class AgentTaskRunnerTest {
                         "agent_id", "agent-1",
                         "task_type", taskType,
                         "script_path", scriptPath,
-                        "args", args,
-                        "timeout_ms", 60_000));
+                        "args", args));
     }
 
     private static PulseMessage filePut(String fileId, String taskId, String fileName, byte[] content) {
@@ -180,8 +171,7 @@ class AgentTaskRunnerTest {
                         "script_file_id", fileId,
                         "script_sha256", sha256,
                         "work_dir", "workspace",
-                        "args", args,
-                        "timeout_ms", 60_000));
+                        "args", args));
     }
 
     private static PulseMessage awaitResult(AgentTaskRunner runner) throws InterruptedException {
