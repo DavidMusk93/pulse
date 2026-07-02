@@ -698,6 +698,11 @@ function taskVersion(task: any) {
   ].join(':');
 }
 
+function newestCompletion(snapshot: TaskSnapshot | null) {
+  const completions = snapshot?.completion_queue || [];
+  return completions.length ? completions[completions.length - 1] : null;
+}
+
 function snapshotVersion(snapshot: TaskSnapshot | null) {
   if (!snapshot) return '-';
   const executions = (snapshot.execution_queue || []).map(taskVersion).join('|');
@@ -733,7 +738,7 @@ function App() {
       snapshotVersionRef.current = version;
       setSnapshot(data);
     }
-    const latest = data.completion_queue?.[0];
+    const latest = newestCompletion(data);
     const latestOutput = latest ? completionOutput(latest) : '';
     setOutput(current => current === latestOutput ? current : latestOutput);
   }
@@ -1891,7 +1896,7 @@ function TaskModal(props: {
   const agentTask = tasks[0];
   const completions = props.snapshot?.completion_queue || [];
   const executions = props.snapshot?.execution_queue || [];
-  const latestCompletion = completions[0];
+  const latestCompletion = newestCompletion(props.snapshot);
   const streamLog = latestCompletion ? null : streamForTask(props.snapshot, agentTask?.task_id || executions[0]?.task_id);
   const visibleTraces = (props.snapshot?.traces || []).slice(0, 4);
   const completionText = props.output || (latestCompletion ? completionOutput(latestCompletion) : (streamLog ? streamOutput(streamLog) : ''));
