@@ -9,6 +9,13 @@ Supported cleanup types:
 
 Default mode is apply. Use --dry-run to print the JSON plan without mutation.
 This module intentionally stays Python 3.5 compatible for the py35 entrypoint.
+
+Output design:
+- leaf JSON objects stay on one line by default; use --pretty-json for fully
+  expanded output;
+- TTL fields include days and human-readable expiration duration;
+- summary.storage_retention estimates current storage days from the previous
+  two available partition-day averages.
 """
 import argparse
 import datetime as dt
@@ -28,6 +35,9 @@ DEFAULT_TOP = 50
 DEFAULT_SAMPLE_LIMIT = 20
 MAX_DELETE_WORKERS = 32
 DELETE_DISK_QUANTUM = 8
+SECONDS_PER_DAY = 86400.0
+COMPACT_JSON_MAX_ITEMS = 6
+COMPACT_JSON_MAX_CHARS = 180
 
 
 class BlockRecord(object):
@@ -124,6 +134,46 @@ def format_bytes(size):
     if index == 0:
         return "{} {}".format(int(size), units[index])
     return "{:.2f} {}".format(size, units[index])
+
+
+def format_duration(seconds):
+    if seconds is None:
+        return "<unknown>"
+    seconds = max(0.0, float(seconds))
+    days = seconds / SECONDS_PER_DAY
+    if days >= 1:
+        rounded_days = round(days)
+        if abs(days - rounded_days) < 0.01:
+            return "{} days".format(int(rounded_days))
+        return "{:.2f} days".format(days)
+    hours = seconds / 3600.0
+    if hours >= 1:
+        return "{:.2f} hours".format(hours)
+    minutes = seconds / 60.0
+    if minutes >= 1:
+        return "{:.2f} minutes".format(minutes)
+    return "{:.0f} seconds".format(seconds)
+
+
+def ttl_days(ttl):
+    if ttl is None:
+        return None
+    return round(float(ttl) / SECONDS_PER_DAY, 2)
+
+
+def ttl_description(ttl):
+    if ttl is None:
+        return "no TTL"
+    return "TTL {}".format(format_duration(ttl))
+
+
+def epoch_description(epoch_seconds):
+    if epoch_seconds is None:
+        return None
+    try:
+        return dt.datetime.utcfromtimestamp(epoch_seconds).strftime("%Y-%m-%d %H:%M:%S UTC")
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def normalize_path(path):
@@ -423,70 +473,153 @@ def aggregate_table_layout(records, top):
         disks = []
         for _disk_path, disk in sorted(table["disks"].items(), key=lambda item: item[0]):
             size_bytes = disk["size_bytes"]
-            disks.append({
-                "disk_path": disk["disk_path"],
-                "blocks": disk["blocks"],
-                "size": format_bytes(size_bytes),
-                "table_percent": round((size_bytes * 100.0 / table["size_bytes"]) if table["size_bytes"] else 0.0, 2),
-            })
+            disks.append(OrderedDict([
+                ("disk_name", os.path.basename(disk["disk_path"])),
+                ("blocks", disk["blocks"]),
+                ("size", format_bytes(size_bytes)),
+                ("size_bytes", size_bytes),
+                ("table_percent", round((size_bytes * 100.0 / table["size_bytes"]) if table["size_bytes"] else 0.0, 2)),
+                ("disk_path", disk["disk_path"]),
+            ]))
         partition_dates = []
         for _partition_date, date_stats in sorted(table["partition_dates"].items(), key=lambda item: item[0], reverse=True):
             date_size_bytes = date_stats["size_bytes"]
-            partition_dates.append({
-                "partition_date": date_stats["partition_date"],
-                "blocks": date_stats["blocks"],
-                "size": format_bytes(date_size_bytes),
-                "table_percent": round((date_size_bytes * 100.0 / table["size_bytes"]) if table["size_bytes"] else 0.0, 2),
-                "disk_count": len(date_stats["disks"]),
-            })
-        rows.append({
-            "table": table["table"],
-            "blocks": table["blocks"],
-            "size": format_bytes(table["size_bytes"]),
-            "ttl_seconds": sorted(table["ttl_seconds"]),
-            "partition_date_distribution": partition_dates,
-            "disk_count": len(disks),
-            "metadata_missing_path_blocks": table["metadata_missing_path_blocks"],
-            "ttl_expired_blocks": table["ttl_expired_blocks"],
-            "disk_distribution": disks,
-        })
+            partition_dates.append(OrderedDict([
+                ("partition_date", date_stats["partition_date"]),
+                ("blocks", date_stats["blocks"]),
+                ("size", format_bytes(date_size_bytes)),
+                ("size_bytes", date_size_bytes),
+                ("table_percent", round((date_size_bytes * 100.0 / table["size_bytes"]) if table["size_bytes"] else 0.0, 2)),
+                ("disk_count", len(date_stats["disks"])),
+            ]))
+        ttl_values = sorted(table["ttl_seconds"])
+        rows.append(OrderedDict([
+            ("table_id", table["table"]),
+            ("table", table["table"]),
+            ("size", format_bytes(table["size_bytes"])),
+            ("size_bytes", table["size_bytes"]),
+            ("blocks", table["blocks"]),
+            ("disk_count", len(disks)),
+            ("ttl_description", ", ".join(ttl_description(value) for value in ttl_values) or "no TTL"),
+            ("ttl_days", [ttl_days(value) for value in ttl_values]),
+            ("metadata_missing_path_blocks", table["metadata_missing_path_blocks"]),
+            ("ttl_expired_blocks", table["ttl_expired_blocks"]),
+            ("partition_date_distribution", partition_dates),
+            ("disk_distribution", disks),
+            ("ttl_seconds", ttl_values),
+        ]))
     return rows
 
 
-def record_to_json(record):
+def partition_storage_stats(records):
+    stats = {}
+    for record in records:
+        partition_date = partition_date_from_epoch(record.partition_time)
+        if partition_date == "<unknown>":
+            continue
+        date_stats = stats.setdefault(partition_date, {
+            "partition_date": partition_date,
+            "blocks": 0,
+            "size_bytes": 0,
+        })
+        date_stats["blocks"] += 1
+        date_stats["size_bytes"] += record.data_size
+    return stats
+
+
+def storage_retention_summary(records, total_bytes, now_epoch):
+    stats = partition_storage_stats(records)
+    dates = sorted(stats)
+    latest_date = dates[-1] if dates else None
+    previous_dates = dates[:-1][-2:] if latest_date else []
+    baseline_bytes = sum(stats[date]["size_bytes"] for date in previous_dates)
+    baseline_days = len(previous_dates)
+    baseline_average_bytes = (baseline_bytes / baseline_days) if baseline_days else 0
+    estimated_days = (total_bytes / baseline_average_bytes) if baseline_average_bytes else None
+
+    def date_summary(date):
+        if date is None:
+            return None
+        item = stats[date]
+        return OrderedDict([
+            ("partition_date", date),
+            ("blocks", item["blocks"]),
+            ("size", format_bytes(item["size_bytes"])),
+            ("size_bytes", item["size_bytes"]),
+        ])
+
+    result = OrderedDict()
+    result["as_of_date"] = partition_date_from_epoch(now_epoch)
+    result["latest_partition"] = date_summary(latest_date)
+    result["previous_two_partition_days"] = [date_summary(date) for date in previous_dates]
+    result["baseline"] = "previous_two_available_partition_days"
+    result["baseline_days_available"] = baseline_days
+    result["baseline_average_size"] = format_bytes(baseline_average_bytes) if baseline_days else None
+    result["baseline_average_size_bytes"] = int(baseline_average_bytes) if baseline_days else None
+    result["current_storage_size"] = format_bytes(total_bytes)
+    result["current_storage_size_bytes"] = total_bytes
+    result["available_partition_days"] = len(dates)
+    result["estimated_storage_days"] = round(estimated_days, 2) if estimated_days is not None else None
+    result["estimated_storage_days_label"] = (
+        "{:.2f} days".format(estimated_days) if estimated_days is not None else "<unavailable>"
+    )
+    if baseline_days == 2:
+        result["description"] = (
+            "At the average size of the previous two available partition days, "
+            "current storage covers approximately {:.2f} days."
+        ).format(estimated_days)
+    else:
+        result["description"] = (
+            "Storage-day estimate unavailable: only {} previous partition day(s) "
+            "are available for the two-day baseline."
+        ).format(baseline_days)
+    return result
+
+
+def record_to_json(record, now_epoch=None):
+    now_epoch = utc_now_epoch() if now_epoch is None else now_epoch
     expire_at = None
     expired_seconds = None
     if record.ttl is not None and record.partition_time is not None:
         expire_at = record.partition_time + record.ttl
         if record.ttl_expired:
-            expired_seconds = max(0, utc_now_epoch() - expire_at)
-    return {
-        "db_path": record.db_path,
-        "tenant": record.tenant,
-        "table": record.table,
-        "table_key": record.table_key,
-        "path": record.path,
-        "path_exists": record.path_exists,
-        "disk_path": record.disk_path,
-        "disk_name": record.disk_name,
-        "node_name": record.node_name,
-        "data_size": format_bytes(record.data_size),
-        "layer": record.layer,
-        "event_time": record.event_time,
-        "ttl_seconds": record.ttl,
-        "partition_time": record.partition_time,
-        "partition_date": partition_date_from_epoch(record.partition_time),
-        "expire_at": expire_at,
-        "expired_seconds": expired_seconds,
-    }
+            expired_seconds = max(0, now_epoch - expire_at)
+    return OrderedDict([
+        ("table_id", record.table_key),
+        ("table", record.table),
+        ("tenant", record.tenant),
+        ("partition_date", partition_date_from_epoch(record.partition_time)),
+        ("data_size", format_bytes(record.data_size)),
+        ("data_size_bytes", record.data_size),
+        ("ttl_description", ttl_description(record.ttl)),
+        ("ttl_days", ttl_days(record.ttl)),
+        ("expired_description", (
+            "expired {} ago".format(format_duration(expired_seconds))
+            if expired_seconds is not None else "not expired"
+        )),
+        ("expired_days", round(expired_seconds / SECONDS_PER_DAY, 2) if expired_seconds is not None else None),
+        ("path_exists", record.path_exists),
+        ("ttl_seconds", record.ttl),
+        ("expire_at_description", epoch_description(expire_at)),
+        ("expired_seconds", expired_seconds),
+        ("partition_time", record.partition_time),
+        ("event_time", record.event_time),
+        ("layer", record.layer),
+        ("node_name", record.node_name),
+        ("disk_name", record.disk_name),
+        ("disk_path", record.disk_path),
+        ("path", record.path),
+        ("db_path", record.db_path),
+    ])
 
 
 def untracked_to_json(item):
-    return {
-        "path": item.path,
-        "disk_path": item.disk_path,
-        "data_size": format_bytes(item.data_size),
-    }
+    return OrderedDict([
+        ("data_size", format_bytes(item.data_size)),
+        ("data_size_bytes", item.data_size),
+        ("disk_path", item.disk_path),
+        ("path", item.path),
+    ])
 
 
 def limited_json(items, converter, limit):
@@ -496,6 +629,52 @@ def limited_json(items, converter, limit):
         "hidden": max(0, len(items) - len(visible)),
         "items": [converter(item) for item in visible],
     }
+
+
+def compact_json(value, level=0):
+    compact = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if not isinstance(value, (dict, list)):
+        return compact
+    if isinstance(value, dict) and all(not isinstance(item, (dict, list)) for item in value.values()):
+        return compact
+    if isinstance(value, list) and all(not isinstance(item, (dict, list)) for item in value):
+        return compact
+    item_count = len(value)
+    if item_count <= COMPACT_JSON_MAX_ITEMS and len(compact) <= COMPACT_JSON_MAX_CHARS:
+        return compact
+
+    indent = "  " * level
+    child_indent = "  " * (level + 1)
+    if isinstance(value, dict):
+        lines = ["{"]
+        items = list(value.items())
+        for index, (key, item) in enumerate(items):
+            suffix = "," if index < len(items) - 1 else ""
+            lines.append(
+                "{}{}: {}{}".format(
+                    child_indent,
+                    json.dumps(str(key), ensure_ascii=False),
+                    compact_json(item, level + 1),
+                    suffix,
+                )
+            )
+        lines.append(indent + "}")
+        return "\n".join(lines)
+
+    lines = ["["]
+    for index, item in enumerate(value):
+        suffix = "," if index < len(value) - 1 else ""
+        lines.append("{}{}{}".format(child_indent, compact_json(item, level + 1), suffix))
+    lines.append(indent + "]")
+    return "\n".join(lines)
+
+
+def write_json(value, pretty):
+    if pretty:
+        json.dump(value, sys.stdout, ensure_ascii=False, indent=2)
+    else:
+        sys.stdout.write(compact_json(value))
+    sys.stdout.write("\n")
 
 
 def delete_metadata_rows(db_path, paths, trace):
@@ -760,12 +939,18 @@ def delete_file_items(items, trace):
     return sorted(results, key=lambda item: (item["type"], item["disk_path"], item["path"]))
 
 
-def plan_summary(cleanup_plan):
+def plan_summary(cleanup_plan, now_epoch=None):
+    now_epoch = utc_now_epoch() if now_epoch is None else now_epoch
     missing = cleanup_plan["metadata_missing_path"]
     expired = cleanup_plan["ttl_expired"]
     untracked = cleanup_plan["untracked_path"]
     expired_file_bytes = sum(record.data_size for record in expired if record.path_exists)
     untracked_bytes = sum(item.data_size for item in untracked)
+    expired_seconds = [
+        max(0, now_epoch - (record.partition_time + record.ttl))
+        for record in expired
+        if record.partition_time is not None and record.ttl is not None
+    ]
     return {
         "metadata_missing_path": {"count": len(missing), "metadata_delete_count": len(missing)},
         "ttl_expired": {
@@ -773,11 +958,15 @@ def plan_summary(cleanup_plan):
             "metadata_delete_count": len(expired),
             "path_delete_count": sum(1 for record in expired if record.path_exists),
             "path_delete_size": format_bytes(expired_file_bytes),
+            "path_delete_size_bytes": expired_file_bytes,
+            "oldest_expired_for": format_duration(max(expired_seconds)) if expired_seconds else None,
+            "oldest_expired_for_days": round(max(expired_seconds) / SECONDS_PER_DAY, 2) if expired_seconds else None,
         },
         "untracked_path": {
             "count": len(untracked),
             "path_delete_count": len(untracked),
             "path_delete_size": format_bytes(untracked_bytes),
+            "path_delete_size_bytes": untracked_bytes,
         },
     }
 
@@ -786,6 +975,7 @@ def build_payload(args, db_paths, skipped_dbs, disk_paths, records, cleanup_plan
     total_bytes = sum(record.data_size for record in records)
     payload = OrderedDict()
     payload["report_type"] = "tide_block_layout_cleanup"
+    payload["report_version"] = 2
     payload["report_time"] = local_report_time()
     payload["mode"] = mode
     payload["tide_home"] = args.tide_home
@@ -803,12 +993,22 @@ def build_payload(args, db_paths, skipped_dbs, disk_paths, records, cleanup_plan
         "disk_count": len(disk_paths),
         "metadata_record_count": len(records),
         "metadata_record_size": format_bytes(total_bytes),
-        "cleanup": plan_summary(cleanup_plan),
+        "metadata_record_size_bytes": total_bytes,
+        "storage_retention": storage_retention_summary(records, total_bytes, args.now),
+        "cleanup": plan_summary(cleanup_plan, args.now),
     }
     payload["phase_summaries"] = phase_summaries
     payload["cleanup_plan"] = {
-        "metadata_missing_path": limited_json(cleanup_plan["metadata_missing_path"], record_to_json, args.sample_limit),
-        "ttl_expired": limited_json(cleanup_plan["ttl_expired"], record_to_json, args.sample_limit),
+        "metadata_missing_path": limited_json(
+            cleanup_plan["metadata_missing_path"],
+            lambda item: record_to_json(item, args.now),
+            args.sample_limit,
+        ),
+        "ttl_expired": limited_json(
+            cleanup_plan["ttl_expired"],
+            lambda item: record_to_json(item, args.now),
+            args.sample_limit,
+        ),
         "untracked_path": limited_json(cleanup_plan["untracked_path"], untracked_to_json, args.sample_limit),
     }
     payload["semantics"] = [
@@ -818,6 +1018,12 @@ def build_payload(args, db_paths, skipped_dbs, disk_paths, records, cleanup_plan
     ]
     if action_results is not None:
         payload["action_results"] = action_results
+    payload["presentation"] = {
+        "json_layout": "pretty" if args.pretty_json else "compact_small_objects",
+        "small_object_max_items": COMPACT_JSON_MAX_ITEMS,
+        "small_object_max_chars": COMPACT_JSON_MAX_CHARS,
+        "description": "Small objects are kept on one line; large objects and arrays remain expanded.",
+    }
     return payload
 
 
@@ -833,6 +1039,7 @@ def parse_args(argv):
     parser.add_argument("--top", type=int, default=DEFAULT_TOP, help="Maximum table layout entries in JSON output")
     parser.add_argument("--sample-limit", type=int, default=DEFAULT_SAMPLE_LIMIT, help="Maximum sample items per cleanup type; 0 means all")
     parser.add_argument("--trace", action="store_true", help="Print JSONL concurrency task traces with datetime/pid/tid/thread to stderr")
+    parser.add_argument("--pretty-json", action="store_true", help="Expand every JSON object; compact small objects by default")
     return parser.parse_args(argv)
 
 
@@ -896,7 +1103,7 @@ def run(argv):
             "untracked_path_count": len(untracked_paths),
         })
         cleanup_plan = classify_cleanup(records, untracked_paths)
-        cleanup_summary = plan_summary(cleanup_plan)
+        cleanup_summary = plan_summary(cleanup_plan, args.now)
         finish_phase(phase_summaries, "classify_cleanup", phase_started, cleanup_summary)
 
         if args.dry_run:
@@ -949,8 +1156,7 @@ def run(argv):
         "metadata_record_count": payload["summary"]["metadata_record_count"],
         "cleanup": payload["summary"]["cleanup"],
     })
-    json.dump(payload, sys.stdout, indent=2)
-    sys.stdout.write("\n")
+    write_json(payload, args.pretty_json)
     return 0
 
 
