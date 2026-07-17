@@ -217,6 +217,11 @@ function hostKey(host: HostView) {
   return 'ip-' + String(host.ip || agentId(host) || 'unknown').replaceAll(/[^a-zA-Z0-9_-]/g, '_');
 }
 
+function hostDisplayName(host: HostView) {
+  const normalized = normalizeAddress(host.ip);
+  return normalized === '-' ? agentId(host) || '-' : normalized;
+}
+
 function loadValue(host: HostView) {
   const parsed = Number.parseFloat(String(host.load || '0'));
   return Number.isFinite(parsed) ? parsed : 0;
@@ -675,11 +680,31 @@ function taskNeedsAttention(task: any) {
   return ['queued', 'delivered', 'accepted', 'running', 'failed', 'timeout', 'timed_out', 'rejected'].includes(status);
 }
 
+function hostNeedsAttention(host: HostView) {
+  if (host.status === 'warming' || host.status === 'expired') return true;
+  return activeHostTasks(host).some(taskNeedsAttention);
+}
+
+function clusterAttentionHosts(hosts: HostView[]) {
+  return hosts.filter(hostNeedsAttention);
+}
+
+function clusterAttentionReason(host: HostView) {
+  const reasons: string[] = [];
+  if (host.status === 'warming' || host.status === 'expired') {
+    reasons.push(statusLabel(host.status));
+  }
+  const taskStatuses = [...new Set(
+    activeHostTasks(host)
+      .filter(taskNeedsAttention)
+      .map(task => statusLabel(String(task.status || '')))
+  )];
+  if (taskStatuses.length > 0) reasons.push(`任务 ${taskStatuses.join('、')}`);
+  return reasons.join('；') || '需关注';
+}
+
 function clusterNeedsAttention(hosts: HostView[]) {
-  return hosts.some(host => {
-    if (host.status === 'warming' || host.status === 'expired') return true;
-    return activeHostTasks(host).some(taskNeedsAttention);
-  });
+  return clusterAttentionHosts(hosts).length > 0;
 }
 
 function workerValue(worker: any, key: string, fallback = '-') {
@@ -1908,10 +1933,40 @@ const ClusterSection = memo(function ClusterSection({
 }) {
   const [sortMode, setSortMode] = useState<ClusterSortMode>('ip');
   const sorted = useMemo(() => sortClusterHosts(hosts, sortMode), [hosts, sortMode]);
+  const attentionHosts = useMemo(() => clusterAttentionHosts(hosts), [hosts]);
+  const attentionNames = useMemo(() => attentionHosts.map(hostDisplayName), [attentionHosts]);
+  const attentionTitle = useMemo(
+    () => attentionHosts.map(host => `${hostDisplayName(host)}（${clusterAttentionReason(host)}）`).join('、'),
+    [attentionHosts]
+  );
+  const onlineCount = useMemo(() => hosts.filter(host => host.status === 'alive').length, [hosts]);
+  const visibleAttentionNames = attentionNames.slice(0, 4);
+  const remainingAttentionCount = Math.max(0, attentionNames.length - visibleAttentionNames.length);
   return <Card
     className={`cluster-section ${collapsed ? 'cluster-section-collapsed' : ''}`.trim()}
     style={{ ['--cluster-hue' as any]: hue }}
-    title={<Space size={8}><span>{cluster}</span><Tag>{hosts.length} 台</Tag>{needsAttention && <Tag color="warning">需关注</Tag>}</Space>}
+    title={
+      <div className="cluster-title-block">
+        <div className="cluster-title-line">
+          <Space size={8}><span>{cluster}</span><Tag>{hosts.length} 台</Tag>{needsAttention && <Tag color="warning">需关注</Tag>}</Space>
+        </div>
+        <div
+          className={`cluster-status-bar ${needsAttention ? 'cluster-status-attention' : 'cluster-status-healthy'}`}
+          role="status"
+          aria-label={needsAttention ? `异常节点 ${attentionNames.join('、')}` : `状态正常，${onlineCount}/${hosts.length} 台在线`}
+        >
+          <span className="cluster-status-dot" aria-hidden="true" />
+          {needsAttention ? <>
+            <span className="cluster-status-label">异常节点 {attentionNames.length}</span>
+            <span className="cluster-status-hosts" title={attentionTitle}>
+              {visibleAttentionNames.join('、')}{remainingAttentionCount > 0 ? ` +${remainingAttentionCount}` : ''}
+            </span>
+          </> : (
+            <span>状态正常 · {onlineCount}/{hosts.length} 在线</span>
+          )}
+        </div>
+      </div>
+    }
     extra={<Space size={6}>
       <Button
         className="cluster-sort-control"

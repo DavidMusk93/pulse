@@ -470,8 +470,58 @@ body {
 .cluster-section .ant-card-head {
   min-height: 54px;
 }
+.cluster-section .ant-card-head-title {
+  min-width: 0;
+}
 .cluster-section.cluster-section-collapsed .ant-card-body {
   display: none;
+}
+.cluster-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.cluster-title-line {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 24px;
+}
+.cluster-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 650;
+}
+.cluster-status-healthy {
+  color: #047857;
+}
+.cluster-status-attention {
+  color: #b45309;
+}
+.cluster-status-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.cluster-status-label {
+  flex: 0 0 auto;
+}
+.cluster-status-hosts {
+  min-width: 0;
+  max-width: min(48vw, 620px);
+  overflow: hidden;
+  color: currentColor;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .cluster-toggle-button {
   padding-inline: 6px !important;
@@ -1474,6 +1524,9 @@ body {
     max-width: 100%;
     flex-wrap: wrap;
     justify-content: flex-end;
+  }
+  .cluster-status-hosts {
+    max-width: 100%;
   }
   .cluster-sort-control {
     order: 3;
