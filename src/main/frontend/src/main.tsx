@@ -120,6 +120,7 @@ const taskLabels: Record<string, string> = {
 const defaultTaskArgs = '--dry-run';
 
 type ActiveClusterRun = { name: string; hosts: HostView[] };
+type ClusterSortMode = 'ip' | 'load-asc' | 'load-desc';
 
 type BatchSubmitSummary = {
   kind: string;
@@ -645,6 +646,28 @@ function sortHosts(hosts: HostView[]) {
   return [...hosts].sort((left, right) =>
     normalizeAddress(left.ip).localeCompare(normalizeAddress(right.ip))
     || agentId(left).localeCompare(agentId(right)));
+}
+
+function sortClusterHosts(hosts: HostView[], mode: ClusterSortMode) {
+  if (mode === 'ip') return sortHosts(hosts);
+  return [...hosts].sort((left, right) => {
+    const loadDelta = averageLoad(left) - averageLoad(right);
+    if (loadDelta !== 0) return mode === 'load-asc' ? loadDelta : -loadDelta;
+    return normalizeAddress(left.ip).localeCompare(normalizeAddress(right.ip))
+      || agentId(left).localeCompare(agentId(right));
+  });
+}
+
+function nextClusterSortMode(mode: ClusterSortMode): ClusterSortMode {
+  if (mode === 'ip') return 'load-asc';
+  if (mode === 'load-asc') return 'load-desc';
+  return 'ip';
+}
+
+function clusterSortLabel(mode: ClusterSortMode) {
+  if (mode === 'load-asc') return 'Load ↑';
+  if (mode === 'load-desc') return 'Load ↓';
+  return 'IP';
 }
 
 function taskNeedsAttention(task: any) {
@@ -1883,12 +1906,22 @@ const ClusterSection = memo(function ClusterSection({
   onRun: (host: HostView) => void;
   onClusterRun: (cluster: string, hosts: HostView[]) => void;
 }) {
-  const sorted = useMemo(() => sortHosts(hosts), [hosts]);
+  const [sortMode, setSortMode] = useState<ClusterSortMode>('ip');
+  const sorted = useMemo(() => sortClusterHosts(hosts, sortMode), [hosts, sortMode]);
   return <Card
     className={`cluster-section ${collapsed ? 'cluster-section-collapsed' : ''}`.trim()}
     style={{ ['--cluster-hue' as any]: hue }}
     title={<Space size={8}><span>{cluster}</span><Tag>{hosts.length} 台</Tag>{needsAttention && <Tag color="warning">需关注</Tag>}</Space>}
     extra={<Space size={6}>
+      <Button
+        className="cluster-sort-control"
+        size="small"
+        onClick={() => setSortMode(mode => nextClusterSortMode(mode))}
+        title="点击切换排序：IP → Load 升序 → Load 降序"
+        aria-label={`${cluster} 主机排序`}
+      >
+        排序：{clusterSortLabel(sortMode)}
+      </Button>
       <Button size="small" className="cluster-run-button" onClick={() => onClusterRun(cluster, hosts)}>批任务</Button>
       <Button size="small" type="text" className="cluster-toggle-button" onClick={() => onToggle(cluster)} disabled={needsAttention}>{needsAttention ? '异常展开' : (collapsed ? '展开' : '折叠')}</Button>
     </Space>}

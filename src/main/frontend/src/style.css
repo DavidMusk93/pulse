@@ -485,6 +485,10 @@ body {
   border-radius: 999px !important;
   font-weight: 600;
 }
+.cluster-sort-control {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
 .tile-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(244px, 1fr));
@@ -1465,6 +1469,15 @@ body {
   }
   .hero-metrics {
     min-height: 156px;
+  }
+  .cluster-section .ant-card-extra {
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .cluster-sort-control {
+    order: 3;
+    width: 100%;
   }
   .task-shell {
     height: min(820px, calc(100vh - 124px));
