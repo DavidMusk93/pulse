@@ -8,6 +8,10 @@
 - If the remote file is missing, unreadable, or has an unknown checksum, classify it as changed and upload it.
 - Preserve per-host `unchanged`, `updated`, and `failed` results in `.tmp/auto-ops/` evidence.
 - A deployment summary is not completion evidence. Final completion requires raw per-host SHA and service verification.
+- Any change under `docs/task/` requires a task-only differential sync in the same delivery stage; a local task edit or JAR deployment alone is not complete.
+- For every changed task file, run the matching task diff callee with the exact inventory/tag and `--max-hosts`, then preserve raw per-host `unchanged`, `updated`, and `failed` evidence plus a post-sync SHA verification.
+- A task-only sync must not upload the JAR or restart `pulse-agent.service`; completion requires proving both invariants from raw command output.
+- When multiple task files change, sync and verify each changed path explicitly; never assume a previous bundle or JAR rollout synchronized them.
 
 ## TLB Operations
 

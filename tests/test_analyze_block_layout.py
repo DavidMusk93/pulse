@@ -84,7 +84,22 @@ class AnalyzeBlockLayoutTest(unittest.TestCase):
         )
         self.assertEqual(2, result["baseline_days_available"])
         self.assertEqual(6.0, result["estimated_storage_days"])
+        self.assertEqual("85.71%", result["ttl_waterline_ratio"])
         self.assertIn("previous two", result["description"])
+
+    def test_table_waterline_ratio_uses_day_one_day_two_average_against_ttl(self):
+        records = [
+            Record(epoch("2026-07-15"), 100, 7 * 86400),
+            Record(epoch("2026-07-16"), 100, 7 * 86400),
+            Record(epoch("2026-07-17"), 400, 7 * 86400),
+        ]
+
+        result = MODULE.aggregate_table_layout(records, 50)[0]
+
+        self.assertEqual("85.71%", result["ttl_waterline_ratio"])
+        self.assertEqual(85.71, result["ttl_waterline_ratio_percent"])
+        self.assertEqual(100, result["ttl_waterline_daily_capacity_bytes"])
+        self.assertEqual(700, result["ttl_waterline_capacity_bytes"])
 
     def test_record_json_exposes_ttl_and_expiration_duration(self):
         record = Record(epoch("2026-07-01"), 1024, 7 * 86400)

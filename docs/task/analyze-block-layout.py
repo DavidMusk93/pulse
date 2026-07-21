@@ -15,7 +15,8 @@ Output design:
   expanded output;
 - TTL fields include days and human-readable expiration duration;
 - summary.storage_retention estimates current storage days from the previous
-  two available partition-day averages.
+  two available partition-day averages and exposes the current waterline as a
+  percentage of TTL capacity.
 """
 import argparse
 import datetime as dt
@@ -438,6 +439,53 @@ def classify_cleanup(records, untracked_paths):
     }
 
 
+def ttl_waterline_summary(current_size_bytes, partition_stats, ttl_values):
+    dates = sorted(date for date in partition_stats if date != "<unknown>")
+    latest_date = dates[-1] if dates else None
+    previous_dates = dates[:-1][-2:] if latest_date else []
+    baseline_bytes = sum(partition_stats[date]["size_bytes"] for date in previous_dates)
+    baseline_days = len(previous_dates)
+    daily_capacity_bytes = (baseline_bytes / baseline_days) if baseline_days else 0
+    unique_ttl_values = sorted(set(value for value in ttl_values if value is not None))
+    ttl_seconds_value = unique_ttl_values[0] if len(unique_ttl_values) == 1 else None
+    ttl_days_value = ttl_days(ttl_seconds_value)
+    ttl_capacity_bytes = None
+    ratio_percent = None
+    if baseline_days == 2 and ttl_seconds_value is not None:
+        ttl_capacity_bytes = daily_capacity_bytes * ttl_seconds_value / SECONDS_PER_DAY
+        if ttl_capacity_bytes:
+            ratio_percent = round(current_size_bytes * 100.0 / ttl_capacity_bytes, 2)
+
+    result = OrderedDict()
+    result["ratio"] = "{:.2f}%".format(ratio_percent) if ratio_percent is not None else "<unavailable>"
+    result["ratio_percent"] = ratio_percent
+    result["ttl_days"] = ttl_days_value
+    result["ttl_seconds"] = ttl_seconds_value
+    result["daily_capacity"] = format_bytes(daily_capacity_bytes) if baseline_days else None
+    result["daily_capacity_bytes"] = int(daily_capacity_bytes) if baseline_days else None
+    result["ttl_capacity"] = format_bytes(ttl_capacity_bytes) if ttl_capacity_bytes is not None else None
+    result["ttl_capacity_bytes"] = int(ttl_capacity_bytes) if ttl_capacity_bytes is not None else None
+    result["baseline_partition_dates"] = previous_dates
+    result["baseline_days_available"] = baseline_days
+    result["current_size"] = format_bytes(current_size_bytes)
+    result["current_size_bytes"] = current_size_bytes
+    if len(unique_ttl_values) > 1:
+        result["description"] = "TTL waterline unavailable: multiple TTL values exist for this scope."
+    elif baseline_days != 2:
+        result["description"] = (
+            "TTL waterline unavailable: expected two previous partition days, found {}."
+        ).format(baseline_days)
+    elif ttl_seconds_value is None:
+        result["description"] = "TTL waterline unavailable: no single TTL value exists for this scope."
+    elif ratio_percent is None:
+        result["description"] = "TTL waterline unavailable: the day-1/day-2 capacity is zero."
+    else:
+        result["description"] = (
+            "Current storage uses {:.2f}% of the TTL capacity; day-1/day-2 average is one day."
+        ).format(ratio_percent)
+    return result
+
+
 def aggregate_table_layout(records, top):
     stats = {}
     for record in records:
@@ -493,6 +541,7 @@ def aggregate_table_layout(records, top):
                 ("disk_count", len(date_stats["disks"])),
             ]))
         ttl_values = sorted(table["ttl_seconds"])
+        waterline = ttl_waterline_summary(table["size_bytes"], table["partition_dates"], ttl_values)
         rows.append(OrderedDict([
             ("table_id", table["table"]),
             ("table", table["table"]),
@@ -502,6 +551,12 @@ def aggregate_table_layout(records, top):
             ("disk_count", len(disks)),
             ("ttl_description", ", ".join(ttl_description(value) for value in ttl_values) or "no TTL"),
             ("ttl_days", [ttl_days(value) for value in ttl_values]),
+            ("ttl_waterline_ratio", waterline["ratio"]),
+            ("ttl_waterline_ratio_percent", waterline["ratio_percent"]),
+            ("ttl_waterline_daily_capacity", waterline["daily_capacity"]),
+            ("ttl_waterline_daily_capacity_bytes", waterline["daily_capacity_bytes"]),
+            ("ttl_waterline_capacity", waterline["ttl_capacity"]),
+            ("ttl_waterline_capacity_bytes", waterline["ttl_capacity_bytes"]),
             ("metadata_missing_path_blocks", table["metadata_missing_path_blocks"]),
             ("ttl_expired_blocks", table["ttl_expired_blocks"]),
             ("partition_date_distribution", partition_dates),
@@ -563,6 +618,14 @@ def storage_retention_summary(records, total_bytes, now_epoch):
     result["estimated_storage_days_label"] = (
         "{:.2f} days".format(estimated_days) if estimated_days is not None else "<unavailable>"
     )
+    waterline = ttl_waterline_summary(
+        total_bytes,
+        stats,
+        [record.ttl for record in records],
+    )
+    result["ttl_waterline_ratio"] = waterline["ratio"]
+    result["ttl_waterline_ratio_percent"] = waterline["ratio_percent"]
+    result["ttl_waterline"] = waterline
     if baseline_days == 2:
         result["description"] = (
             "At the average size of the previous two available partition days, "
