@@ -13,6 +13,11 @@
 - A task-only sync must not upload the JAR or restart `pulse-agent.service`; completion requires proving both invariants from raw command output.
 - When multiple task files change, sync and verify each changed path explicitly; never assume a previous bundle or JAR rollout synchronized them.
 
+## Coordinator Access
+
+- Online coordinator pages (e.g., `http://[fdbd:dc05:11:634::45]:9966/`) require SSH v23 proxy; direct browser access is not possible.
+- For UI verification, use remote `curl` scripts via SSH instead of `browser_navigate`.
+
 ## TLB Operations
 
 - Use auto-ops central runtime with an explicit host scope and `--max-hosts`.
