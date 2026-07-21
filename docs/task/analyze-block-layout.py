@@ -5,7 +5,8 @@ Supported cleanup types:
 
 1. metadata_missing_path: metadata exists, path is missing; delete metadata only.
 2. ttl_expired: metadata exists and ttl expired; delete metadata first, then delete path.
-3. untracked_path: path exists on disk but metadata is missing; delete path only.
+3. future_partition: metadata exists and partition_time is later than now; delete metadata first, then delete path.
+4. untracked_path: path exists on disk but metadata is missing; delete path only.
 
 Default mode is apply. Use --dry-run to print the JSON plan without mutation.
 This module intentionally stays Python 3.5 compatible for the py35 entrypoint.
@@ -42,7 +43,7 @@ COMPACT_JSON_MAX_CHARS = 180
 
 
 class BlockRecord(object):
-    def __init__(self, db_path, tenant, table, path, data_size, layer, event_time, ttl, disk_path, disk_name, node_name, partition_time, path_exists, ttl_expired):
+    def __init__(self, db_path, tenant, table, path, data_size, layer, event_time, ttl, disk_path, disk_name, node_name, partition_time, path_exists, ttl_expired, future_partition):
         self.db_path = db_path
         self.tenant = tenant
         self.table = table
@@ -57,6 +58,7 @@ class BlockRecord(object):
         self.partition_time = partition_time
         self.path_exists = path_exists
         self.ttl_expired = ttl_expired
+        self.future_partition = future_partition
 
     @property
     def table_key(self):
@@ -278,6 +280,7 @@ def load_blocks(db_path, tide_home, now_epoch):
         partition_time = parse_partition_time(path)
         path_exists = os.path.exists(path)
         ttl_expired = False
+        future_partition = partition_time is not None and partition_time > now_epoch
         if ttl is not None and partition_time is not None:
             ttl_expired = partition_time + ttl < now_epoch
         records.append(BlockRecord(
@@ -295,6 +298,7 @@ def load_blocks(db_path, tide_home, now_epoch):
             partition_time=partition_time,
             path_exists=path_exists,
             ttl_expired=ttl_expired,
+            future_partition=future_partition,
         ))
     return records
 
@@ -427,14 +431,18 @@ def discover_untracked_paths(tide_home, disk_paths, known_paths_by_disk, trace):
 def classify_cleanup(records, untracked_paths):
     metadata_missing_path = []
     ttl_expired = []
+    future_partition = []
     for record in records:
         if not record.path_exists:
             metadata_missing_path.append(record)
+        elif record.future_partition:
+            future_partition.append(record)
         elif record.ttl_expired:
             ttl_expired.append(record)
     return {
         "metadata_missing_path": sorted(metadata_missing_path, key=lambda item: (item.db_path, item.path)),
         "ttl_expired": sorted(ttl_expired, key=lambda item: (item.db_path, item.path)),
+        "future_partition": sorted(future_partition, key=lambda item: (item.db_path, item.path)),
         "untracked_path": sorted(untracked_paths, key=lambda item: (item.disk_path, item.path)),
     }
 
@@ -448,7 +456,6 @@ def ttl_waterline_summary(current_size_bytes, partition_stats, ttl_values):
     daily_capacity_bytes = (baseline_bytes / baseline_days) if baseline_days else 0
     unique_ttl_values = sorted(set(value for value in ttl_values if value is not None))
     ttl_seconds_value = unique_ttl_values[0] if len(unique_ttl_values) == 1 else None
-    ttl_days_value = ttl_days(ttl_seconds_value)
     ttl_capacity_bytes = None
     ratio_percent = None
     if baseline_days == 2 and ttl_seconds_value is not None:
@@ -458,13 +465,9 @@ def ttl_waterline_summary(current_size_bytes, partition_stats, ttl_values):
 
     result = OrderedDict()
     result["ratio"] = "{:.2f}%".format(ratio_percent) if ratio_percent is not None else "<unavailable>"
-    result["ratio_percent"] = ratio_percent
-    result["ttl_days"] = ttl_days_value
     result["ttl_seconds"] = ttl_seconds_value
     result["daily_capacity"] = format_bytes(daily_capacity_bytes) if baseline_days else None
-    result["daily_capacity_bytes"] = int(daily_capacity_bytes) if baseline_days else None
     result["ttl_capacity"] = format_bytes(ttl_capacity_bytes) if ttl_capacity_bytes is not None else None
-    result["ttl_capacity_bytes"] = int(ttl_capacity_bytes) if ttl_capacity_bytes is not None else None
     result["baseline_partition_dates"] = previous_dates
     result["baseline_days_available"] = baseline_days
     result["current_size"] = format_bytes(current_size_bytes)
@@ -498,6 +501,7 @@ def aggregate_table_layout(records, top):
             "partition_dates": {},
             "metadata_missing_path_blocks": 0,
             "ttl_expired_blocks": 0,
+            "future_partition_blocks": 0,
         })
         table["blocks"] += 1
         table["size_bytes"] += record.data_size
@@ -513,6 +517,8 @@ def aggregate_table_layout(records, top):
         date_stats["disks"].add(record.disk_path)
         if not record.path_exists:
             table["metadata_missing_path_blocks"] += 1
+        elif record.future_partition:
+            table["future_partition_blocks"] += 1
         elif record.ttl_expired:
             table["ttl_expired_blocks"] += 1
 
@@ -550,15 +556,12 @@ def aggregate_table_layout(records, top):
             ("blocks", table["blocks"]),
             ("disk_count", len(disks)),
             ("ttl_description", ", ".join(ttl_description(value) for value in ttl_values) or "no TTL"),
-            ("ttl_days", [ttl_days(value) for value in ttl_values]),
             ("ttl_waterline_ratio", waterline["ratio"]),
-            ("ttl_waterline_ratio_percent", waterline["ratio_percent"]),
             ("ttl_waterline_daily_capacity", waterline["daily_capacity"]),
-            ("ttl_waterline_daily_capacity_bytes", waterline["daily_capacity_bytes"]),
             ("ttl_waterline_capacity", waterline["ttl_capacity"]),
-            ("ttl_waterline_capacity_bytes", waterline["ttl_capacity_bytes"]),
             ("metadata_missing_path_blocks", table["metadata_missing_path_blocks"]),
             ("ttl_expired_blocks", table["ttl_expired_blocks"]),
+            ("future_partition_blocks", table["future_partition_blocks"]),
             ("partition_date_distribution", partition_dates),
             ("disk_distribution", disks),
             ("ttl_seconds", ttl_values),
@@ -624,7 +627,6 @@ def storage_retention_summary(records, total_bytes, now_epoch):
         [record.ttl for record in records],
     )
     result["ttl_waterline_ratio"] = waterline["ratio"]
-    result["ttl_waterline_ratio_percent"] = waterline["ratio_percent"]
     result["ttl_waterline"] = waterline
     if baseline_days == 2:
         result["description"] = (
@@ -647,6 +649,9 @@ def record_to_json(record, now_epoch=None):
         expire_at = record.partition_time + record.ttl
         if record.ttl_expired:
             expired_seconds = max(0, now_epoch - expire_at)
+    ahead_seconds = None
+    if record.future_partition and record.partition_time is not None:
+        ahead_seconds = max(0, record.partition_time - now_epoch)
     return OrderedDict([
         ("table_id", record.table_key),
         ("table", record.table),
@@ -661,6 +666,11 @@ def record_to_json(record, now_epoch=None):
             if expired_seconds is not None else "not expired"
         )),
         ("expired_days", round(expired_seconds / SECONDS_PER_DAY, 2) if expired_seconds is not None else None),
+        ("future_partition", record.future_partition),
+        ("partition_ahead_description", (
+            "partition {} ahead of now".format(format_duration(ahead_seconds))
+            if ahead_seconds is not None else "not in the future"
+        )),
         ("path_exists", record.path_exists),
         ("ttl_seconds", record.ttl),
         ("expire_at_description", epoch_description(expire_at)),
@@ -765,6 +775,8 @@ def delete_metadata_plan(cleanup_plan, trace):
         paths_by_db[record.db_path].add(record.path)
     for record in cleanup_plan["ttl_expired"]:
         paths_by_db[record.db_path].add(record.path)
+    for record in cleanup_plan["future_partition"]:
+        paths_by_db[record.db_path].add(record.path)
     results = []
     for db_path, paths in sorted(paths_by_db.items()):
         results.append(delete_metadata_rows(db_path, paths, trace))
@@ -786,6 +798,12 @@ def file_delete_items(cleanup_plan, tide_home):
         if not is_safe_path_under_disk(record.path, record.disk_path, tide_home):
             raise RuntimeError("unsafe ttl-expired path: {}".format(record.path))
         items.append({"type": "ttl_expired", "path": record.path, "disk_path": record.disk_path, "size": format_bytes(record.data_size)})
+    for record in cleanup_plan["future_partition"]:
+        if not record.path_exists:
+            continue
+        if not is_safe_path_under_disk(record.path, record.disk_path, tide_home):
+            raise RuntimeError("unsafe future-partition path: {}".format(record.path))
+        items.append({"type": "future_partition", "path": record.path, "disk_path": record.disk_path, "size": format_bytes(record.data_size)})
     for item in cleanup_plan["untracked_path"]:
         if not is_safe_path_under_disk(item.path, item.disk_path, tide_home):
             raise RuntimeError("unsafe untracked path: {}".format(item.path))
@@ -1006,13 +1024,20 @@ def plan_summary(cleanup_plan, now_epoch=None):
     now_epoch = utc_now_epoch() if now_epoch is None else now_epoch
     missing = cleanup_plan["metadata_missing_path"]
     expired = cleanup_plan["ttl_expired"]
+    future = cleanup_plan["future_partition"]
     untracked = cleanup_plan["untracked_path"]
     expired_file_bytes = sum(record.data_size for record in expired if record.path_exists)
+    future_file_bytes = sum(record.data_size for record in future if record.path_exists)
     untracked_bytes = sum(item.data_size for item in untracked)
     expired_seconds = [
         max(0, now_epoch - (record.partition_time + record.ttl))
         for record in expired
         if record.partition_time is not None and record.ttl is not None
+    ]
+    future_seconds = [
+        max(0, record.partition_time - now_epoch)
+        for record in future
+        if record.partition_time is not None
     ]
     return {
         "metadata_missing_path": {"count": len(missing), "metadata_delete_count": len(missing)},
@@ -1024,6 +1049,15 @@ def plan_summary(cleanup_plan, now_epoch=None):
             "path_delete_size_bytes": expired_file_bytes,
             "oldest_expired_for": format_duration(max(expired_seconds)) if expired_seconds else None,
             "oldest_expired_for_days": round(max(expired_seconds) / SECONDS_PER_DAY, 2) if expired_seconds else None,
+        },
+        "future_partition": {
+            "count": len(future),
+            "metadata_delete_count": len(future),
+            "path_delete_count": sum(1 for record in future if record.path_exists),
+            "path_delete_size": format_bytes(future_file_bytes),
+            "path_delete_size_bytes": future_file_bytes,
+            "furthest_ahead_for": format_duration(max(future_seconds)) if future_seconds else None,
+            "furthest_ahead_for_days": round(max(future_seconds) / SECONDS_PER_DAY, 2) if future_seconds else None,
         },
         "untracked_path": {
             "count": len(untracked),
@@ -1072,11 +1106,17 @@ def build_payload(args, db_paths, skipped_dbs, disk_paths, records, cleanup_plan
             lambda item: record_to_json(item, args.now),
             args.sample_limit,
         ),
+        "future_partition": limited_json(
+            cleanup_plan["future_partition"],
+            lambda item: record_to_json(item, args.now),
+            args.sample_limit,
+        ),
         "untracked_path": limited_json(cleanup_plan["untracked_path"], untracked_to_json, args.sample_limit),
     }
     payload["semantics"] = [
             {"type": "metadata_missing_path", "condition": "metadata row exists and path is missing", "action": "delete metadata only"},
             {"type": "ttl_expired", "condition": "metadata row exists, path exists, and partition_time + ttl < now", "action": "delete metadata first, then delete path"},
+            {"type": "future_partition", "condition": "metadata row exists, path exists, and partition_time > now", "action": "delete metadata first, then delete path"},
             {"type": "untracked_path", "condition": "path exists on disk but metadata row is missing", "action": "delete path only"},
     ]
     if action_results is not None:
@@ -1174,7 +1214,7 @@ def run(argv):
             payload = build_payload(args, db_paths, skipped_dbs, disk_paths, records, cleanup_plan, "dry-run", phase_summaries)
         else:
             phase_started = time.time()
-            metadata_delete_count = len(cleanup_plan["metadata_missing_path"]) + len(cleanup_plan["ttl_expired"])
+            metadata_delete_count = len(cleanup_plan["metadata_missing_path"]) + len(cleanup_plan["ttl_expired"]) + len(cleanup_plan["future_partition"])
             emit_progress("apply_metadata", "start", {"requested_rows": metadata_delete_count})
             metadata_results = delete_metadata_plan(cleanup_plan, args.trace)
             metadata_summary = {
