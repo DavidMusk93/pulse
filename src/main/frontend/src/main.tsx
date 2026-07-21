@@ -680,9 +680,16 @@ function taskNeedsAttention(task: any) {
   return ['queued', 'delivered', 'accepted', 'running', 'failed', 'timeout', 'timed_out', 'rejected'].includes(status);
 }
 
-function hostNeedsAttention(host: HostView) {
-  if (host.status === 'warming' || host.status === 'expired') return true;
+function hostHealthNeedsAttention(host: HostView) {
+  return host.status === 'warming' || host.status === 'expired';
+}
+
+function hostTaskNeedsAttention(host: HostView) {
   return activeHostTasks(host).some(taskNeedsAttention);
+}
+
+function hostNeedsAttention(host: HostView) {
+  return hostHealthNeedsAttention(host) || hostTaskNeedsAttention(host);
 }
 
 function clusterAttentionHosts(hosts: HostView[]) {
@@ -691,7 +698,7 @@ function clusterAttentionHosts(hosts: HostView[]) {
 
 function clusterAttentionReason(host: HostView) {
   const reasons: string[] = [];
-  if (host.status === 'warming' || host.status === 'expired') {
+  if (hostHealthNeedsAttention(host)) {
     reasons.push(statusLabel(host.status));
   }
   const taskStatuses = [...new Set(
@@ -1934,6 +1941,11 @@ const ClusterSection = memo(function ClusterSection({
   const [sortMode, setSortMode] = useState<ClusterSortMode>('ip');
   const sorted = useMemo(() => sortClusterHosts(hosts, sortMode), [hosts, sortMode]);
   const attentionHosts = useMemo(() => clusterAttentionHosts(hosts), [hosts]);
+  const healthAttentionHosts = useMemo(() => attentionHosts.filter(hostHealthNeedsAttention), [attentionHosts]);
+  const taskAttentionHosts = useMemo(
+    () => attentionHosts.filter(host => !hostHealthNeedsAttention(host) && hostTaskNeedsAttention(host)),
+    [attentionHosts]
+  );
   const attentionNames = useMemo(() => attentionHosts.map(hostDisplayName), [attentionHosts]);
   const attentionTitle = useMemo(
     () => attentionHosts.map(host => `${hostDisplayName(host)}（${clusterAttentionReason(host)}）`).join('、'),
@@ -1942,22 +1954,25 @@ const ClusterSection = memo(function ClusterSection({
   const onlineCount = useMemo(() => hosts.filter(host => host.status === 'alive').length, [hosts]);
   const visibleAttentionNames = attentionNames.slice(0, 4);
   const remainingAttentionCount = Math.max(0, attentionNames.length - visibleAttentionNames.length);
+  const attentionLabel = healthAttentionHosts.length > 0
+    ? `异常节点 ${healthAttentionHosts.length}${taskAttentionHosts.length > 0 ? ` · 任务执行中 ${taskAttentionHosts.length}` : ''}`
+    : `任务执行中 ${taskAttentionHosts.length}`;
   return <Card
     className={`cluster-section ${collapsed ? 'cluster-section-collapsed' : ''}`.trim()}
     style={{ ['--cluster-hue' as any]: hue }}
     title={
       <div className="cluster-title-block">
         <div className="cluster-title-line">
-          <Space size={8}><span>{cluster}</span><Tag>{hosts.length} 台</Tag>{needsAttention && <Tag color="warning">需关注</Tag>}</Space>
+          <Space size={8}><span>{cluster}</span><Tag>{hosts.length} 台</Tag>{needsAttention && <Tag color={healthAttentionHosts.length > 0 ? 'warning' : 'processing'}>{healthAttentionHosts.length > 0 ? '需关注' : '任务执行中'}</Tag>}</Space>
         </div>
         <div
           className={`cluster-status-bar ${needsAttention ? 'cluster-status-attention' : 'cluster-status-healthy'}`}
           role="status"
-          aria-label={needsAttention ? `异常节点 ${attentionNames.join('、')}` : `状态正常，${onlineCount}/${hosts.length} 台在线`}
+          aria-label={needsAttention ? `${attentionLabel}：${attentionNames.join('、')}` : `状态正常，${onlineCount}/${hosts.length} 台在线`}
         >
           <span className="cluster-status-dot" aria-hidden="true" />
           {needsAttention ? <>
-            <span className="cluster-status-label">异常节点 {attentionNames.length}</span>
+            <span className="cluster-status-label">{attentionLabel}</span>
             <span className="cluster-status-hosts" title={attentionTitle}>
               {visibleAttentionNames.join('、')}{remainingAttentionCount > 0 ? ` +${remainingAttentionCount}` : ''}
             </span>
@@ -1978,7 +1993,7 @@ const ClusterSection = memo(function ClusterSection({
         排序：{clusterSortLabel(sortMode)}
       </Button>
       <Button size="small" className="cluster-run-button" onClick={() => onClusterRun(cluster, hosts)}>批任务</Button>
-      <Button size="small" type="text" className="cluster-toggle-button" onClick={() => onToggle(cluster)} disabled={needsAttention}>{needsAttention ? '异常展开' : (collapsed ? '展开' : '折叠')}</Button>
+      <Button size="small" type="text" className="cluster-toggle-button" onClick={() => onToggle(cluster)} disabled={healthAttentionHosts.length > 0}>{healthAttentionHosts.length > 0 ? '异常展开' : (needsAttention ? '任务执行中' : (collapsed ? '展开' : '折叠'))}</Button>
     </Space>}
     variant="outlined"
   >
