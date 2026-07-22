@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Deploy pulse.jar to a coordinator node via auto-ops runtime.
+#
+# Usage (from olap-toolbox):
+#   bash scripts/call.sh \
+#     -f docs/ops/deploy-coordinator.sh \
+#     -t coordinators -i docs/ops/coordinators.hosts \
+#     --max-hosts 3 --yes --parallel 3 --timeout 120 \
+#     -- target/pulse-0.1.0-SNAPSHOT.jar <sha256>
+#
+# Preflight:
+#   bash scripts/call.sh -f scripts/demand.sh -t coordinators -i docs/ops/coordinators.hosts
+set -euo pipefail
+CALL_RISK_LEVEL=destructive
+
+call() {
+  local host=$1
+  local index=$2
+  shift 2
+  local jar_path=${1:?jar_path required}
+  local expected_sha=${2:?expected_sha required}
+  local install_root=${3:-/data24/otf/pulse}
+
+  if [ ! -f "$jar_path" ]; then
+    echo "ERROR jar_not_found path=$jar_path" >&2
+    return 2
+  fi
+
+  local scp_host
+  local remote_tmp
+  scp_host=$(adapt "$host")
+  remote_tmp="/tmp/pulse-coordinator-deploy.${index}.$$"
+
+  echo "EVENT host=${host} index=${index} step=upload start"
+  ssh "$host" "mkdir -p '$remote_tmp' '$install_root/bin'"
+  scp "$jar_path" "${scp_host}:${remote_tmp}/pulse.jar"
+
+  echo "EVENT host=${host} index=${index} step=install start"
+  ssh "$host" "set -euo pipefail; actual=\$(sha256sum '${remote_tmp}/pulse.jar' | awk '{print \$1}'); if [ \"\$actual\" != '${expected_sha}' ]; then echo 'SHA_MISMATCH expected=${expected_sha} actual='\$actual; exit 1; fi; cp '${remote_tmp}/pulse.jar' '${install_root}/bin/pulse.jar'; chmod 0644 '${install_root}/bin/pulse.jar'; sha256sum '${install_root}/bin/pulse.jar'; systemctl restart pulse-coordinator.service; sleep 2; systemctl is-active pulse-coordinator.service; rm -rf '$remote_tmp'"
+
+  echo "EVENT host=${host} index=${index} step=install status=ok"
+}
