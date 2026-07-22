@@ -220,41 +220,22 @@ public class CoordinatorHttpServer {
                 }
             }
             Optional<TaskCompletionAction> completionAction = completionAction(path);
+            // All completion actions (output, output_stream, keep, pop) operate on the
+            // coordinator-local completion queue populated by agent heartbeats.
+            // Proxying them to another coordinator is meaningless — the target
+            // coordinator does not hold this agent's completion data.
             if ("GET".equals(method) && completionAction.isPresent() && "output_stream".equals(completionAction.get().action())) {
                 TaskCompletionAction action = completionAction.get();
-                if (proxyTaskRequestIfNeeded(
-                        exchange,
-                        action.agentId(),
-                        null,
-                        true,
-                        positiveLong("PULSE_TASK_OUTPUT_ROUTE_TIMEOUT_MS", 60_000))) {
-                    return;
-                }
                 writeTaskCompletionOutputStream(exchange, action.agentId(), action.taskId());
                 return;
             }
             if ("GET".equals(method) && completionAction.isPresent() && "output".equals(completionAction.get().action())) {
                 TaskCompletionAction action = completionAction.get();
-                if (proxyTaskRequestIfNeeded(
-                        exchange,
-                        action.agentId(),
-                        null,
-                        false,
-                        positiveLong("PULSE_TASK_OUTPUT_ROUTE_TIMEOUT_MS", 60_000))) {
-                    return;
-                }
                 writeTaskCompletionOutputJson(exchange, action.agentId(), action.taskId());
                 return;
             }
             if ("POST".equals(method) && completionAction.isPresent()) {
                 TaskCompletionAction action = completionAction.get();
-                // keep/pop operate on the coordinator-local completion queue populated by
-                // agent heartbeats; proxying them to another coordinator is meaningless.
-                if (!"keep".equals(action.action()) && !"pop".equals(action.action())) {
-                    if (proxyTaskRequestIfNeeded(exchange, action.agentId(), readBody(exchange), false)) {
-                        return;
-                    }
-                }
                 if ("keep".equals(action.action())) {
                     writeJson(exchange, 200, taskSnapshotView(service.keepCompletion(action.agentId(), action.taskId())));
                     return;
