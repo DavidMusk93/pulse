@@ -877,8 +877,8 @@ function App() {
       if (outputRequestRef.current !== key) return;
       const payload = JSON.parse(event.data);
       chunks.push(String(payload.chunk || ''));
-      const current = chunks.join('');
-      setOutput(previous => previous === current ? previous : current);
+      // A large result can contain hundreds of chunks. Rendering every growing
+      // prefix repeatedly blocks the UI before the preview gets a chance to paint.
     });
     source.addEventListener('completion.output_end', finish);
     source.onerror = () => {
