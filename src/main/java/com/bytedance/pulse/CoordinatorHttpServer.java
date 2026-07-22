@@ -248,8 +248,12 @@ public class CoordinatorHttpServer {
             }
             if ("POST".equals(method) && completionAction.isPresent()) {
                 TaskCompletionAction action = completionAction.get();
-                if (proxyTaskRequestIfNeeded(exchange, action.agentId(), readBody(exchange), false)) {
-                    return;
+                // keep/pop operate on the coordinator-local completion queue populated by
+                // agent heartbeats; proxying them to another coordinator is meaningless.
+                if (!"keep".equals(action.action()) && !"pop".equals(action.action())) {
+                    if (proxyTaskRequestIfNeeded(exchange, action.agentId(), readBody(exchange), false)) {
+                        return;
+                    }
                 }
                 if ("keep".equals(action.action())) {
                     writeJson(exchange, 200, taskSnapshotView(service.keepCompletion(action.agentId(), action.taskId())));
