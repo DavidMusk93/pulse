@@ -787,6 +787,7 @@ function App() {
   const [collapsedClusters, setCollapsedClusters] = useState<Record<string, boolean>>(() => loadCollapsedClusters());
   const viewport = useRef({ left: 0, top: 0 });
   const snapshotVersionRef = useRef('');
+  const snapshotRevisionRef = useRef(0);
   const outputRequestRef = useRef('');
   const outputSourceRef = useRef<EventSource | null>(null);
   const outputCacheRef = useRef<Record<string, string>>({});
@@ -799,6 +800,20 @@ function App() {
   function closeOutputStream() {
     outputSourceRef.current?.close();
     outputSourceRef.current = null;
+  }
+
+  function beginTaskSubmission() {
+    const revision = snapshotRevisionRef.current;
+    outputRequestRef.current = '';
+    closeOutputStream();
+    setOutput('');
+    return revision;
+  }
+
+  function applySubmittedSnapshot(data: TaskSnapshot, submissionRevision: number) {
+    if (snapshotRevisionRef.current === submissionRevision) {
+      applyTaskSnapshot(data);
+    }
   }
 
   async function loadCompletionOutputFallback(agentIdValue: string, result: any, key: string) {
@@ -875,6 +890,7 @@ function App() {
     const version = snapshotVersion(data);
     if (snapshotVersionRef.current !== version) {
       snapshotVersionRef.current = version;
+      snapshotRevisionRef.current += 1;
       setSnapshot(data);
     }
     const latest = newestCompletion(data);
@@ -1055,6 +1071,7 @@ function App() {
   const avgLoad = hosts.length ? hosts.reduce((sum, host) => sum + averageLoad(host), 0) / hosts.length : 0;
   const handleHostRun = useCallback((host: HostView) => {
     snapshotVersionRef.current = '';
+    snapshotRevisionRef.current += 1;
     closeOutputStream();
     setActiveHost(host);
     setActiveCluster(null);
@@ -1065,6 +1082,7 @@ function App() {
   }, []);
   const handleClusterRun = useCallback((cluster: string, clusterHosts: HostView[]) => {
     snapshotVersionRef.current = '';
+    snapshotRevisionRef.current += 1;
     closeOutputStream();
     setActiveHost(null);
     setActiveCluster({ name: cluster, hosts: sortHosts(clusterHosts) });
@@ -1169,12 +1187,12 @@ function App() {
         onRun={async args => {
           const targets = activeCluster?.hosts || (activeHost ? [activeHost] : []);
           if (!targets.length) return;
+          const submissionRevision = beginTaskSubmission();
           const results = await submitToTargets(targets, () => ({ task_type: taskType, args }));
           const first = results.find((result): result is PromiseFulfilledResult<TaskSnapshot> => result.status === 'fulfilled');
-          if (first) setSnapshot(first.value);
+          if (first) applySubmittedSnapshot(first.value, submissionRevision);
           const snapshots = snapshotsFromSettledResults(targets, results);
           setClusterSnapshots(snapshots);
-          setOutput('');
           const failed = results.filter(result => result.status === 'rejected');
           setBatchSummary({
             kind: '预定义任务',
@@ -1195,6 +1213,7 @@ function App() {
         onFilePut={async payload => {
           const targets = activeCluster?.hosts || (activeHost ? [activeHost] : []);
           if (!targets.length) return;
+          const submissionRevision = snapshotRevisionRef.current;
           const response = await fetchJsonWithRetry<BatchFilePutResponse>('/api/files/batch_put', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
@@ -1207,7 +1226,7 @@ function App() {
           });
           const snapshots = response.snapshots || {};
           const firstSnapshot = Object.values(snapshots)[0];
-          if (firstSnapshot) setSnapshot(firstSnapshot);
+          if (firstSnapshot) applySubmittedSnapshot(firstSnapshot, submissionRevision);
           setClusterSnapshots(snapshots);
           const failedAgents = response.failed_agents || response.failedAgents || [];
           const failed = failedAgents.length;
@@ -1229,9 +1248,10 @@ function App() {
         onShellRun={async (payload, args) => {
           const targets = activeCluster?.hosts || (activeHost ? [activeHost] : []);
           if (!targets.length) return;
+          const submissionRevision = beginTaskSubmission();
           const results = await submitToTargets(targets, () => ({ operation: 'shell_script', args, ...payload }));
           const first = results.find((result): result is PromiseFulfilledResult<TaskSnapshot> => result.status === 'fulfilled');
-          if (first) setSnapshot(first.value);
+          if (first) applySubmittedSnapshot(first.value, submissionRevision);
           const snapshots = snapshotsFromSettledResults(targets, results);
           setClusterSnapshots(snapshots);
           const failed = results.filter(result => result.status === 'rejected');
@@ -1247,7 +1267,9 @@ function App() {
             updatedAt: Date.now(),
             snapshots
           });
-          setOutput(failed.length ? `Shell 执行提交部分失败: ${failed.length}/${targets.length}` : 'Shell 执行已入队，等待 agent 串行执行。');
+          if (failed.length) {
+            setOutput(`Shell 执行提交部分失败: ${failed.length}/${targets.length}`);
+          }
         }}
         onPop={async () => {
           const running = activeTargetHost
