@@ -107,6 +107,8 @@ type BatchFilePutResponse = {
 const loadAverageWindowMs = 5 * 60 * 1000;
 const maxInlineRenderChars = 1024 * 1024;
 const maxJsonParseChars = 2 * 1024 * 1024;
+const maxStreamingTailChars = 256 * 1024;
+const streamingTailMarker = '[前序输出已省略，正在显示最新 256 KiB]\n';
 const palette = [205, 188, 168, 146, 126, 95, 48, 215, 200, 178];
 const loadWindows = new Map<string, { windowStart: number; displayAvg: number; sampledAtMs: number }>();
 const clusterCollapseStorageKey = 'pulse.cluster-collapse.v1';
@@ -764,6 +766,24 @@ function newestCompletion(snapshot: TaskSnapshot | null) {
   return completions[0] || null;
 }
 
+function matchesTaskId(item: any, taskId?: string) {
+  return !!taskId && (item?.task_id === taskId || item?.taskId === taskId);
+}
+
+function completionForTask(snapshot: TaskSnapshot | null, taskId?: string) {
+  return taskId ? completionStack(snapshot).find(item => matchesTaskId(item, taskId)) || null : null;
+}
+
+function boundedOutputTail(value: string) {
+  if (value.length <= maxStreamingTailChars) {
+    return { value, truncated: false };
+  }
+  return {
+    value: `${streamingTailMarker}${value.slice(-maxStreamingTailChars)}`,
+    truncated: true
+  };
+}
+
 function snapshotVersion(snapshot: TaskSnapshot | null) {
   if (!snapshot) return '-';
   const executions = (snapshot.execution_queue || []).map(taskVersion).join('|');
@@ -781,6 +801,9 @@ function App() {
   const [activeCluster, setActiveCluster] = useState<ActiveClusterRun | null>(null);
   const [snapshot, setSnapshot] = useState<TaskSnapshot | null>(null);
   const [output, setOutput] = useState('');
+  const [outputFull, setOutputFull] = useState('');
+  const [outputIsTail, setOutputIsTail] = useState(false);
+  const [focusedTaskId, setFocusedTaskId] = useState('');
   const [batchSummary, setBatchSummary] = useState<BatchSubmitSummary | null>(null);
   const [clusterSnapshots, setClusterSnapshots] = useState<Record<string, TaskSnapshot>>({});
   const [taskType, setTaskType] = useState('prepare_disk_layout_dry_run');
@@ -791,22 +814,107 @@ function App() {
   const outputRequestRef = useRef('');
   const outputSourceRef = useRef<EventSource | null>(null);
   const outputCacheRef = useRef<Record<string, string>>({});
+  const focusedTaskIdRef = useRef('');
+  const outputTailRef = useRef('');
+  const outputTailTruncatedRef = useRef(false);
+  const outputTailFrameRef = useRef<number | null>(null);
   const scrollingRef = useRef(false);
   const scrollIdleTimerRef = useRef<number | null>(null);
   const pendingHostsRef = useRef<HostView[] | null>(null);
   const activeTargetHost = activeHost || activeCluster?.hosts[0] || null;
   const clusterAgentKey = useMemo(() => (activeCluster?.hosts || []).map(agentId).join(','), [activeCluster?.name, activeCluster?.hosts]);
 
+  function cancelOutputTailRender() {
+    if (outputTailFrameRef.current !== null) {
+      window.cancelAnimationFrame(outputTailFrameRef.current);
+      outputTailFrameRef.current = null;
+    }
+  }
+
   function closeOutputStream() {
     outputSourceRef.current?.close();
     outputSourceRef.current = null;
+    cancelOutputTailRender();
+  }
+
+  function resetOutputTail() {
+    cancelOutputTailRender();
+    outputTailRef.current = '';
+    outputTailTruncatedRef.current = false;
+  }
+
+  function renderOutputTail() {
+    const value = outputTailTruncatedRef.current
+      ? `${streamingTailMarker}${outputTailRef.current}`
+      : outputTailRef.current;
+    setOutput(current => current === value ? current : value);
+    setOutputFull('');
+    setOutputIsTail(outputTailTruncatedRef.current);
+  }
+
+  function appendOutputTail(key: string, chunk: string) {
+    if (outputRequestRef.current !== key || !chunk) return;
+    const next = outputTailRef.current + chunk;
+    if (next.length > maxStreamingTailChars) {
+      outputTailRef.current = next.slice(-maxStreamingTailChars);
+      outputTailTruncatedRef.current = true;
+    } else {
+      outputTailRef.current = next;
+    }
+    if (outputTailFrameRef.current === null) {
+      outputTailFrameRef.current = window.requestAnimationFrame(() => {
+        outputTailFrameRef.current = null;
+        if (outputRequestRef.current === key) {
+          renderOutputTail();
+        }
+      });
+    }
+  }
+
+  function flushOutputTail(key: string, fullOutput: string) {
+    cancelOutputTailRender();
+    if (outputRequestRef.current !== key) return;
+    if (!outputTailRef.current && fullOutput) {
+      const tail = boundedOutputTail(fullOutput);
+      outputTailRef.current = tail.truncated ? fullOutput.slice(-maxStreamingTailChars) : fullOutput;
+      outputTailTruncatedRef.current = tail.truncated;
+    }
+    const value = outputTailTruncatedRef.current
+      ? `${streamingTailMarker}${outputTailRef.current}`
+      : outputTailRef.current;
+    setOutput(current => current === value ? current : value);
+    setOutputFull(fullOutput);
+    setOutputIsTail(outputTailTruncatedRef.current);
+  }
+
+  function showCompletedOutput(fullOutput: string) {
+    const tail = boundedOutputTail(fullOutput);
+    setOutput(tail.value);
+    setOutputFull(fullOutput);
+    setOutputIsTail(tail.truncated);
+  }
+
+  function showLiveOutputTail(value: string) {
+    const tail = boundedOutputTail(value);
+    setOutput(tail.value);
+    setOutputFull('');
+    setOutputIsTail(tail.truncated);
+  }
+
+  function focusOutputTask(taskId: string) {
+    focusedTaskIdRef.current = taskId;
+    setFocusedTaskId(taskId);
   }
 
   function beginTaskSubmission() {
     const revision = snapshotRevisionRef.current;
+    focusOutputTask('');
     outputRequestRef.current = '';
     closeOutputStream();
-    setOutput('');
+    resetOutputTail();
+    setOutput('任务已提交，等待 agent 实时输出...');
+    setOutputFull('');
+    setOutputIsTail(false);
     return revision;
   }
 
@@ -824,12 +932,14 @@ function App() {
       const fullOutput = completionOutput(full);
       outputCacheRef.current[key] = fullOutput;
       if (outputRequestRef.current === key) {
-        setOutput(current => current === fullOutput ? current : fullOutput);
+        showCompletedOutput(fullOutput);
       }
     } catch (err) {
       if (outputRequestRef.current === key) {
         const preview = completionOutput(result);
         setOutput(`${preview}${preview ? '\n\n' : ''}[完整输出加载失败: ${err instanceof Error ? err.message : String(err)}]`);
+        setOutputFull('');
+        setOutputIsTail(false);
       }
     }
   }
@@ -839,7 +949,9 @@ function App() {
     if (!agentIdValue || !taskId) return;
     const key = `${agentIdValue}:${taskId}:${result.output_sha256 || result.outputSha256 || ''}`;
     if (outputCacheRef.current[key]) {
-      setOutput(current => current === outputCacheRef.current[key] ? current : outputCacheRef.current[key]);
+      outputRequestRef.current = key;
+      closeOutputStream();
+      showCompletedOutput(outputCacheRef.current[key]);
       return;
     }
     if (outputRequestRef.current === key && outputSourceRef.current) {
@@ -861,7 +973,7 @@ function App() {
       const fullOutput = chunks.join('');
       outputCacheRef.current[key] = fullOutput;
       if (outputRequestRef.current === key) {
-        setOutput(current => current === fullOutput ? current : fullOutput);
+        flushOutputTail(key, fullOutput);
       }
       source.close();
       if (outputSourceRef.current === source) {
@@ -870,15 +982,18 @@ function App() {
     };
     source.addEventListener('completion.output_start', () => {
       if (outputRequestRef.current === key) {
+        resetOutputTail();
         setOutput(preview ? `${preview}\n\n[完整输出流式加载中...]` : '[完整输出流式加载中...]');
+        setOutputFull('');
+        setOutputIsTail(false);
       }
     });
     source.addEventListener('completion.output_chunk', (event: MessageEvent<string>) => {
       if (outputRequestRef.current !== key) return;
       const payload = JSON.parse(event.data);
-      chunks.push(String(payload.chunk || ''));
-      // A large result can contain hundreds of chunks. Rendering every growing
-      // prefix repeatedly blocks the UI before the preview gets a chance to paint.
+      const chunk = String(payload.chunk || '');
+      chunks.push(chunk);
+      appendOutputTail(key, chunk);
     });
     source.addEventListener('completion.output_end', finish);
     source.onerror = () => {
@@ -893,11 +1008,33 @@ function App() {
       snapshotRevisionRef.current += 1;
       setSnapshot(data);
     }
-    const latest = newestCompletion(data);
+    const selectedTaskId = focusedTaskIdRef.current;
+    const selectedCompletion = completionForTask(data, selectedTaskId);
+    const selectedStream = selectedTaskId ? streamForTask(data, selectedTaskId) : null;
+    if (selectedTaskId && !selectedCompletion) {
+      if (outputRequestRef.current) {
+        outputRequestRef.current = '';
+        closeOutputStream();
+        resetOutputTail();
+      }
+      if (selectedStream) {
+        showLiveOutputTail(streamOutput(selectedStream));
+      } else {
+        const waiting = '任务已提交，等待 agent 实时输出...';
+        setOutput(current => current === waiting ? current : waiting);
+        setOutputFull('');
+        setOutputIsTail(false);
+      }
+      return;
+    }
+    const latest = selectedCompletion || newestCompletion(data);
     if (!latest) {
       outputRequestRef.current = '';
       closeOutputStream();
+      resetOutputTail();
       setOutput(current => current === '' ? current : '');
+      setOutputFull('');
+      setOutputIsTail(false);
       return;
     }
     const latestOutput = completionOutput(latest);
@@ -906,12 +1043,15 @@ function App() {
     const outputKey = `${latestAgent}:${latestTaskId}:${latest.output_sha256 || latest.outputSha256 || ''}`;
     if (latest.output_inline === false || latest.outputInline === false) {
       if (outputCacheRef.current[outputKey]) {
-        const cached = outputCacheRef.current[outputKey];
-        setOutput(current => current === cached ? current : cached);
+        outputRequestRef.current = outputKey;
+        closeOutputStream();
+        showCompletedOutput(outputCacheRef.current[outputKey]);
       } else {
         if (outputRequestRef.current !== outputKey || !outputSourceRef.current) {
           const loading = `${latestOutput}${latestOutput ? '\n\n' : ''}[完整输出流式加载中...]`;
           setOutput(current => current === loading ? current : loading);
+          setOutputFull('');
+          setOutputIsTail(false);
         }
         streamCompletionOutput(latestAgent, latest);
       }
@@ -919,7 +1059,7 @@ function App() {
     }
     outputRequestRef.current = outputKey;
     closeOutputStream();
-    setOutput(current => current === latestOutput ? current : latestOutput);
+    showCompletedOutput(latestOutput);
   }
 
   async function refreshHosts() {
@@ -1077,7 +1217,11 @@ function App() {
     setActiveCluster(null);
     setSnapshot(null);
     setClusterSnapshots({});
+    focusOutputTask('');
+    resetOutputTail();
     setOutput('');
+    setOutputFull('');
+    setOutputIsTail(false);
     setBatchSummary(null);
   }, []);
   const handleClusterRun = useCallback((cluster: string, clusterHosts: HostView[]) => {
@@ -1088,7 +1232,11 @@ function App() {
     setActiveCluster({ name: cluster, hosts: sortHosts(clusterHosts) });
     setSnapshot(null);
     setClusterSnapshots({});
+    focusOutputTask('');
+    resetOutputTail();
     setOutput('');
+    setOutputFull('');
+    setOutputIsTail(false);
     setBatchSummary(null);
   }, []);
   const handleClusterToggle = useCallback((cluster: string) => {
@@ -1182,6 +1330,9 @@ function App() {
         batchSummary={batchSummary}
         clusterSnapshots={clusterSnapshots}
         output={output}
+        outputFull={outputFull}
+        outputIsTail={outputIsTail}
+        focusedTaskId={focusedTaskId}
         taskType={taskType}
         setTaskType={setTaskType}
         onRun={async args => {
@@ -1190,6 +1341,9 @@ function App() {
           const submissionRevision = beginTaskSubmission();
           const results = await submitToTargets(targets, () => ({ task_type: taskType, args }));
           const first = results.find((result): result is PromiseFulfilledResult<TaskSnapshot> => result.status === 'fulfilled');
+          if (first && !activeCluster) {
+            focusOutputTask(submittedTaskId(first.value, ['task.enqueued']));
+          }
           if (first) applySubmittedSnapshot(first.value, submissionRevision);
           const snapshots = snapshotsFromSettledResults(targets, results);
           setClusterSnapshots(snapshots);
@@ -1251,6 +1405,9 @@ function App() {
           const submissionRevision = beginTaskSubmission();
           const results = await submitToTargets(targets, () => ({ operation: 'shell_script', args, ...payload }));
           const first = results.find((result): result is PromiseFulfilledResult<TaskSnapshot> => result.status === 'fulfilled');
+          if (first && !activeCluster) {
+            focusOutputTask(submittedTaskId(first.value, ['shell.enqueued']));
+          }
           if (first) applySubmittedSnapshot(first.value, submissionRevision);
           const snapshots = snapshotsFromSettledResults(targets, results);
           setClusterSnapshots(snapshots);
@@ -1280,8 +1437,11 @@ function App() {
             return;
           }
           const id = encodeURIComponent(agentId(activeTargetHost));
-          const taskId = encodeURIComponent(snapshot.completion_queue[0].task_id);
-          await fetchJson(`/api/agents/${id}/tasks/completions/${taskId}/pop`, { method: 'POST' });
+          const completedTaskId = snapshot.completion_queue[0].task_id;
+          await fetchJson(`/api/agents/${id}/tasks/completions/${encodeURIComponent(completedTaskId)}/pop`, { method: 'POST' });
+          if (focusedTaskIdRef.current === completedTaskId) {
+            focusOutputTask('');
+          }
           await refreshSnapshot(activeTargetHost);
         }}
       />
@@ -2124,6 +2284,9 @@ function TaskModal(props: {
   batchSummary: BatchSubmitSummary | null;
   clusterSnapshots: Record<string, TaskSnapshot>;
   output: string;
+  outputFull: string;
+  outputIsTail: boolean;
+  focusedTaskId: string;
   taskType: string;
   setTaskType: (value: string) => void;
   onRun: (args: string[]) => Promise<void>;
@@ -2137,16 +2300,19 @@ function TaskModal(props: {
   const agentTask = tasks[0];
   const completions = completionStack(props.snapshot);
   const executions = props.snapshot?.execution_queue || [];
-  const latestCompletion = newestCompletion(props.snapshot);
+  const focusedCompletion = completionForTask(props.snapshot, props.focusedTaskId);
+  const latestCompletion = props.focusedTaskId ? focusedCompletion : newestCompletion(props.snapshot);
   const hasRunningTask = tasks.length > 0 || executions.length > 0;
   const canPop = completions.length > 0 && !hasRunningTask;
-  const streamLog = latestCompletion ? null : streamForTask(props.snapshot, agentTask?.task_id || executions[0]?.task_id);
+  const asyncTask = (props.focusedTaskId
+    ? tasks.find(task => matchesTaskId(task, props.focusedTaskId)) || executions.find(task => matchesTaskId(task, props.focusedTaskId))
+    : null) || agentTask || executions[0];
+  const streamLog = latestCompletion ? null : streamForTask(props.snapshot, props.focusedTaskId || asyncTask?.task_id || asyncTask?.taskId);
   const visibleTraces = (props.snapshot?.traces || []).slice(0, 4);
   const completionText = props.output || (latestCompletion ? completionOutput(latestCompletion) : (streamLog ? streamOutput(streamLog) : ''));
-  const asyncTask = agentTask || executions[0];
-  const currentTaskId = latestCompletion?.task_id || asyncTask?.task_id || props.snapshot?.traces?.[0]?.task_id || '';
+  const currentTaskId = latestCompletion?.task_id || asyncTask?.task_id || props.focusedTaskId || props.snapshot?.traces?.[0]?.task_id || '';
   const outputMeta = latestCompletion || streamLog || asyncTask;
-  const outputRunning = !latestCompletion && !!asyncTask;
+  const outputRunning = !latestCompletion && !!(asyncTask || props.focusedTaskId);
   const outputNotice = outputStatusNotice(completionText, outputMeta, outputRunning);
   const isClusterRun = props.clusterHosts.length > 0;
   const targetTitle = isClusterRun ? props.clusterName : normalizeAddress(props.host?.ip);
@@ -2189,7 +2355,7 @@ function TaskModal(props: {
         {isClusterRun ? null : <>
         <Card title="当前任务">
           <Space direction="vertical" size={6} className="task-state-card">
-            <Badge status={statusColor(agentTask?.status || executions[0]?.status)} text={statusLabel(agentTask?.status || executions[0]?.status || '空闲')} />
+            <Badge status={statusColor(asyncTask?.status)} text={statusLabel(asyncTask?.status || '空闲')} />
             <Typography.Text type="secondary">{taskLabels[(latestCompletion?.task_type || asyncTask?.task_type || '')] || latestCompletion?.task_type || asyncTask?.task_type || '当前没有任务。'}</Typography.Text>
             {currentTaskId && <Typography.Text className="task-id-text" copyable={{ text: currentTaskId }}>task_id: {currentTaskId}</Typography.Text>}
           </Space>
@@ -2260,7 +2426,7 @@ function TaskModal(props: {
         <div className="completion-pane">
           {isClusterRun
             ? <ClusterRunSummary summary={props.batchSummary} hosts={props.clusterHosts} snapshots={props.clusterSnapshots} />
-            : <CompletionViewer value={completionText} meta={outputMeta} />}
+            : <CompletionViewer key={props.focusedTaskId || currentTaskId || 'task-output'} value={completionText} fullValue={props.outputFull || completionText} tail={props.outputIsTail} meta={outputMeta} />}
         </div>
       </Card>
     </div>
@@ -2521,12 +2687,12 @@ const OutputPanelTitle = memo(function OutputPanelTitle({
   </div>;
 });
 
-const CompletionViewer = memo(function CompletionViewer({ value, meta }: { value: string; meta?: any }) {
+const CompletionViewer = memo(function CompletionViewer({ value, fullValue, tail, meta }: { value: string; fullValue: string; tail: boolean; meta?: any }) {
   const [mode, setMode] = useState<'log' | 'json' | 'markdown' | 'raw'>('log');
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [wrap, setWrap] = useState(true);
-  const canParseJson = value.length <= maxJsonParseChars;
+  const canParseJson = !tail && value.length <= maxJsonParseChars;
   const parsed = useMemo(() => canParseJson ? parseJsonOutput(value) : { ok: false, formatted: value }, [canParseJson, value]);
   const display = mode === 'json' && parsed.ok ? parsed.formatted : value;
   const renderLimited = display.length > maxInlineRenderChars;
@@ -2534,7 +2700,7 @@ const CompletionViewer = memo(function CompletionViewer({ value, meta }: { value
     ? `${display.slice(0, maxInlineRenderChars)}\n\n[输出过大，界面仅渲染前 ${formatBytes(maxInlineRenderChars)}；完整输出已加载，可用“拷贝”获取。]`
     : display;
   const outputType = String(meta?.output_type ?? meta?.outputType ?? meta?.stream_id ?? '').toLowerCase();
-  const markdownHint = useMemo(() => outputType === 'markdown' || looksLikeMarkdown(value), [outputType, value]);
+  const markdownHint = useMemo(() => !tail && (outputType === 'markdown' || looksLikeMarkdown(value)), [outputType, tail, value]);
   const matches = useMemo(() => deferredQuery ? countMatches(renderDisplay, deferredQuery) : 0, [renderDisplay, deferredQuery]);
   return <div className="completion-viewer">
     <Flex className="completion-toolbar" justify="space-between" align="center" gap={8}>
@@ -2551,6 +2717,7 @@ const CompletionViewer = memo(function CompletionViewer({ value, meta }: { value
           ]}
         />
         {parsed.ok && <Tag color="blue">JSON</Tag>}
+        {tail && <Tag color="cyan">Tail</Tag>}
         {renderLimited && <Tag color="gold">已加载完整输出，渲染前 {formatBytes(maxInlineRenderChars)}</Tag>}
         {markdownHint && <Tag color="purple">Markdown</Tag>}
         {deferredQuery && <Tag color={matches > 0 ? 'green' : 'red'}>{matches} 匹配</Tag>}
@@ -2558,7 +2725,7 @@ const CompletionViewer = memo(function CompletionViewer({ value, meta }: { value
       <Space size={8}>
         <OutputSearch value={query} onCommit={setQuery} />
         <Button size="small" onClick={() => setWrap(next => !next)}>{wrap ? '不换行' : '自动换行'}</Button>
-        <Button size="small" onClick={() => navigator.clipboard?.writeText(display)}>拷贝</Button>
+        <Button size="small" onClick={() => navigator.clipboard?.writeText(fullValue || display)}>拷贝</Button>
       </Space>
     </Flex>
     {mode === 'markdown'
