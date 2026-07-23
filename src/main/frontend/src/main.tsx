@@ -2622,6 +2622,7 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
   const execution = useMemo(() => clusterExecutionSummary(hosts, summary, snapshots), [hosts, summary, snapshots]);
   const [fullOutputs, setFullOutputs] = useState<Record<string, string>>({});
   const requestedOutputUrlsRef = useRef<Set<string>>(new Set());
+  const mountedRef = useRef(true);
   const displayExecution = useMemo(() => ({
     ...execution,
     rows: execution.rows.map(row => {
@@ -2637,8 +2638,10 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
       };
     })
   }), [execution, fullOutputs]);
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
   useEffect(() => {
-    let disposed = false;
     execution.rows.forEach(row => {
       if (!row.outputFullUrl) return;
       const key = `${agentId(row.host)}:${row.taskId}`;
@@ -2646,16 +2649,13 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
       requestedOutputUrlsRef.current.add(row.outputFullUrl);
       fetchJson<any>(row.outputFullUrl)
         .then(result => {
-          if (disposed) return;
+          if (!mountedRef.current) return;
           setFullOutputs(previous => ({ ...previous, [key]: completionOutput(result) }));
         })
         .catch(() => {
           requestedOutputUrlsRef.current.delete(row.outputFullUrl as string);
         });
     });
-    return () => {
-      disposed = true;
-    };
   }, [execution, fullOutputs]);
   const completionPercent = Math.round(displayExecution.executionSucceeded * 100 / Math.max(1, displayExecution.total));
   const visibleErrors = useMemo(() => execution.submitFailed ? [...new Set(summary?.errors || [])].slice(0, 5) : [], [summary, execution.submitFailed]);
