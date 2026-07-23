@@ -2776,7 +2776,6 @@ const CompletionViewer = memo(function CompletionViewer({ value, outputLog, outp
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [wrap, setWrap] = useState(true);
-  const [formattedVirtualLog, setFormattedVirtualLog] = useState<OutputLog | null>(null);
   const virtual = !!outputLog;
   const canParseJson = !virtual && value.length <= maxJsonParseChars;
   const parsed = useMemo(() => canParseJson ? parseJsonOutput(value) : { ok: false, formatted: value }, [canParseJson, value]);
@@ -2784,39 +2783,11 @@ const CompletionViewer = memo(function CompletionViewer({ value, outputLog, outp
   const renderDisplay = display;
   const outputType = String(meta?.output_type ?? meta?.outputType ?? meta?.stream_id ?? '').toLowerCase();
   const markdownHint = useMemo(() => !virtual && (outputType === 'markdown' || looksLikeMarkdown(value)), [outputType, value, virtual]);
-  const virtualDisplayLog = mode === 'json' && formattedVirtualLog ? formattedVirtualLog : outputLog;
-  const matches = useMemo(() => virtual && virtualDisplayLog
+  const matches = useMemo(() => virtual && outputLog
     ? deferredQuery
-      ? virtualDisplayLog.lines.reduce((count, line) => count + (line.toLowerCase().includes(deferredQuery.toLowerCase()) ? 1 : 0), 0)
+      ? outputLog.lines.reduce((count, line) => count + (line.toLowerCase().includes(deferredQuery.toLowerCase()) ? 1 : 0), 0)
       : 0
-    : deferredQuery ? countMatches(renderDisplay, deferredQuery) : 0, [deferredQuery, outputLogRevision, renderDisplay, virtual, virtualDisplayLog]);
-  const canFormatJson = virtual
-    ? !!outputLog?.fullText
-    : parsed.ok;
-  useEffect(() => {
-    setFormattedVirtualLog(null);
-  }, [outputLog?.key]);
-  function formatOutput() {
-    if (!virtual) {
-      if (parsed.ok) setMode('json');
-      return;
-    }
-    if (!outputLog?.fullText) return;
-    const formatted = parseJsonOutput(outputLogText(outputLog));
-    if (!formatted.ok) {
-      message.warning({ content: '当前输出不是可格式化的 JSON', key: 'task-output-format', duration: 1.8 });
-      return;
-    }
-    setFormattedVirtualLog({
-      key: `${outputLog.key}:formatted`,
-      lines: outputLines(formatted.formatted),
-      sourceText: formatted.formatted,
-      sourceLength: formatted.formatted.length,
-      chunks: [],
-      fullText: formatted.formatted
-    });
-    setMode('json');
-  }
+    : deferredQuery ? countMatches(renderDisplay, deferredQuery) : 0, [deferredQuery, outputLog, outputLogRevision, renderDisplay, virtual]);
   return <div className="completion-viewer">
     <Flex className="completion-toolbar" justify="space-between" align="center" gap={8}>
       <Space size={8}>
@@ -2833,19 +2804,17 @@ const CompletionViewer = memo(function CompletionViewer({ value, outputLog, outp
         />
         {parsed.ok && <Tag color="blue">JSON</Tag>}
         {virtual && <Tag color="cyan">完整日志</Tag>}
-        {formattedVirtualLog && <Tag color="purple">已格式化</Tag>}
         {markdownHint && <Tag color="purple">Markdown</Tag>}
         {deferredQuery && <Tag color={matches > 0 ? 'green' : 'red'}>{matches} 匹配</Tag>}
       </Space>
       <Space size={8}>
         <OutputSearch value={query} onCommit={setQuery} />
-        <Button size="small" disabled={!canFormatJson} onClick={formatOutput}>一键格式化</Button>
-        <Button size="small" onClick={() => setWrap(next => !next)}>{wrap ? '不换行' : '自动换行'}</Button>
-        <Button size="small" onClick={() => navigator.clipboard?.writeText(outputLog ? outputLogText(outputLog) : display)}>拷贝</Button>
+        <Button type={wrap ? 'primary' : 'default'} size="small" onClick={() => setWrap(next => !next)}>换行</Button>
+        <Button size="small" onClick={() => navigator.clipboard?.writeText(outputLog ? outputLogText(outputLog) : display)}>复制</Button>
       </Space>
     </Flex>
-    {virtual && virtualDisplayLog
-      ? <VirtualLineOutput log={virtualDisplayLog} revision={outputLogRevision} query={deferredQuery} wrap={wrap} />
+    {virtual && outputLog
+      ? <VirtualLineOutput log={outputLog} revision={outputLogRevision} query={deferredQuery} wrap={wrap} />
       : mode === 'markdown'
       ? renderDisplay
         ? <div className="task-output markdown-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(renderDisplay) }} />
@@ -2865,6 +2834,7 @@ const VirtualLineOutput = memo(function VirtualLineOutput({ log, revision, query
   const stickToBottomRef = useRef(true);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(0);
+  const [measuredHeights, setMeasuredHeights] = useState<Record<number, number>>({});
   const lineIndexes = useMemo(() => {
     if (!query) return null;
     const needle = query.toLowerCase();
@@ -2883,13 +2853,20 @@ const VirtualLineOutput = memo(function VirtualLineOutput({ log, revision, query
     1,
     Math.floor((Math.max(240, viewportWidth) - lineNumberWidth * virtualOutputCharWidth - 46) / virtualOutputCharWidth)
   );
-  const rowHeights = useMemo(() => {
+  const estimatedRowHeights = useMemo(() => {
     if (!wrap) return null;
     return indexedLines.map(lineIndex => {
       const length = stripAnsi(log.lines[lineIndex] || '').length;
       return Math.max(1, Math.ceil(Math.max(1, length) / charsPerLine)) * virtualOutputLineHeight;
     });
   }, [charsPerLine, indexedLines, log, revision, wrap]);
+  const rowHeights = useMemo(() => {
+    if (!estimatedRowHeights) return null;
+    return estimatedRowHeights.map((height, rowIndex) => {
+      const lineIndex = indexedLines[rowIndex];
+      return Math.max(height, measuredHeights[lineIndex] || 0);
+    });
+  }, [estimatedRowHeights, indexedLines, measuredHeights]);
   const rowOffsets = useMemo(() => {
     if (!rowHeights) return null;
     const offsets = [0];
@@ -2922,6 +2899,41 @@ const VirtualLineOutput = memo(function VirtualLineOutput({ log, revision, query
     observer.observe(viewport);
     return () => observer.disconnect();
   }, []);
+
+  useLayoutEffect(() => {
+    setMeasuredHeights({});
+  }, [log.key, wrap]);
+
+  useLayoutEffect(() => {
+    if (!wrap) return;
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const observer = new ResizeObserver(entries => {
+      const updates: Record<number, number> = {};
+      entries.forEach(entry => {
+        const lineIndex = Number((entry.target as HTMLElement).dataset.lineIndex);
+        const height = entry.target.getBoundingClientRect().height;
+        if (Number.isFinite(lineIndex) && height > 0) {
+          updates[lineIndex] = height;
+        }
+      });
+      if (!Object.keys(updates).length) return;
+      setMeasuredHeights(previous => {
+        let changed = false;
+        const next = { ...previous };
+        Object.entries(updates).forEach(([key, height]) => {
+          const lineIndex = Number(key);
+          if (Math.abs((next[lineIndex] || 0) - height) > 0.5) {
+            next[lineIndex] = height;
+            changed = true;
+          }
+        });
+        return changed ? next : previous;
+      });
+    });
+    viewport.querySelectorAll<HTMLElement>('.output-line[data-line-index]').forEach(line => observer.observe(line));
+    return () => observer.disconnect();
+  }, [end, revision, start, wrap]);
 
   useLayoutEffect(() => {
     if (!stickToBottomRef.current) return;
@@ -2970,7 +2982,12 @@ const VirtualLineOutput = memo(function VirtualLineOutput({ log, revision, query
           const line = log.lines[lineIndex] || '';
           const normalized = stripAnsi(line);
           const height = rowHeights ? rowHeights[rowIndex] : virtualOutputLineHeight;
-          return <div className={`output-line ${logLevelClass(normalized)}`} key={`${lineIndex}-${line.length}`} style={{ height }}>
+          return <div
+            className={`output-line ${logLevelClass(normalized)}`}
+            data-line-index={lineIndex}
+            key={`${lineIndex}-${line.length}`}
+            style={wrap ? { minHeight: height } : { height }}
+          >
             <span className="output-line-number">{lineIndex + 1}</span>
             <span className="output-line-content" dangerouslySetInnerHTML={{ __html: highlightSearch(escapeHtml(normalized), query) }} />
           </div>;

@@ -1389,10 +1389,13 @@ body {
 }
 .output-wrap .output-line {
   min-width: 0;
+  align-items: start;
 }
 .output-wrap .output-line-content {
+  min-width: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  line-height: 20px;
 }
 .output-nowrap .output-line-content,
 .json-output .output-line-content {

@@ -422,8 +422,9 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("暂无命令输出"));
         assertTrue(js.body().contains("尚未收到命令输出"));
         assertTrue(js.body().contains("正在展示实时命令输出"));
-        assertTrue(js.body().contains("不换行"));
-        assertTrue(js.body().contains("拷贝"));
+        assertTrue(js.body().contains("换行"));
+        assertTrue(js.body().contains("复制"));
+        assertTrue(!js.body().contains("一键格式化"));
         assertTrue(js.body().contains("/tasks/completions/"));
         assertTrue(js.body().contains("/pop"));
         assertTrue(js.body().contains(".slice(0,4)"));
