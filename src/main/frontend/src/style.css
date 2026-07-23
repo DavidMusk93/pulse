@@ -1347,6 +1347,12 @@ body {
   font-variant-ligatures: none;
   counter-reset: output-line;
 }
+.output-virtual {
+  contain: layout style paint;
+}
+.output-virtual .output-line {
+  box-sizing: border-box;
+}
 .output-line {
   display: grid;
   grid-template-columns: calc(var(--line-number-width, 2ch) + 22px) minmax(0, 1fr);

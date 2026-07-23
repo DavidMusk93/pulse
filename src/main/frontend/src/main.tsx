@@ -107,8 +107,9 @@ type BatchFilePutResponse = {
 const loadAverageWindowMs = 5 * 60 * 1000;
 const maxInlineRenderChars = 1024 * 1024;
 const maxJsonParseChars = 2 * 1024 * 1024;
-const maxStreamingTailChars = 256 * 1024;
-const streamingTailMarker = '[前序输出已省略，正在显示最新 256 KiB]\n';
+const virtualOutputLineHeight = 20;
+const virtualOutputOverscan = 12;
+const outputPrefixProbeChars = 256;
 const palette = [205, 188, 168, 146, 126, 95, 48, 215, 200, 178];
 const loadWindows = new Map<string, { windowStart: number; displayAvg: number; sampledAtMs: number }>();
 const clusterCollapseStorageKey = 'pulse.cluster-collapse.v1';
@@ -123,6 +124,14 @@ const defaultTaskArgs = '--dry-run';
 
 type ActiveClusterRun = { name: string; hosts: HostView[] };
 type ClusterSortMode = 'ip' | 'load-asc' | 'load-desc';
+type OutputLog = {
+  key: string;
+  lines: string[];
+  sourceText: string;
+  sourceLength: number;
+  chunks: string[];
+  fullText: string | null;
+};
 
 type BatchSubmitSummary = {
   kind: string;
@@ -774,14 +783,21 @@ function completionForTask(snapshot: TaskSnapshot | null, taskId?: string) {
   return taskId ? completionStack(snapshot).find(item => matchesTaskId(item, taskId)) || null : null;
 }
 
-function boundedOutputTail(value: string) {
-  if (value.length <= maxStreamingTailChars) {
-    return { value, truncated: false };
-  }
-  return {
-    value: `${streamingTailMarker}${value.slice(-maxStreamingTailChars)}`,
-    truncated: true
-  };
+function outputLines(value: string) {
+  return value ? value.split('\n') : [];
+}
+
+function outputLogText(log: OutputLog) {
+  return log.fullText ?? log.chunks.join('');
+}
+
+function outputLogExtends(log: OutputLog, value: string) {
+  if (value.length < log.sourceLength) return false;
+  const probeLength = Math.min(outputPrefixProbeChars, log.sourceLength);
+  if (!probeLength) return true;
+  const suffixStart = log.sourceLength - probeLength;
+  return value.slice(0, probeLength) === log.sourceText.slice(0, probeLength)
+    && value.slice(suffixStart, log.sourceLength) === log.sourceText.slice(suffixStart);
 }
 
 function snapshotVersion(snapshot: TaskSnapshot | null) {
@@ -801,8 +817,7 @@ function App() {
   const [activeCluster, setActiveCluster] = useState<ActiveClusterRun | null>(null);
   const [snapshot, setSnapshot] = useState<TaskSnapshot | null>(null);
   const [output, setOutput] = useState('');
-  const [outputFull, setOutputFull] = useState('');
-  const [outputIsTail, setOutputIsTail] = useState(false);
+  const [outputLogRevision, setOutputLogRevision] = useState(0);
   const [focusedTaskId, setFocusedTaskId] = useState('');
   const [batchSummary, setBatchSummary] = useState<BatchSubmitSummary | null>(null);
   const [clusterSnapshots, setClusterSnapshots] = useState<Record<string, TaskSnapshot>>({});
@@ -815,90 +830,121 @@ function App() {
   const outputSourceRef = useRef<EventSource | null>(null);
   const outputCacheRef = useRef<Record<string, string>>({});
   const focusedTaskIdRef = useRef('');
-  const outputTailRef = useRef('');
-  const outputTailTruncatedRef = useRef(false);
-  const outputTailFrameRef = useRef<number | null>(null);
+  const outputLogRef = useRef<OutputLog | null>(null);
+  const outputLogFrameRef = useRef<number | null>(null);
   const scrollingRef = useRef(false);
   const scrollIdleTimerRef = useRef<number | null>(null);
   const pendingHostsRef = useRef<HostView[] | null>(null);
   const activeTargetHost = activeHost || activeCluster?.hosts[0] || null;
   const clusterAgentKey = useMemo(() => (activeCluster?.hosts || []).map(agentId).join(','), [activeCluster?.name, activeCluster?.hosts]);
 
-  function cancelOutputTailRender() {
-    if (outputTailFrameRef.current !== null) {
-      window.cancelAnimationFrame(outputTailFrameRef.current);
-      outputTailFrameRef.current = null;
+  function cancelOutputLogRender() {
+    if (outputLogFrameRef.current !== null) {
+      window.cancelAnimationFrame(outputLogFrameRef.current);
+      outputLogFrameRef.current = null;
     }
   }
 
   function closeOutputStream() {
     outputSourceRef.current?.close();
     outputSourceRef.current = null;
-    cancelOutputTailRender();
+    cancelOutputLogRender();
   }
 
-  function resetOutputTail() {
-    cancelOutputTailRender();
-    outputTailRef.current = '';
-    outputTailTruncatedRef.current = false;
+  function publishOutputLog() {
+    setOutputLogRevision(previous => previous + 1);
   }
 
-  function renderOutputTail() {
-    const value = outputTailTruncatedRef.current
-      ? `${streamingTailMarker}${outputTailRef.current}`
-      : outputTailRef.current;
-    setOutput(current => current === value ? current : value);
-    setOutputFull('');
-    setOutputIsTail(outputTailTruncatedRef.current);
+  function clearOutputLog() {
+    cancelOutputLogRender();
+    outputLogRef.current = null;
+    publishOutputLog();
   }
 
-  function appendOutputTail(key: string, chunk: string) {
-    if (outputRequestRef.current !== key || !chunk) return;
-    const next = outputTailRef.current + chunk;
-    if (next.length > maxStreamingTailChars) {
-      outputTailRef.current = next.slice(-maxStreamingTailChars);
-      outputTailTruncatedRef.current = true;
+  function replaceOutputLog(key: string, value: string, chunks: string[] = []) {
+    cancelOutputLogRender();
+    outputLogRef.current = {
+      key,
+      lines: outputLines(value),
+      sourceText: value,
+      sourceLength: value.length,
+      chunks,
+      fullText: chunks.length ? null : value
+    };
+    setOutput('');
+    publishOutputLog();
+  }
+
+  function appendOutputLogLines(log: OutputLog, chunk: string) {
+    if (!chunk) return;
+    const partial = log.lines.pop() || '';
+    for (const line of `${partial}${chunk}`.split('\n')) {
+      log.lines.push(line);
+    }
+  }
+
+  function scheduleOutputLogRender(key: string) {
+    if (outputLogFrameRef.current !== null) return;
+    outputLogFrameRef.current = window.requestAnimationFrame(() => {
+      outputLogFrameRef.current = null;
+      if (outputLogRef.current?.key === key) {
+        publishOutputLog();
+      }
+    });
+  }
+
+  function syncLiveOutputLog(key: string, value: string) {
+    let log = outputLogRef.current;
+    if (!log || log.key !== key) {
+      replaceOutputLog(key, value);
+      return;
+    }
+    if (value.length === log.sourceLength) return;
+    if (outputLogExtends(log, value)) {
+      appendOutputLogLines(log, value.slice(log.sourceText.length));
     } else {
-      outputTailRef.current = next;
+      log.lines = outputLines(value);
     }
-    if (outputTailFrameRef.current === null) {
-      outputTailFrameRef.current = window.requestAnimationFrame(() => {
-        outputTailFrameRef.current = null;
-        if (outputRequestRef.current === key) {
-          renderOutputTail();
-        }
-      });
-    }
+    log.sourceText = value;
+    log.sourceLength = value.length;
+    log.fullText = value;
+    scheduleOutputLogRender(key);
   }
 
-  function flushOutputTail(key: string, fullOutput: string) {
-    cancelOutputTailRender();
-    if (outputRequestRef.current !== key) return;
-    if (!outputTailRef.current && fullOutput) {
-      const tail = boundedOutputTail(fullOutput);
-      outputTailRef.current = tail.truncated ? fullOutput.slice(-maxStreamingTailChars) : fullOutput;
-      outputTailTruncatedRef.current = tail.truncated;
+  function appendCompletionOutputLog(key: string, chunk: string, originalChunk = chunk) {
+    const log = outputLogRef.current;
+    if (!log || log.key !== key) return;
+    log.fullText = null;
+    log.chunks.push(originalChunk);
+    if (!chunk) return;
+    appendOutputLogLines(log, chunk);
+    log.sourceLength += chunk.length;
+    scheduleOutputLogRender(key);
+  }
+
+  function finishCompletionOutputLog(key: string, fullOutput: string) {
+    cancelOutputLogRender();
+    const log = outputLogRef.current;
+    if (!log || log.key !== key) {
+      replaceOutputLog(key, fullOutput);
+      return;
     }
-    const value = outputTailTruncatedRef.current
-      ? `${streamingTailMarker}${outputTailRef.current}`
-      : outputTailRef.current;
-    setOutput(current => current === value ? current : value);
-    setOutputFull(fullOutput);
-    setOutputIsTail(outputTailTruncatedRef.current);
+    if (log.sourceLength !== fullOutput.length) {
+      log.lines = outputLines(fullOutput);
+    }
+    log.sourceText = fullOutput;
+    log.sourceLength = fullOutput.length;
+    log.fullText = fullOutput;
+    log.chunks = [];
+    publishOutputLog();
   }
 
-  function showCompletedOutput(fullOutput: string) {
-    const tail = boundedOutputTail(fullOutput);
-    setOutput(tail.value);
-    setOutputFull(fullOutput);
-    setOutputIsTail(tail.truncated);
+  function showCompletedOutput(key: string, fullOutput: string) {
+    replaceOutputLog(key, fullOutput);
   }
 
-  function showLiveOutputTail(value: string) {
-    const tail = boundedOutputTail(value);
-    setOutput(tail.value);
-    setOutputFull('');
-    setOutputIsTail(tail.truncated);
+  function showCompletedOutputLog(key: string, fullOutput: string) {
+    replaceOutputLog(key, fullOutput);
   }
 
   function focusOutputTask(taskId: string) {
@@ -911,10 +957,8 @@ function App() {
     focusOutputTask('');
     outputRequestRef.current = '';
     closeOutputStream();
-    resetOutputTail();
+    clearOutputLog();
     setOutput('任务已提交，等待 agent 实时输出...');
-    setOutputFull('');
-    setOutputIsTail(false);
     return revision;
   }
 
@@ -932,14 +976,13 @@ function App() {
       const fullOutput = completionOutput(full);
       outputCacheRef.current[key] = fullOutput;
       if (outputRequestRef.current === key) {
-        showCompletedOutput(fullOutput);
+        showCompletedOutputLog(key, fullOutput);
       }
     } catch (err) {
       if (outputRequestRef.current === key) {
         const preview = completionOutput(result);
+        clearOutputLog();
         setOutput(`${preview}${preview ? '\n\n' : ''}[完整输出加载失败: ${err instanceof Error ? err.message : String(err)}]`);
-        setOutputFull('');
-        setOutputIsTail(false);
       }
     }
   }
@@ -951,7 +994,7 @@ function App() {
     if (outputCacheRef.current[key]) {
       outputRequestRef.current = key;
       closeOutputStream();
-      showCompletedOutput(outputCacheRef.current[key]);
+      showCompletedOutputLog(key, outputCacheRef.current[key]);
       return;
     }
     if (outputRequestRef.current === key && outputSourceRef.current) {
@@ -965,6 +1008,8 @@ function App() {
     }
     const preview = completionOutput(result);
     const chunks: string[] = [];
+    let previewCharsRemaining = preview.length;
+    replaceOutputLog(key, preview);
     const streamUrl = result.output_stream_url || result.outputStreamUrl
       || `/api/agents/${encodeURIComponent(agentIdValue)}/tasks/completions/${encodeURIComponent(taskId)}/output_stream`;
     const source = new EventSource(streamUrl);
@@ -973,19 +1018,22 @@ function App() {
       const fullOutput = chunks.join('');
       outputCacheRef.current[key] = fullOutput;
       if (outputRequestRef.current === key) {
-        flushOutputTail(key, fullOutput);
+        finishCompletionOutputLog(key, fullOutput);
       }
       source.close();
       if (outputSourceRef.current === source) {
         outputSourceRef.current = null;
       }
     };
-    source.addEventListener('completion.output_start', () => {
+    source.addEventListener('completion.output_start', (event: MessageEvent<string>) => {
       if (outputRequestRef.current === key) {
-        resetOutputTail();
-        setOutput(preview ? `${preview}\n\n[完整输出流式加载中...]` : '[完整输出流式加载中...]');
-        setOutputFull('');
-        setOutputIsTail(false);
+        const offset = Number(JSON.parse(event.data).offset || 0);
+        if (offset === 0) {
+          previewCharsRemaining = preview.length;
+          replaceOutputLog(key, preview);
+        } else {
+          previewCharsRemaining = 0;
+        }
       }
     });
     source.addEventListener('completion.output_chunk', (event: MessageEvent<string>) => {
@@ -993,7 +1041,9 @@ function App() {
       const payload = JSON.parse(event.data);
       const chunk = String(payload.chunk || '');
       chunks.push(chunk);
-      appendOutputTail(key, chunk);
+      const skipped = Math.min(previewCharsRemaining, chunk.length);
+      previewCharsRemaining -= skipped;
+      appendCompletionOutputLog(key, chunk.slice(skipped), chunk);
     });
     source.addEventListener('completion.output_end', finish);
     source.onerror = () => {
@@ -1015,15 +1065,14 @@ function App() {
       if (outputRequestRef.current) {
         outputRequestRef.current = '';
         closeOutputStream();
-        resetOutputTail();
       }
       if (selectedStream) {
-        showLiveOutputTail(streamOutput(selectedStream));
+        const selectedAgent = data.agent_id || data.agentId || '';
+        syncLiveOutputLog(`${selectedAgent}:${selectedTaskId}:live`, streamOutput(selectedStream));
       } else {
         const waiting = '任务已提交，等待 agent 实时输出...';
+        clearOutputLog();
         setOutput(current => current === waiting ? current : waiting);
-        setOutputFull('');
-        setOutputIsTail(false);
       }
       return;
     }
@@ -1031,10 +1080,8 @@ function App() {
     if (!latest) {
       outputRequestRef.current = '';
       closeOutputStream();
-      resetOutputTail();
+      clearOutputLog();
       setOutput(current => current === '' ? current : '');
-      setOutputFull('');
-      setOutputIsTail(false);
       return;
     }
     const latestOutput = completionOutput(latest);
@@ -1045,21 +1092,15 @@ function App() {
       if (outputCacheRef.current[outputKey]) {
         outputRequestRef.current = outputKey;
         closeOutputStream();
-        showCompletedOutput(outputCacheRef.current[outputKey]);
+        showCompletedOutputLog(outputKey, outputCacheRef.current[outputKey]);
       } else {
-        if (outputRequestRef.current !== outputKey || !outputSourceRef.current) {
-          const loading = `${latestOutput}${latestOutput ? '\n\n' : ''}[完整输出流式加载中...]`;
-          setOutput(current => current === loading ? current : loading);
-          setOutputFull('');
-          setOutputIsTail(false);
-        }
         streamCompletionOutput(latestAgent, latest);
       }
       return;
     }
     outputRequestRef.current = outputKey;
     closeOutputStream();
-    showCompletedOutput(latestOutput);
+    showCompletedOutput(outputKey, latestOutput);
   }
 
   async function refreshHosts() {
@@ -1218,10 +1259,8 @@ function App() {
     setSnapshot(null);
     setClusterSnapshots({});
     focusOutputTask('');
-    resetOutputTail();
+    clearOutputLog();
     setOutput('');
-    setOutputFull('');
-    setOutputIsTail(false);
     setBatchSummary(null);
   }, []);
   const handleClusterRun = useCallback((cluster: string, clusterHosts: HostView[]) => {
@@ -1233,10 +1272,8 @@ function App() {
     setSnapshot(null);
     setClusterSnapshots({});
     focusOutputTask('');
-    resetOutputTail();
+    clearOutputLog();
     setOutput('');
-    setOutputFull('');
-    setOutputIsTail(false);
     setBatchSummary(null);
   }, []);
   const handleClusterToggle = useCallback((cluster: string) => {
@@ -1330,8 +1367,8 @@ function App() {
         batchSummary={batchSummary}
         clusterSnapshots={clusterSnapshots}
         output={output}
-        outputFull={outputFull}
-        outputIsTail={outputIsTail}
+        outputLog={outputLogRef.current}
+        outputLogRevision={outputLogRevision}
         focusedTaskId={focusedTaskId}
         taskType={taskType}
         setTaskType={setTaskType}
@@ -2284,8 +2321,8 @@ function TaskModal(props: {
   batchSummary: BatchSubmitSummary | null;
   clusterSnapshots: Record<string, TaskSnapshot>;
   output: string;
-  outputFull: string;
-  outputIsTail: boolean;
+  outputLog: OutputLog | null;
+  outputLogRevision: number;
   focusedTaskId: string;
   taskType: string;
   setTaskType: (value: string) => void;
@@ -2309,11 +2346,12 @@ function TaskModal(props: {
     : null) || agentTask || executions[0];
   const streamLog = latestCompletion ? null : streamForTask(props.snapshot, props.focusedTaskId || asyncTask?.task_id || asyncTask?.taskId);
   const visibleTraces = (props.snapshot?.traces || []).slice(0, 4);
-  const completionText = props.output || (latestCompletion ? completionOutput(latestCompletion) : (streamLog ? streamOutput(streamLog) : ''));
+  const completionText = props.outputLog ? '' : (props.output || (latestCompletion ? completionOutput(latestCompletion) : (streamLog ? streamOutput(streamLog) : '')));
+  const outputDisplayValue = props.outputLog ? 'streaming' : completionText;
   const currentTaskId = latestCompletion?.task_id || asyncTask?.task_id || props.focusedTaskId || props.snapshot?.traces?.[0]?.task_id || '';
   const outputMeta = latestCompletion || streamLog || asyncTask;
   const outputRunning = !latestCompletion && !!(asyncTask || props.focusedTaskId);
-  const outputNotice = outputStatusNotice(completionText, outputMeta, outputRunning);
+  const outputNotice = outputStatusNotice(outputDisplayValue, outputMeta, outputRunning);
   const isClusterRun = props.clusterHosts.length > 0;
   const targetTitle = isClusterRun ? props.clusterName : normalizeAddress(props.host?.ip);
   const targetDescription = isClusterRun ? `${props.clusterHosts.length} 台 host，将逐台下发作业` : '单节点作业';
@@ -2426,7 +2464,7 @@ function TaskModal(props: {
         <div className="completion-pane">
           {isClusterRun
             ? <ClusterRunSummary summary={props.batchSummary} hosts={props.clusterHosts} snapshots={props.clusterSnapshots} />
-            : <CompletionViewer key={props.focusedTaskId || currentTaskId || 'task-output'} value={completionText} fullValue={props.outputFull || completionText} tail={props.outputIsTail} meta={outputMeta} />}
+            : <CompletionViewer key={props.focusedTaskId || currentTaskId || props.outputLog?.key || 'task-output'} value={completionText} outputLog={props.outputLog} outputLogRevision={props.outputLogRevision} meta={outputMeta} />}
         </div>
       </Card>
     </div>
@@ -2687,21 +2725,26 @@ const OutputPanelTitle = memo(function OutputPanelTitle({
   </div>;
 });
 
-const CompletionViewer = memo(function CompletionViewer({ value, fullValue, tail, meta }: { value: string; fullValue: string; tail: boolean; meta?: any }) {
+const CompletionViewer = memo(function CompletionViewer({ value, outputLog, outputLogRevision, meta }: { value: string; outputLog: OutputLog | null; outputLogRevision: number; meta?: any }) {
   const [mode, setMode] = useState<'log' | 'json' | 'markdown' | 'raw'>('log');
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [wrap, setWrap] = useState(true);
-  const canParseJson = !tail && value.length <= maxJsonParseChars;
+  const virtual = !!outputLog;
+  const canParseJson = !virtual && value.length <= maxJsonParseChars;
   const parsed = useMemo(() => canParseJson ? parseJsonOutput(value) : { ok: false, formatted: value }, [canParseJson, value]);
   const display = mode === 'json' && parsed.ok ? parsed.formatted : value;
-  const renderLimited = display.length > maxInlineRenderChars;
+  const renderLimited = !virtual && display.length > maxInlineRenderChars;
   const renderDisplay = renderLimited
     ? `${display.slice(0, maxInlineRenderChars)}\n\n[输出过大，界面仅渲染前 ${formatBytes(maxInlineRenderChars)}；完整输出已加载，可用“拷贝”获取。]`
     : display;
   const outputType = String(meta?.output_type ?? meta?.outputType ?? meta?.stream_id ?? '').toLowerCase();
-  const markdownHint = useMemo(() => !tail && (outputType === 'markdown' || looksLikeMarkdown(value)), [outputType, tail, value]);
-  const matches = useMemo(() => deferredQuery ? countMatches(renderDisplay, deferredQuery) : 0, [renderDisplay, deferredQuery]);
+  const markdownHint = useMemo(() => !virtual && (outputType === 'markdown' || looksLikeMarkdown(value)), [outputType, value, virtual]);
+  const matches = useMemo(() => virtual && outputLog
+    ? deferredQuery
+      ? outputLog.lines.reduce((count, line) => count + (line.toLowerCase().includes(deferredQuery.toLowerCase()) ? 1 : 0), 0)
+      : 0
+    : deferredQuery ? countMatches(renderDisplay, deferredQuery) : 0, [deferredQuery, outputLog, outputLogRevision, renderDisplay, virtual]);
   return <div className="completion-viewer">
     <Flex className="completion-toolbar" justify="space-between" align="center" gap={8}>
       <Space size={8}>
@@ -2711,24 +2754,26 @@ const CompletionViewer = memo(function CompletionViewer({ value, fullValue, tail
           onChange={next => setMode(next as 'log' | 'json' | 'markdown' | 'raw')}
           options={[
             { label: '日志', value: 'log' },
-            { label: 'JSON', value: 'json', disabled: !parsed.ok },
-            { label: 'Markdown', value: 'markdown' },
+            { label: 'JSON', value: 'json', disabled: virtual || !parsed.ok },
+            { label: 'Markdown', value: 'markdown', disabled: virtual },
             { label: '原始', value: 'raw' }
           ]}
         />
         {parsed.ok && <Tag color="blue">JSON</Tag>}
-        {tail && <Tag color="cyan">Tail</Tag>}
+        {virtual && <Tag color="cyan">完整日志</Tag>}
         {renderLimited && <Tag color="gold">已加载完整输出，渲染前 {formatBytes(maxInlineRenderChars)}</Tag>}
         {markdownHint && <Tag color="purple">Markdown</Tag>}
         {deferredQuery && <Tag color={matches > 0 ? 'green' : 'red'}>{matches} 匹配</Tag>}
       </Space>
       <Space size={8}>
         <OutputSearch value={query} onCommit={setQuery} />
-        <Button size="small" onClick={() => setWrap(next => !next)}>{wrap ? '不换行' : '自动换行'}</Button>
-        <Button size="small" onClick={() => navigator.clipboard?.writeText(fullValue || display)}>拷贝</Button>
+        {!virtual && <Button size="small" onClick={() => setWrap(next => !next)}>{wrap ? '不换行' : '自动换行'}</Button>}
+        <Button size="small" onClick={() => navigator.clipboard?.writeText(outputLog ? outputLogText(outputLog) : display)}>拷贝</Button>
       </Space>
     </Flex>
-    {mode === 'markdown'
+    {virtual && outputLog
+      ? <VirtualLineOutput log={outputLog} revision={outputLogRevision} query={deferredQuery} />
+      : mode === 'markdown'
       ? renderDisplay
         ? <div className="task-output markdown-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(renderDisplay) }} />
         : <Empty className="output-empty" image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无命令输出" />
@@ -2739,6 +2784,79 @@ const CompletionViewer = memo(function CompletionViewer({ value, fullValue, tail
           wrap={wrap}
           json={mode === 'json' && parsed.ok}
         />}
+  </div>;
+});
+
+const VirtualLineOutput = memo(function VirtualLineOutput({ log, revision, query }: { log: OutputLog; revision: number; query: string }) {
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+  const [scrollTop, setScrollTop] = useState(0);
+  const lineIndexes = useMemo(() => {
+    if (!query) return null;
+    const needle = query.toLowerCase();
+    return log.lines.reduce<number[]>((matches, line, index) => {
+      if (line.toLowerCase().includes(needle)) matches.push(index);
+      return matches;
+    }, []);
+  }, [log, query, revision]);
+  const rowCount = lineIndexes ? lineIndexes.length : log.lines.length;
+  const lineNumberWidth = Math.max(2, String(log.lines.length || 1).length);
+  const start = Math.max(0, Math.floor(scrollTop / virtualOutputLineHeight) - virtualOutputOverscan);
+  const end = Math.min(rowCount, Math.ceil((scrollTop + 640) / virtualOutputLineHeight) + virtualOutputOverscan);
+
+  useLayoutEffect(() => {
+    if (!stickToBottomRef.current) return;
+    const viewport = viewportRef.current;
+    if (viewport) {
+      const nextScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+      viewport.scrollTop = nextScrollTop;
+      setScrollTop(current => current === nextScrollTop ? current : nextScrollTop);
+    }
+    let innerFrame: number | null = null;
+    const frame = window.requestAnimationFrame(() => {
+      innerFrame = window.requestAnimationFrame(() => {
+        const currentViewport = viewportRef.current;
+        if (currentViewport && stickToBottomRef.current) {
+          const nextScrollTop = Math.max(0, currentViewport.scrollHeight - currentViewport.clientHeight);
+          currentViewport.scrollTop = nextScrollTop;
+          setScrollTop(current => current === nextScrollTop ? current : nextScrollTop);
+        }
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (innerFrame !== null) window.cancelAnimationFrame(innerFrame);
+    };
+  }, [revision, rowCount]);
+
+  if (!rowCount) {
+    return <Empty className="output-empty" image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无命令输出" />;
+  }
+
+  return <div
+    ref={viewportRef}
+    className="task-output output-lines output-nowrap output-virtual"
+    style={{ '--line-number-width': `${lineNumberWidth}ch` } as React.CSSProperties}
+    onScroll={event => {
+      const viewport = event.currentTarget;
+      stickToBottomRef.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 40;
+      setScrollTop(viewport.scrollTop);
+    }}
+  >
+    <div style={{ height: rowCount * virtualOutputLineHeight, position: 'relative' }}>
+      <div style={{ left: 0, position: 'absolute', right: 0, top: start * virtualOutputLineHeight }}>
+        {Array.from({ length: end - start }, (_, offset) => {
+          const rowIndex = start + offset;
+          const lineIndex = lineIndexes ? lineIndexes[rowIndex] : rowIndex;
+          const line = log.lines[lineIndex] || '';
+          const normalized = stripAnsi(line);
+          return <div className={`output-line ${logLevelClass(normalized)}`} key={`${lineIndex}-${line.length}`} style={{ height: virtualOutputLineHeight }}>
+            <span className="output-line-number">{lineIndex + 1}</span>
+            <span className="output-line-content" dangerouslySetInnerHTML={{ __html: highlightSearch(escapeHtml(normalized), query) }} />
+          </div>;
+        })}
+      </div>
+    </div>
   </div>;
 });
 
