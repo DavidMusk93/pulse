@@ -829,11 +829,71 @@ class CoordinatorHttpServerTest {
             JsonNode postBody = mapper.readTree(routedPost.body());
             assertEquals("agent-routed", postBody.get("agent_id").asText());
             assertEquals("analyze_block_layout_dry_run", postBody.get("execution_queue").get(0).get("task_type").asText());
-
             HttpResponse<String> routedGet = get("/api/agents/agent-routed/tasks");
             assertEquals(200, routedGet.statusCode());
             JsonNode getBody = mapper.readTree(routedGet.body());
             assertEquals("analyze_block_layout_dry_run", getBody.get("execution_queue").get(0).get("task_type").asText());
+
+            PulseMessage routedCommand = ownerService.handleHeartbeat(new HeartbeatRequest(
+                    null,
+                    "agent-routed",
+                    1L,
+                    10L,
+                    15_000L,
+                    List.of(),
+                    List.of())).messages().stream()
+                    .filter(message -> "cmd.task_execute".equals(message.type()))
+                    .findFirst()
+                    .orElseThrow();
+            String routedOutput = "full output owned by coordinator-owner";
+            ownerService.handleHeartbeat(new HeartbeatRequest(
+                    null,
+                    "agent-routed",
+                    1L,
+                    11L,
+                    15_000L,
+                    List.of(
+                            new PulseMessage(
+                                    "state-agent-routed-11",
+                                    "state.heartbeat",
+                                    1,
+                                    null,
+                                    null,
+                                    Map.of("host", "owner-host")),
+                            new PulseMessage(
+                                    "result-agent-routed-11",
+                                    "reply.task_result",
+                                    1,
+                                    routedCommand.messageId(),
+                                    null,
+                                    Map.ofEntries(
+                                            Map.entry("task_id", routedCommand.payload().get("task_id")),
+                                            Map.entry("trace_id", routedCommand.payload().get("trace_id")),
+                                            Map.entry("task_type", "analyze_block_layout_dry_run"),
+                                            Map.entry("status", "completed"),
+                                            Map.entry("exit_code", 0),
+                                            Map.entry("started_at_ms", 1_710_000_000_000L),
+                                            Map.entry("finished_at_ms", 1_710_000_000_001L),
+                                            Map.entry("duration_ms", 1),
+                                            Map.entry("output", routedOutput),
+                                            Map.entry("output_type", "text"),
+                                            Map.entry("output_encoding", "identity"),
+                                            Map.entry("output_sha256", TaskOutputCodec.sha256(routedOutput)),
+                                            Map.entry("output_bytes", routedOutput.getBytes(java.nio.charset.StandardCharsets.UTF_8).length),
+                                            Map.entry("output_chunked", false),
+                                            Map.entry("output_chunk_count", 0),
+                                            Map.entry("runner_error", "")))),
+                    List.of()));
+
+            String routedTaskId = postBody.get("execution_queue").get(0).get("task_id").asText();
+            HttpResponse<String> routedCompletionOutput =
+                    get("/api/agents/agent-routed/tasks/completions/" + routedTaskId + "/output");
+            assertEquals(200, routedCompletionOutput.statusCode());
+            JsonNode routedCompletionBody = mapper.readTree(routedCompletionOutput.body());
+            assertTrue(routedCompletionBody.get("output_inline").asBoolean());
+            assertEquals(routedOutput, routedCompletionBody.get("output").asText());
+            assertEquals(routedOutput, readCompletionOutputStream(
+                    routedCompletionBody.get("output_stream_url").asText()));
 
             String content = "hello routed file";
             String encoded = Base64.getEncoder().encodeToString(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));

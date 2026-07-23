@@ -220,29 +220,29 @@ public class CoordinatorHttpServer {
                 }
             }
             Optional<TaskCompletionAction> completionAction = completionAction(path);
-            // All completion actions (output, output_stream, keep, pop) operate on the
-            // coordinator-local completion queue populated by agent heartbeats.
-            // Proxying them to another coordinator is meaningless — the target
-            // coordinator does not hold this agent's completion data.
-            if ("GET".equals(method) && completionAction.isPresent() && "output_stream".equals(completionAction.get().action())) {
+            if (completionAction.isPresent()) {
                 TaskCompletionAction action = completionAction.get();
-                writeTaskCompletionOutputStream(exchange, action.agentId(), action.taskId());
-                return;
-            }
-            if ("GET".equals(method) && completionAction.isPresent() && "output".equals(completionAction.get().action())) {
-                TaskCompletionAction action = completionAction.get();
-                writeTaskCompletionOutputJson(exchange, action.agentId(), action.taskId());
-                return;
-            }
-            if ("POST".equals(method) && completionAction.isPresent()) {
-                TaskCompletionAction action = completionAction.get();
-                if ("keep".equals(action.action())) {
-                    writeJson(exchange, 200, taskSnapshotView(service.keepCompletion(action.agentId(), action.taskId())));
+                boolean streamResponse = "output_stream".equals(action.action());
+                if (proxyTaskRequestIfNeeded(exchange, action.agentId(), null, streamResponse)) {
                     return;
                 }
-                if ("pop".equals(action.action())) {
-                    writeJson(exchange, 200, taskSnapshotView(service.popCompletion(action.agentId(), action.taskId())));
+                if ("GET".equals(method) && "output_stream".equals(action.action())) {
+                    writeTaskCompletionOutputStream(exchange, action.agentId(), action.taskId());
                     return;
+                }
+                if ("GET".equals(method) && "output".equals(action.action())) {
+                    writeTaskCompletionOutputJson(exchange, action.agentId(), action.taskId());
+                    return;
+                }
+                if ("POST".equals(method)) {
+                    if ("keep".equals(action.action())) {
+                        writeJson(exchange, 200, taskSnapshotView(service.keepCompletion(action.agentId(), action.taskId())));
+                        return;
+                    }
+                    if ("pop".equals(action.action())) {
+                        writeJson(exchange, 200, taskSnapshotView(service.popCompletion(action.agentId(), action.taskId())));
+                        return;
+                    }
                 }
             }
             if ("GET".equals(method) && ("/".equals(path) || "/hosts".equals(path))) {
