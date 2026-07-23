@@ -110,6 +110,7 @@ const maxJsonParseChars = 2 * 1024 * 1024;
 const virtualOutputLineHeight = 20;
 const virtualOutputOverscan = 12;
 const outputPrefixProbeChars = 256;
+const virtualOutputCharWidth = 7.2;
 const palette = [205, 188, 168, 146, 126, 95, 48, 215, 200, 178];
 const loadWindows = new Map<string, { windowStart: number; displayAvg: number; sampledAtMs: number }>();
 const clusterCollapseStorageKey = 'pulse.cluster-collapse.v1';
@@ -2730,6 +2731,7 @@ const CompletionViewer = memo(function CompletionViewer({ value, outputLog, outp
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [wrap, setWrap] = useState(true);
+  const [formattedVirtualLog, setFormattedVirtualLog] = useState<OutputLog | null>(null);
   const virtual = !!outputLog;
   const canParseJson = !virtual && value.length <= maxJsonParseChars;
   const parsed = useMemo(() => canParseJson ? parseJsonOutput(value) : { ok: false, formatted: value }, [canParseJson, value]);
@@ -2740,11 +2742,39 @@ const CompletionViewer = memo(function CompletionViewer({ value, outputLog, outp
     : display;
   const outputType = String(meta?.output_type ?? meta?.outputType ?? meta?.stream_id ?? '').toLowerCase();
   const markdownHint = useMemo(() => !virtual && (outputType === 'markdown' || looksLikeMarkdown(value)), [outputType, value, virtual]);
-  const matches = useMemo(() => virtual && outputLog
+  const virtualDisplayLog = mode === 'json' && formattedVirtualLog ? formattedVirtualLog : outputLog;
+  const matches = useMemo(() => virtual && virtualDisplayLog
     ? deferredQuery
-      ? outputLog.lines.reduce((count, line) => count + (line.toLowerCase().includes(deferredQuery.toLowerCase()) ? 1 : 0), 0)
+      ? virtualDisplayLog.lines.reduce((count, line) => count + (line.toLowerCase().includes(deferredQuery.toLowerCase()) ? 1 : 0), 0)
       : 0
-    : deferredQuery ? countMatches(renderDisplay, deferredQuery) : 0, [deferredQuery, outputLog, outputLogRevision, renderDisplay, virtual]);
+    : deferredQuery ? countMatches(renderDisplay, deferredQuery) : 0, [deferredQuery, outputLogRevision, renderDisplay, virtual, virtualDisplayLog]);
+  const canFormatJson = virtual
+    ? !!outputLog?.fullText
+    : parsed.ok;
+  useEffect(() => {
+    setFormattedVirtualLog(null);
+  }, [outputLog?.key]);
+  function formatOutput() {
+    if (!virtual) {
+      if (parsed.ok) setMode('json');
+      return;
+    }
+    if (!outputLog?.fullText) return;
+    const formatted = parseJsonOutput(outputLogText(outputLog));
+    if (!formatted.ok) {
+      message.warning({ content: '当前输出不是可格式化的 JSON', key: 'task-output-format', duration: 1.8 });
+      return;
+    }
+    setFormattedVirtualLog({
+      key: `${outputLog.key}:formatted`,
+      lines: outputLines(formatted.formatted),
+      sourceText: formatted.formatted,
+      sourceLength: formatted.formatted.length,
+      chunks: [],
+      fullText: formatted.formatted
+    });
+    setMode('json');
+  }
   return <div className="completion-viewer">
     <Flex className="completion-toolbar" justify="space-between" align="center" gap={8}>
       <Space size={8}>
@@ -2761,18 +2791,20 @@ const CompletionViewer = memo(function CompletionViewer({ value, outputLog, outp
         />
         {parsed.ok && <Tag color="blue">JSON</Tag>}
         {virtual && <Tag color="cyan">完整日志</Tag>}
+        {formattedVirtualLog && <Tag color="purple">已格式化</Tag>}
         {renderLimited && <Tag color="gold">已加载完整输出，渲染前 {formatBytes(maxInlineRenderChars)}</Tag>}
         {markdownHint && <Tag color="purple">Markdown</Tag>}
         {deferredQuery && <Tag color={matches > 0 ? 'green' : 'red'}>{matches} 匹配</Tag>}
       </Space>
       <Space size={8}>
         <OutputSearch value={query} onCommit={setQuery} />
-        {!virtual && <Button size="small" onClick={() => setWrap(next => !next)}>{wrap ? '不换行' : '自动换行'}</Button>}
+        <Button size="small" disabled={!canFormatJson} onClick={formatOutput}>一键格式化</Button>
+        <Button size="small" onClick={() => setWrap(next => !next)}>{wrap ? '不换行' : '自动换行'}</Button>
         <Button size="small" onClick={() => navigator.clipboard?.writeText(outputLog ? outputLogText(outputLog) : display)}>拷贝</Button>
       </Space>
     </Flex>
-    {virtual && outputLog
-      ? <VirtualLineOutput log={outputLog} revision={outputLogRevision} query={deferredQuery} />
+    {virtual && virtualDisplayLog
+      ? <VirtualLineOutput log={virtualDisplayLog} revision={outputLogRevision} query={deferredQuery} wrap={wrap} />
       : mode === 'markdown'
       ? renderDisplay
         ? <div className="task-output markdown-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(renderDisplay) }} />
@@ -2787,10 +2819,11 @@ const CompletionViewer = memo(function CompletionViewer({ value, outputLog, outp
   </div>;
 });
 
-const VirtualLineOutput = memo(function VirtualLineOutput({ log, revision, query }: { log: OutputLog; revision: number; query: string }) {
+const VirtualLineOutput = memo(function VirtualLineOutput({ log, revision, query, wrap }: { log: OutputLog; revision: number; query: string; wrap: boolean }) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
   const [scrollTop, setScrollTop] = useState(0);
+  const [viewportWidth, setViewportWidth] = useState(0);
   const lineIndexes = useMemo(() => {
     if (!query) return null;
     const needle = query.toLowerCase();
@@ -2801,24 +2834,69 @@ const VirtualLineOutput = memo(function VirtualLineOutput({ log, revision, query
   }, [log, query, revision]);
   const rowCount = lineIndexes ? lineIndexes.length : log.lines.length;
   const lineNumberWidth = Math.max(2, String(log.lines.length || 1).length);
-  const start = Math.max(0, Math.floor(scrollTop / virtualOutputLineHeight) - virtualOutputOverscan);
-  const end = Math.min(rowCount, Math.ceil((scrollTop + 640) / virtualOutputLineHeight) + virtualOutputOverscan);
+  const indexedLines = useMemo(
+    () => lineIndexes || log.lines.map((_, index) => index),
+    [lineIndexes, log, revision]
+  );
+  const charsPerLine = Math.max(
+    1,
+    Math.floor((Math.max(240, viewportWidth) - lineNumberWidth * virtualOutputCharWidth - 46) / virtualOutputCharWidth)
+  );
+  const rowHeights = useMemo(() => {
+    if (!wrap) return null;
+    return indexedLines.map(lineIndex => {
+      const length = stripAnsi(log.lines[lineIndex] || '').length;
+      return Math.max(1, Math.ceil(Math.max(1, length) / charsPerLine)) * virtualOutputLineHeight;
+    });
+  }, [charsPerLine, indexedLines, log, revision, wrap]);
+  const rowOffsets = useMemo(() => {
+    if (!rowHeights) return null;
+    const offsets = [0];
+    rowHeights.forEach(height => offsets.push(offsets[offsets.length - 1] + height));
+    return offsets;
+  }, [rowHeights]);
+  const totalHeight = rowOffsets ? rowOffsets[rowOffsets.length - 1] : rowCount * virtualOutputLineHeight;
+  const rowAtOffset = (offset: number) => {
+    if (!rowOffsets) return Math.max(0, Math.min(rowCount - 1, Math.floor(offset / virtualOutputLineHeight)));
+    let low = 0;
+    let high = rowCount;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (rowOffsets[middle + 1] <= offset) low = middle + 1;
+      else high = middle;
+    }
+    return Math.min(rowCount - 1, low);
+  };
+  const firstVisible = rowAtOffset(scrollTop);
+  const lastVisible = rowAtOffset(scrollTop + 640);
+  const start = Math.max(0, firstVisible - virtualOutputOverscan);
+  const end = Math.min(rowCount, lastVisible + virtualOutputOverscan + 1);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const updateWidth = () => setViewportWidth(viewport.clientWidth);
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, []);
 
   useLayoutEffect(() => {
     if (!stickToBottomRef.current) return;
-    const viewport = viewportRef.current;
-    if (viewport) {
-      const nextScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
-      viewport.scrollTop = nextScrollTop;
+    const currentViewport = viewportRef.current;
+    if (currentViewport) {
+      const nextScrollTop = Math.max(0, currentViewport.scrollHeight - currentViewport.clientHeight);
+      currentViewport.scrollTop = nextScrollTop;
       setScrollTop(current => current === nextScrollTop ? current : nextScrollTop);
     }
     let innerFrame: number | null = null;
     const frame = window.requestAnimationFrame(() => {
       innerFrame = window.requestAnimationFrame(() => {
-        const currentViewport = viewportRef.current;
-        if (currentViewport && stickToBottomRef.current) {
-          const nextScrollTop = Math.max(0, currentViewport.scrollHeight - currentViewport.clientHeight);
-          currentViewport.scrollTop = nextScrollTop;
+        const nextViewport = viewportRef.current;
+        if (nextViewport && stickToBottomRef.current) {
+          const nextScrollTop = Math.max(0, nextViewport.scrollHeight - nextViewport.clientHeight);
+          nextViewport.scrollTop = nextScrollTop;
           setScrollTop(current => current === nextScrollTop ? current : nextScrollTop);
         }
       });
@@ -2827,7 +2905,7 @@ const VirtualLineOutput = memo(function VirtualLineOutput({ log, revision, query
       window.cancelAnimationFrame(frame);
       if (innerFrame !== null) window.cancelAnimationFrame(innerFrame);
     };
-  }, [revision, rowCount]);
+  }, [revision, rowCount, totalHeight, wrap]);
 
   if (!rowCount) {
     return <Empty className="output-empty" image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无命令输出" />;
@@ -2835,7 +2913,7 @@ const VirtualLineOutput = memo(function VirtualLineOutput({ log, revision, query
 
   return <div
     ref={viewportRef}
-    className="task-output output-lines output-nowrap output-virtual"
+    className={`task-output output-lines ${wrap ? 'output-wrap' : 'output-nowrap'} output-virtual`}
     style={{ '--line-number-width': `${lineNumberWidth}ch` } as React.CSSProperties}
     onScroll={event => {
       const viewport = event.currentTarget;
@@ -2843,14 +2921,15 @@ const VirtualLineOutput = memo(function VirtualLineOutput({ log, revision, query
       setScrollTop(viewport.scrollTop);
     }}
   >
-    <div style={{ height: rowCount * virtualOutputLineHeight, position: 'relative' }}>
-      <div style={{ left: 0, position: 'absolute', right: 0, top: start * virtualOutputLineHeight }}>
+    <div style={{ height: totalHeight, position: 'relative' }}>
+      <div style={{ left: 0, position: 'absolute', right: 0, top: rowOffsets ? rowOffsets[start] : start * virtualOutputLineHeight }}>
         {Array.from({ length: end - start }, (_, offset) => {
           const rowIndex = start + offset;
-          const lineIndex = lineIndexes ? lineIndexes[rowIndex] : rowIndex;
+          const lineIndex = indexedLines[rowIndex];
           const line = log.lines[lineIndex] || '';
           const normalized = stripAnsi(line);
-          return <div className={`output-line ${logLevelClass(normalized)}`} key={`${lineIndex}-${line.length}`} style={{ height: virtualOutputLineHeight }}>
+          const height = rowHeights ? rowHeights[rowIndex] : virtualOutputLineHeight;
+          return <div className={`output-line ${logLevelClass(normalized)}`} key={`${lineIndex}-${line.length}`} style={{ height }}>
             <span className="output-line-number">{lineIndex + 1}</span>
             <span className="output-line-content" dangerouslySetInnerHTML={{ __html: highlightSearch(escapeHtml(normalized), query) }} />
           </div>;
