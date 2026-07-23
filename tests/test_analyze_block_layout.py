@@ -2,6 +2,9 @@ import datetime as dt
 import importlib.util
 import json
 import os
+import shutil
+import tempfile
+import time
 import unittest
 
 
@@ -45,6 +48,30 @@ def epoch(value):
 
 
 class AnalyzeBlockLayoutTest(unittest.TestCase):
+    def make_untracked_block_path(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        tide_home = os.path.join(root, "tide")
+        disk_path = os.path.join(tide_home, "node0", "disk01")
+        block_path = os.path.join(
+            disk_path,
+            "tenant",
+            "table",
+            "3_2026-07-23_05:00:00_2_2_0",
+        )
+        os.makedirs(block_path)
+        with open(os.path.join(block_path, "data"), "w") as output:
+            output.write("x")
+        return tide_home, disk_path, block_path
+
+    def set_tree_mtime(self, path, mtime):
+        for root, dirs, files in os.walk(path, topdown=False):
+            for name in files:
+                os.utime(os.path.join(root, name), (mtime, mtime))
+            for name in dirs:
+                os.utime(os.path.join(root, name), (mtime, mtime))
+            os.utime(root, (mtime, mtime))
+
     def test_compact_json_keeps_small_objects_on_one_line(self):
         value = {
             "blocks": 2158,
@@ -141,6 +168,70 @@ class AnalyzeBlockLayoutTest(unittest.TestCase):
         file_items = MODULE.file_delete_items(plan, "/opt/tiger/tide")
         self.assertEqual(1, len(file_items))
         self.assertEqual("future_partition", file_items[0]["type"])
+
+    def test_untracked_path_recent_mtime_skips_delete(self):
+        _tide_home, disk_path, block_path = self.make_untracked_block_path()
+        item = {
+            "type": "untracked_path",
+            "path": block_path,
+            "disk_path": disk_path,
+            "size": "1 B",
+            "untracked_min_age_seconds": 3600,
+        }
+
+        result = MODULE.remove_one_file_item(item, False)
+
+        self.assertEqual("skipped_recent", result["status"])
+        self.assertTrue(os.path.isdir(block_path))
+        self.assertLess(result["latest_mtime_age_seconds"], 3600)
+
+    def test_untracked_path_old_mtime_allows_delete(self):
+        _tide_home, disk_path, block_path = self.make_untracked_block_path()
+        self.set_tree_mtime(block_path, time.time() - 7200)
+        item = {
+            "type": "untracked_path",
+            "path": block_path,
+            "disk_path": disk_path,
+            "size": "1 B",
+            "untracked_min_age_seconds": 3600,
+        }
+
+        result = MODULE.remove_one_file_item(item, False)
+
+        self.assertEqual("removed", result["status"])
+        self.assertFalse(os.path.exists(block_path))
+
+    def test_recent_mtime_guard_only_applies_to_untracked_path(self):
+        _tide_home, disk_path, block_path = self.make_untracked_block_path()
+        item = {
+            "type": "ttl_expired",
+            "path": block_path,
+            "disk_path": disk_path,
+            "size": "1 B",
+        }
+
+        result = MODULE.remove_one_file_item(item, False)
+
+        self.assertEqual("removed", result["status"])
+        self.assertFalse(os.path.exists(block_path))
+
+    def test_untracked_path_plan_exposes_recent_mtime_guard(self):
+        now = epoch("2026-07-21")
+        item = MODULE.UntrackedPath(
+            "/opt/tiger/tide/node0/disk01/tenant/table/3_2026-07-23_05:00:00_2_2_0",
+            "/opt/tiger/tide/node0/disk01",
+            1,
+            now - 60,
+        )
+        plan = MODULE.classify_cleanup([], [item])
+
+        summary = MODULE.plan_summary(plan, now, 3600)
+        file_items = MODULE.file_delete_items(plan, "/opt/tiger/tide", 3600)
+
+        self.assertEqual(1, summary["untracked_path"]["recent_path_count_at_scan"])
+        self.assertEqual(3600, summary["untracked_path"]["delete_min_age_seconds"])
+        self.assertEqual(3600, file_items[0]["untracked_min_age_seconds"])
+        self.assertEqual(now - 60, file_items[0]["latest_mtime"])
 
     def test_record_json_exposes_future_partition_ahead(self):
         record = Record(epoch("2032-12-07"), 200, 30 * 86400, future_partition=True)

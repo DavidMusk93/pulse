@@ -37,6 +37,7 @@ DEFAULT_TOP = 50
 DEFAULT_SAMPLE_LIMIT = 20
 MAX_DELETE_WORKERS = 32
 DELETE_DISK_QUANTUM = 8
+DEFAULT_UNTRACKED_MIN_AGE_SECONDS = 3600
 SECONDS_PER_DAY = 86400.0
 COMPACT_JSON_MAX_ITEMS = 6
 COMPACT_JSON_MAX_CHARS = 180
@@ -66,10 +67,11 @@ class BlockRecord(object):
 
 
 class UntrackedPath(object):
-    def __init__(self, path, disk_path, data_size):
+    def __init__(self, path, disk_path, data_size, latest_mtime=None):
         self.path = path
         self.disk_path = disk_path
         self.data_size = data_size
+        self.latest_mtime = latest_mtime
 
 
 def utc_now_epoch():
@@ -332,21 +334,58 @@ def is_safe_path_under_disk(path, disk_path, tide_home):
     return True
 
 
-def path_size(path):
+def safe_path_mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
+
+
+def newer_mtime(current, candidate):
+    if candidate is None:
+        return current
+    if current is None or candidate > current:
+        return candidate
+    return current
+
+
+def path_latest_mtime(path):
+    latest_mtime = safe_path_mtime(path)
+    if os.path.isfile(path) or os.path.islink(path):
+        return latest_mtime
+    for root, dirs, files in os.walk(path):
+        latest_mtime = newer_mtime(latest_mtime, safe_path_mtime(root))
+        for name in dirs:
+            latest_mtime = newer_mtime(latest_mtime, safe_path_mtime(os.path.join(root, name)))
+        for name in files:
+            latest_mtime = newer_mtime(latest_mtime, safe_path_mtime(os.path.join(root, name)))
+    return latest_mtime
+
+
+def path_size_and_latest_mtime(path):
+    latest_mtime = safe_path_mtime(path)
     if os.path.isfile(path) or os.path.islink(path):
         try:
-            return os.path.getsize(path)
+            return os.path.getsize(path), latest_mtime
         except OSError:
-            return 0
+            return 0, latest_mtime
     total = 0
-    for root, _dirs, files in os.walk(path):
+    for root, dirs, files in os.walk(path):
+        latest_mtime = newer_mtime(latest_mtime, safe_path_mtime(root))
+        for name in dirs:
+            latest_mtime = newer_mtime(latest_mtime, safe_path_mtime(os.path.join(root, name)))
         for name in files:
             file_path = os.path.join(root, name)
             try:
                 total += os.path.getsize(file_path)
             except OSError:
                 pass
-    return total
+            latest_mtime = newer_mtime(latest_mtime, safe_path_mtime(file_path))
+    return total, latest_mtime
+
+
+def path_size(path):
+    return path_size_and_latest_mtime(path)[0]
 
 
 def discover_block_table_paths_for_disk(disk_path):
@@ -391,7 +430,8 @@ def scan_disk_untracked_paths(disk_path, known_paths, tide_home, trace):
                 continue
             if not is_safe_path_under_disk(block_path, disk_path, tide_home):
                 raise RuntimeError("unsafe untracked path: {}".format(block_path))
-            results.append(UntrackedPath(block_path, disk_path, path_size(block_path)))
+            data_size, latest_mtime = path_size_and_latest_mtime(block_path)
+            results.append(UntrackedPath(block_path, disk_path, data_size, latest_mtime))
     log_trace_event(trace, "scan_untracked_paths", "task_done", {"disk_path": disk_path, "untracked_path_count": len(results), "duration_seconds": round(time.time() - started, 3)})
     return results
 
@@ -690,6 +730,8 @@ def untracked_to_json(item):
     return OrderedDict([
         ("data_size", format_bytes(item.data_size)),
         ("data_size_bytes", item.data_size),
+        ("latest_mtime", item.latest_mtime),
+        ("latest_mtime_description", epoch_description(item.latest_mtime)),
         ("disk_path", item.disk_path),
         ("path", item.path),
     ])
@@ -790,7 +832,7 @@ def remove_path(path):
         os.unlink(path)
 
 
-def file_delete_items(cleanup_plan, tide_home):
+def file_delete_items(cleanup_plan, tide_home, untracked_min_age_seconds=DEFAULT_UNTRACKED_MIN_AGE_SECONDS):
     items = []
     for record in cleanup_plan["ttl_expired"]:
         if not record.path_exists:
@@ -807,7 +849,15 @@ def file_delete_items(cleanup_plan, tide_home):
     for item in cleanup_plan["untracked_path"]:
         if not is_safe_path_under_disk(item.path, item.disk_path, tide_home):
             raise RuntimeError("unsafe untracked path: {}".format(item.path))
-        items.append({"type": "untracked_path", "path": item.path, "disk_path": item.disk_path, "size": format_bytes(item.data_size)})
+        items.append({
+            "type": "untracked_path",
+            "path": item.path,
+            "disk_path": item.disk_path,
+            "size": format_bytes(item.data_size),
+            "latest_mtime": item.latest_mtime,
+            "latest_mtime_description": epoch_description(item.latest_mtime),
+            "untracked_min_age_seconds": untracked_min_age_seconds,
+        })
     return sorted(items, key=lambda value: (value["disk_path"], value["path"]))
 
 
@@ -826,6 +876,31 @@ def delete_path_trace_details(item, extra=None):
 
 def public_delete_result(item):
     return dict((key, value) for key, value in item.items() if not key.startswith("_"))
+
+
+def untracked_recent_delete_guard(item, now_epoch=None):
+    if item.get("type") != "untracked_path":
+        return None
+    min_age_seconds = item.get("untracked_min_age_seconds", DEFAULT_UNTRACKED_MIN_AGE_SECONDS)
+    if min_age_seconds is None or min_age_seconds <= 0:
+        return None
+    latest_mtime = path_latest_mtime(item["path"])
+    if latest_mtime is None:
+        return None
+    now_epoch = time.time() if now_epoch is None else now_epoch
+    age_seconds = max(0.0, float(now_epoch) - float(latest_mtime))
+    guard_details = {
+        "latest_mtime": latest_mtime,
+        "latest_mtime_description": epoch_description(latest_mtime),
+        "latest_mtime_age_seconds": round(age_seconds, 3),
+        "untracked_min_age_seconds": min_age_seconds,
+        "safe_delete_after": latest_mtime + min_age_seconds,
+        "safe_delete_after_description": epoch_description(latest_mtime + min_age_seconds),
+    }
+    item.update(guard_details)
+    if age_seconds < float(min_age_seconds):
+        return guard_details
+    return None
 
 
 def disk_delete_trace_details(shard, extra=None):
@@ -855,6 +930,16 @@ def remove_one_file_item(item, trace):
                 "status": "skipped_missing",
                 "duration_seconds": duration,
             }))
+            return result
+        recent_guard = untracked_recent_delete_guard(item)
+        if recent_guard:
+            duration = round(time.time() - started, 3)
+            result.update(recent_guard)
+            result.update({"status": "skipped_recent", "duration_seconds": duration})
+            log_trace_event(trace, "delete_path", "task_done", delete_path_trace_details(item, dict(recent_guard, **{
+                "status": "skipped_recent",
+                "duration_seconds": duration,
+            })))
             return result
         remove_path(item["path"])
         duration = round(time.time() - started, 3)
@@ -1020,7 +1105,19 @@ def delete_file_items(items, trace):
     return sorted(results, key=lambda item: (item["type"], item["disk_path"], item["path"]))
 
 
-def plan_summary(cleanup_plan, now_epoch=None):
+def untracked_recent_count_at_scan(untracked_paths, now_epoch, min_age_seconds):
+    if min_age_seconds is None or min_age_seconds <= 0:
+        return 0
+    recent = 0
+    for item in untracked_paths:
+        if item.latest_mtime is None:
+            continue
+        if max(0.0, float(now_epoch) - float(item.latest_mtime)) < float(min_age_seconds):
+            recent += 1
+    return recent
+
+
+def plan_summary(cleanup_plan, now_epoch=None, untracked_min_age_seconds=DEFAULT_UNTRACKED_MIN_AGE_SECONDS):
     now_epoch = utc_now_epoch() if now_epoch is None else now_epoch
     missing = cleanup_plan["metadata_missing_path"]
     expired = cleanup_plan["ttl_expired"]
@@ -1064,6 +1161,8 @@ def plan_summary(cleanup_plan, now_epoch=None):
             "path_delete_count": len(untracked),
             "path_delete_size": format_bytes(untracked_bytes),
             "path_delete_size_bytes": untracked_bytes,
+            "recent_path_count_at_scan": untracked_recent_count_at_scan(untracked, now_epoch, untracked_min_age_seconds),
+            "delete_min_age_seconds": untracked_min_age_seconds,
         },
     }
 
@@ -1092,7 +1191,7 @@ def build_payload(args, db_paths, skipped_dbs, disk_paths, records, cleanup_plan
         "metadata_record_size": format_bytes(total_bytes),
         "metadata_record_size_bytes": total_bytes,
         "storage_retention": storage_retention_summary(records, total_bytes, args.now),
-        "cleanup": plan_summary(cleanup_plan, args.now),
+        "cleanup": plan_summary(cleanup_plan, args.now, args.untracked_min_age_seconds),
     }
     payload["phase_summaries"] = phase_summaries
     payload["cleanup_plan"] = {
@@ -1117,7 +1216,7 @@ def build_payload(args, db_paths, skipped_dbs, disk_paths, records, cleanup_plan
             {"type": "metadata_missing_path", "condition": "metadata row exists and path is missing", "action": "delete metadata only"},
             {"type": "ttl_expired", "condition": "metadata row exists, path exists, and partition_time + ttl < now", "action": "delete metadata first, then delete path"},
             {"type": "future_partition", "condition": "metadata row exists, path exists, and partition_time > now", "action": "delete metadata first, then delete path"},
-            {"type": "untracked_path", "condition": "path exists on disk but metadata row is missing", "action": "delete path only"},
+            {"type": "untracked_path", "condition": "path exists on disk but metadata row is missing", "action": "delete path only when latest mtime is older than --untracked-min-age-seconds"},
     ]
     if action_results is not None:
         payload["action_results"] = action_results
@@ -1141,6 +1240,7 @@ def parse_args(argv):
     parser.add_argument("--now", type=int, default=utc_now_epoch(), help="Override current epoch seconds")
     parser.add_argument("--top", type=int, default=DEFAULT_TOP, help="Maximum table layout entries in JSON output")
     parser.add_argument("--sample-limit", type=int, default=DEFAULT_SAMPLE_LIMIT, help="Maximum sample items per cleanup type; 0 means all")
+    parser.add_argument("--untracked-min-age-seconds", type=int, default=DEFAULT_UNTRACKED_MIN_AGE_SECONDS, help="Minimum latest mtime age before deleting untracked paths; 0 disables this guard")
     parser.add_argument("--trace", action="store_true", help="Print JSONL concurrency task traces with datetime/pid/tid/thread to stderr")
     parser.add_argument("--pretty-json", action="store_true", help="Expand every JSON object; compact small objects by default")
     return parser.parse_args(argv)
@@ -1151,6 +1251,8 @@ def validate_args(args):
         raise SystemExit("--top must be positive")
     if args.sample_limit < 0:
         raise SystemExit("--sample-limit must be zero or positive")
+    if args.untracked_min_age_seconds < 0:
+        raise SystemExit("--untracked-min-age-seconds must be zero or positive")
 
 
 def run(argv):
@@ -1162,6 +1264,7 @@ def run(argv):
         "tide_home": args.tide_home,
         "sample_limit": args.sample_limit,
         "top": args.top,
+        "untracked_min_age_seconds": args.untracked_min_age_seconds,
     })
     phase_started = time.time()
     db_paths = discover_dbs(args.tide_home, args.db)
@@ -1206,7 +1309,7 @@ def run(argv):
             "untracked_path_count": len(untracked_paths),
         })
         cleanup_plan = classify_cleanup(records, untracked_paths)
-        cleanup_summary = plan_summary(cleanup_plan, args.now)
+        cleanup_summary = plan_summary(cleanup_plan, args.now, args.untracked_min_age_seconds)
         finish_phase(phase_summaries, "classify_cleanup", phase_started, cleanup_summary)
 
         if args.dry_run:
@@ -1225,7 +1328,7 @@ def run(argv):
             finish_phase(phase_summaries, "apply_metadata", phase_started, metadata_summary)
 
             phase_started = time.time()
-            file_items = file_delete_items(cleanup_plan, args.tide_home)
+            file_items = file_delete_items(cleanup_plan, args.tide_home, args.untracked_min_age_seconds)
             emit_progress("apply_paths", "start", {"requested_paths": len(file_items)})
             file_results = delete_file_items(file_items, args.trace)
             visible_results = file_results if args.sample_limit == 0 else file_results[:args.sample_limit]
@@ -1233,6 +1336,7 @@ def run(argv):
                 "requested": len(file_items),
                 "removed": sum(1 for item in file_results if item.get("status") == "removed"),
                 "skipped_missing": sum(1 for item in file_results if item.get("status") == "skipped_missing"),
+                "skipped_recent": sum(1 for item in file_results if item.get("status") == "skipped_recent"),
                 "hidden": max(0, len(file_results) - len(visible_results)),
             }
             finish_phase(phase_summaries, "apply_paths", phase_started, path_summary)
@@ -1246,6 +1350,7 @@ def run(argv):
                     "requested": path_summary["requested"],
                     "removed": path_summary["removed"],
                     "skipped_missing": path_summary["skipped_missing"],
+                    "skipped_recent": path_summary["skipped_recent"],
                     "hidden": path_summary["hidden"],
                     "results": visible_results,
                 },
