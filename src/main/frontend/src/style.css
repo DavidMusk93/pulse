@@ -1105,6 +1105,16 @@ body {
   overflow-wrap: anywhere;
   word-break: break-all;
 }
+.cluster-exec-output-virtual {
+  height: 220px;
+  padding: 0;
+  overflow: hidden;
+}
+.cluster-exec-output-virtual .task-output {
+  height: 100%;
+  border: 0;
+  border-radius: 12px;
+}
 .cluster-run-errors {
   display: flex;
   flex-direction: column;

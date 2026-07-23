@@ -105,7 +105,6 @@ type BatchFilePutResponse = {
 };
 
 const loadAverageWindowMs = 5 * 60 * 1000;
-const maxInlineRenderChars = 1024 * 1024;
 const maxJsonParseChars = 2 * 1024 * 1024;
 const virtualOutputLineHeight = 20;
 const virtualOutputOverscan = 12;
@@ -175,6 +174,7 @@ type ClusterExecutionRow = {
   outputPreview: string;
   outputLineCount: number;
   outputPreviewLineCount: number;
+  outputFullUrl?: string;
   durationMs: number;
   durationLabel: string;
   durationKind: 'elapsed' | 'running' | 'none';
@@ -417,6 +417,7 @@ function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot, expectedTa
       outputPreview: '',
       outputLineCount: 0,
       outputPreviewLineCount: 0,
+      outputFullUrl: undefined,
       durationMs: 0,
       durationLabel: '-',
       durationKind: 'none'
@@ -433,7 +434,11 @@ function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot, expectedTa
   const item = completion || execution || file;
   const outputSource = completion || stream || item;
   const outputText = completion ? completionOutput(completion) : stream ? streamOutput(stream) : '';
-  const outputPreview = outputText ? compactOutputPreview(outputText) : { text: '', totalLines: 0, shownLines: 0 };
+  const outputLineCount = Number(outputSource?.output_lines ?? outputSource?.outputLines ?? countLines(outputText));
+  const outputFullUrl = completion
+    && (completion.output_inline === false || completion.outputInline === false)
+    ? `/api/agents/${encodeURIComponent(snapshot?.agent_id || agentId(host))}/tasks/completions/${encodeURIComponent(completion.task_id || completion.taskId)}/output`
+    : undefined;
   const rawStatus = String(item?.status || '');
   const exitCode = completion?.exit_code ?? completion?.exitCode;
   const hasFailure = ['failed', 'timeout', 'timed_out', 'rejected'].includes(rawStatus)
@@ -455,9 +460,10 @@ function clusterExecutionRow(host: HostView, snapshot?: TaskSnapshot, expectedTa
     outputBytes: Number(outputSource?.output_bytes ?? outputSource?.outputBytes ?? outputSource?.stream_bytes ?? outputSource?.streamBytes ?? 0),
     message: item?.runner_error || item?.error || item?.file_name || '-',
     outputText,
-    outputPreview: outputPreview.text,
-    outputLineCount: outputPreview.totalLines,
-    outputPreviewLineCount: outputPreview.shownLines,
+    outputPreview: outputText,
+    outputLineCount,
+    outputPreviewLineCount: outputLineCount,
+    outputFullUrl,
     durationMs: duration.ms,
     durationLabel: duration.label,
     durationKind: duration.kind
@@ -483,18 +489,6 @@ function taskDuration(item: any, status: ClusterExecutionRow['status']) {
 function numberField(item: any, snakeKey: string, camelKey: string) {
   const value = Number(item?.[snakeKey] ?? item?.[camelKey] ?? 0);
   return Number.isFinite(value) ? value : 0;
-}
-
-function compactOutputPreview(value: string) {
-  const lines = value.split('\n').map(line => line.trimEnd()).filter(Boolean);
-  const shownLines = Math.min(lines.length, 12);
-  const preview = lines.slice(-shownLines).join('\n');
-  const text = preview.length > 1800 ? `${preview.slice(0, 1800)}...` : preview;
-  return {
-    text,
-    totalLines: lines.length,
-    shownLines
-  };
 }
 
 function downloadFileName(summary: BatchSubmitSummary | null) {
@@ -2626,11 +2620,48 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
   snapshots: Record<string, TaskSnapshot>;
 }) {
   const execution = useMemo(() => clusterExecutionSummary(hosts, summary, snapshots), [hosts, summary, snapshots]);
-  const completionPercent = Math.round(execution.executionSucceeded * 100 / Math.max(1, execution.total));
+  const [fullOutputs, setFullOutputs] = useState<Record<string, string>>({});
+  const requestedOutputUrlsRef = useRef<Set<string>>(new Set());
+  const displayExecution = useMemo(() => ({
+    ...execution,
+    rows: execution.rows.map(row => {
+      const fullOutput = fullOutputs[`${agentId(row.host)}:${row.taskId}`];
+      if (fullOutput === undefined) return row;
+      const lineCount = countLines(fullOutput);
+      return {
+        ...row,
+        outputText: fullOutput,
+        outputPreview: fullOutput,
+        outputLineCount: lineCount,
+        outputPreviewLineCount: lineCount
+      };
+    })
+  }), [execution, fullOutputs]);
+  useEffect(() => {
+    let disposed = false;
+    execution.rows.forEach(row => {
+      if (!row.outputFullUrl) return;
+      const key = `${agentId(row.host)}:${row.taskId}`;
+      if (fullOutputs[key] !== undefined || requestedOutputUrlsRef.current.has(row.outputFullUrl)) return;
+      requestedOutputUrlsRef.current.add(row.outputFullUrl);
+      fetchJson<any>(row.outputFullUrl)
+        .then(result => {
+          if (disposed) return;
+          setFullOutputs(previous => ({ ...previous, [key]: completionOutput(result) }));
+        })
+        .catch(() => {
+          requestedOutputUrlsRef.current.delete(row.outputFullUrl as string);
+        });
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [execution, fullOutputs]);
+  const completionPercent = Math.round(displayExecution.executionSucceeded * 100 / Math.max(1, displayExecution.total));
   const visibleErrors = useMemo(() => execution.submitFailed ? [...new Set(summary?.errors || [])].slice(0, 5) : [], [summary, execution.submitFailed]);
   const downloadResults = useCallback(() => {
-    void saveTextFile(downloadFileName(summary), clusterExecutionText(execution, summary));
-  }, [execution, summary]);
+    void saveTextFile(downloadFileName(summary), clusterExecutionText(displayExecution, summary));
+  }, [displayExecution, summary]);
   return <div className="cluster-run-summary">
     <Flex className="cluster-summary-heading" justify="space-between" align="center" gap={12}>
       <Typography.Title level={4}>集群批量操作</Typography.Title>
@@ -2640,8 +2671,8 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
       <Space wrap>
         <Tag color="blue">{summary.kind}</Tag>
         <Tag color="default">目标 {summary.total}</Tag>
-        <Tag color="green">提交成功 {execution.submitSucceeded}</Tag>
-        <Tag color={execution.submitFailed ? 'red' : 'default'}>提交失败 {execution.submitFailed}</Tag>
+        <Tag color="green">提交成功 {displayExecution.submitSucceeded}</Tag>
+        <Tag color={displayExecution.submitFailed ? 'red' : 'default'}>提交失败 {displayExecution.submitFailed}</Tag>
       </Space>
       <Row gutter={[12, 12]} className="cluster-exec-stats">
         <Col xs={12} md={6}><Card><Statistic title="执行成功" value={execution.executionSucceeded} suffix={`/ ${execution.total}`} /></Card></Col>
@@ -2651,8 +2682,8 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
         <Col xs={12} md={6}><Card><Statistic title="平均耗时" value={execution.durationCount ? formatDuration(execution.averageDurationMs) : '-'} /></Card></Col>
         <Col xs={12} md={6}><Card><Statistic title="最长耗时" value={execution.durationCount ? formatDuration(execution.maxDurationMs) : '-'} /></Card></Col>
       </Row>
-      <Progress percent={completionPercent} status={execution.executionFailed ? 'exception' : execution.executionSucceeded === execution.total ? 'success' : 'active'} />
-      <Typography.Paragraph>{summary.failed && !execution.submitFailed ? '提交阶段曾出现临时失败，已被后续执行结果确认完成。' : summary.message}</Typography.Paragraph>
+      <Progress percent={completionPercent} status={displayExecution.executionFailed ? 'exception' : displayExecution.executionSucceeded === displayExecution.total ? 'success' : 'active'} />
+      <Typography.Paragraph>{summary.failed && !displayExecution.submitFailed ? '提交阶段曾出现临时失败，已被后续执行结果确认完成。' : summary.message}</Typography.Paragraph>
       {visibleErrors.length > 0 && <div className="cluster-run-errors">
         {visibleErrors.map((error, index) => <Typography.Text key={`${index}-${error}`} type="danger">{error}</Typography.Text>)}
       </div>}
@@ -2661,7 +2692,7 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
     <List
       size="small"
       className="cluster-exec-list"
-      dataSource={execution.rows}
+      dataSource={displayExecution.rows}
       renderItem={(row, index) => <List.Item>
         <div className="cluster-exec-row">
           <div className="cluster-exec-header">
@@ -2672,15 +2703,29 @@ const ClusterRunSummary = memo(function ClusterRunSummary({
             <Tag>exit {row.exitCode}</Tag>
             {row.durationKind !== 'none' && <Tag color={row.durationKind === 'running' ? 'blue' : 'purple'}>{row.durationKind === 'running' ? '已运行' : '耗时'} {row.durationLabel}</Tag>}
             <Typography.Text type="secondary">
-              {row.outputPreview ? `最后 ${row.outputPreviewLineCount}/${row.outputLineCount} 行 · ` : ''}{formatBytes(row.outputBytes)}
+              {row.outputText ? `${row.outputLineCount} 行 · ` : ''}{formatBytes(row.outputBytes)}
             </Typography.Text>
             {row.taskId !== '-' && <Typography.Text className="task-id-text cluster-task-id" copyable={{ text: row.taskId }}>{row.taskId}</Typography.Text>}
             {row.message !== '-' && <Typography.Text type={row.status === 'failed' ? 'danger' : 'secondary'}>{row.message}</Typography.Text>}
           </div>
-          {row.outputPreview && <pre className="cluster-exec-output">{row.outputPreview}</pre>}
+          {row.outputText && <ClusterOutputViewer row={row} />}
         </div>
       </List.Item>}
     />
+  </div>;
+});
+
+const ClusterOutputViewer = memo(function ClusterOutputViewer({ row }: { row: ClusterExecutionRow }) {
+  const log = useMemo<OutputLog>(() => ({
+    key: `${agentId(row.host)}:${row.taskId}`,
+    lines: outputLines(row.outputText),
+    sourceText: row.outputText,
+    sourceLength: row.outputText.length,
+    chunks: [],
+    fullText: row.outputText
+  }), [row.host, row.taskId, row.outputText]);
+  return <div className="cluster-exec-output cluster-exec-output-virtual">
+    <VirtualLineOutput log={log} revision={log.sourceLength} query="" wrap={false} />
   </div>;
 });
 
@@ -2736,10 +2781,7 @@ const CompletionViewer = memo(function CompletionViewer({ value, outputLog, outp
   const canParseJson = !virtual && value.length <= maxJsonParseChars;
   const parsed = useMemo(() => canParseJson ? parseJsonOutput(value) : { ok: false, formatted: value }, [canParseJson, value]);
   const display = mode === 'json' && parsed.ok ? parsed.formatted : value;
-  const renderLimited = !virtual && display.length > maxInlineRenderChars;
-  const renderDisplay = renderLimited
-    ? `${display.slice(0, maxInlineRenderChars)}\n\n[输出过大，界面仅渲染前 ${formatBytes(maxInlineRenderChars)}；完整输出已加载，可用“拷贝”获取。]`
-    : display;
+  const renderDisplay = display;
   const outputType = String(meta?.output_type ?? meta?.outputType ?? meta?.stream_id ?? '').toLowerCase();
   const markdownHint = useMemo(() => !virtual && (outputType === 'markdown' || looksLikeMarkdown(value)), [outputType, value, virtual]);
   const virtualDisplayLog = mode === 'json' && formattedVirtualLog ? formattedVirtualLog : outputLog;
@@ -2792,7 +2834,6 @@ const CompletionViewer = memo(function CompletionViewer({ value, outputLog, outp
         {parsed.ok && <Tag color="blue">JSON</Tag>}
         {virtual && <Tag color="cyan">完整日志</Tag>}
         {formattedVirtualLog && <Tag color="purple">已格式化</Tag>}
-        {renderLimited && <Tag color="gold">已加载完整输出，渲染前 {formatBytes(maxInlineRenderChars)}</Tag>}
         {markdownHint && <Tag color="purple">Markdown</Tag>}
         {deferredQuery && <Tag color={matches > 0 ? 'green' : 'red'}>{matches} 匹配</Tag>}
       </Space>
@@ -3056,8 +3097,8 @@ function AutoFitText({
 }
 
 function renderCompletion(result: any) {
-  const output = result.output || result.stdout_tail || result.stdout || '';
-  const stderr = result.stderr_tail || result.stderr || '';
+  const output = result.output || result.stdout || '';
+  const stderr = result.stderr || '';
   return [output, stderr].filter(Boolean).join('\n');
 }
 
