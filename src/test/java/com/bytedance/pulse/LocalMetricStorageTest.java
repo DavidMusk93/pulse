@@ -160,6 +160,20 @@ class LocalMetricStorageTest {
             assertEquals(1, count(statement, "tide_worker_sample"));
             assertEquals(0, count(statement, "group_leader_sample"));
             assertEquals(0, count(statement, "host_event"));
+            try (var result = statement.executeQuery("""
+                    SELECT
+                        json_extract(state_json, '$.ip') AS ip,
+                        json_extract(state_json, '$.tide_workers') AS tide_workers
+                    FROM heartbeat_sample
+                    """)) {
+                assertTrue(result.next());
+                assertEquals("fd00::1", result.getString("ip"));
+                assertEquals(null, result.getString("tide_workers"));
+            }
+            try (var result = statement.executeQuery("SELECT debug_json FROM tide_worker_sample")) {
+                assertTrue(result.next());
+                assertEquals("{}", result.getString(1));
+            }
         }
     }
 
@@ -325,6 +339,73 @@ class LocalMetricStorageTest {
             assertEquals(1_000.0, filePayloadBytes.series().get(0).points().get(0).value());
             assertEquals(2.0, fileCopyCount.series().get(0).points().get(0).value());
             assertEquals(668.0, sharedLowerBound.series().get(0).points().get(0).value());
+        }
+
+        try (var connection = DriverManager.getConnection("jdbc:sqlite:" + db.toAbsolutePath());
+                var statement = connection.createStatement();
+                var result = statement.executeQuery("""
+                        SELECT
+                            plan_mismatch,
+                            plan_lag,
+                            json_extract(debug_json, '$.leader_url') AS leader_url,
+                            json_extract(debug_json, '$.plan_mismatch') AS debug_plan_mismatch
+                        FROM group_leader_sample
+                        WHERE group_id = 'cluster-a/area-a/001'
+                        """)) {
+            assertTrue(result.next());
+            assertEquals(1, result.getLong("plan_mismatch"));
+            assertEquals(1, result.getLong("plan_lag"));
+            assertEquals("http://[fd00::1]:9977", result.getString("leader_url"));
+            assertEquals(null, result.getString("debug_plan_mismatch"));
+        }
+    }
+
+    @Test
+    void federatesLegacyGroupDebugPlanFieldsWithStructuredShards() throws Exception {
+        long observedAtMs = 1_710_000_000_000L;
+        Path legacy = tempDir.resolve("legacy.db");
+        Path current = tempDir.resolve("current.db");
+        try (LocalMetricStorage storage = LocalMetricStorage.open(legacy)) {
+            storage.writeGroupLeader(groupSample(
+                    observedAtMs, "cluster-a/area-a/legacy", "agent-legacy", "cluster-a", 1));
+        }
+        try (var connection = DriverManager.getConnection("jdbc:sqlite:" + legacy);
+                var statement = connection.createStatement()) {
+            statement.execute("""
+                    UPDATE group_leader_sample
+                    SET debug_json = json_set(
+                        debug_json,
+                        '$.plan_mismatch', plan_mismatch,
+                        '$.plan_lag', plan_lag
+                    )
+                    """);
+            statement.execute("ALTER TABLE group_leader_sample DROP COLUMN plan_lag");
+            statement.execute("ALTER TABLE group_leader_sample DROP COLUMN plan_mismatch");
+        }
+        try (LocalMetricStorage storage = LocalMetricStorage.open(current)) {
+            storage.writeGroupLeader(groupSample(
+                    observedAtMs, "cluster-a/area-a/current", "agent-current", "cluster-a", 0));
+        }
+
+        try (LocalMetricStorage storage = LocalMetricStorage.openFederated(List.of(legacy, current))) {
+            MetricQueryResult result = storage.queryRange(new MetricQuery(
+                    "group.plan_mismatch",
+                    List.of(),
+                    observedAtMs,
+                    observedAtMs,
+                    1_000,
+                    10,
+                    10,
+                    0,
+                    "cluster-a"));
+
+            assertEquals(
+                    List.of(0.0, 1.0),
+                    result.series().stream()
+                            .flatMap(series -> series.points().stream())
+                            .map(MetricPoint::value)
+                            .sorted()
+                            .toList());
         }
     }
 
@@ -549,5 +630,35 @@ class LocalMetricStorageTest {
         try (var result = statement.executeQuery("SELECT COUNT(*) FROM " + table)) {
             return result.next() ? result.getInt(1) : 0;
         }
+    }
+
+    private static GroupLeaderMetricSample groupSample(
+            long observedAtMs, String groupId, String leaderAgentId, String cluster, long planMismatch) {
+        return new GroupLeaderMetricSample(
+                observedAtMs,
+                groupId,
+                leaderAgentId,
+                "fd00::1",
+                cluster,
+                "area-a",
+                7,
+                1,
+                1,
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                "ok",
+                Map.of("leader_url", "http://[fd00::1]:9977", "plan_mismatch", planMismatch, "plan_lag", planMismatch));
     }
 }

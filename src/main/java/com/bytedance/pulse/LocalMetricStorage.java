@@ -15,6 +15,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 interface MetricStorage extends AutoCloseable {
     void writeHeartbeat(HeartbeatMetricSample sample) throws Exception;
@@ -39,6 +40,20 @@ final class LocalMetricStorage implements MetricStorage {
     private static final String HEARTBEAT_TABLE = "heartbeat_sample";
     private static final ObjectMapper MAPPER = JsonSupport.objectMapper();
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
+    private static final Set<String> HEARTBEAT_STATE_KEYS = Set.of(
+            "ip",
+            "host",
+            "cluster",
+            "area",
+            "zone",
+            "role",
+            "group",
+            "load",
+            "source_group_id",
+            "expected_group_id",
+            "expected_group_mode");
+    private static final Set<String> GROUP_DEBUG_KEYS =
+            Set.of("leader_url", "agent_plan_generation", "plan_generation_known");
 
     private final Connection connection;
 
@@ -87,7 +102,7 @@ final class LocalMetricStorage implements MetricStorage {
             createFederatedView(connection, aliases, "heartbeat_sample");
             createFederatedView(connection, aliases, "host_dimension");
             createFederatedView(connection, aliases, "tide_worker_sample");
-            createFederatedView(connection, aliases, "group_leader_sample");
+            createFederatedGroupView(connection, aliases);
             createFederatedView(connection, aliases, "host_event");
             return new LocalMetricStorage(connection, false);
         } catch (Exception exception) {
@@ -103,6 +118,49 @@ final class LocalMetricStorage implements MetricStorage {
                 .orElseThrow();
         try (Statement statement = connection.createStatement()) {
             statement.execute("CREATE TEMP VIEW " + table + " AS " + union);
+        }
+    }
+
+    private static void createFederatedGroupView(Connection connection, List<String> aliases) throws SQLException {
+        List<String> selects = new ArrayList<>();
+        for (String alias : aliases) {
+            String planColumns = hasColumn(connection, alias, "group_leader_sample", "plan_mismatch")
+                    ? "plan_mismatch, plan_lag"
+                    : """
+                    COALESCE(CAST(json_extract(debug_json, '$.plan_mismatch') AS INTEGER), 0) AS plan_mismatch,
+                    COALESCE(
+                        CAST(json_extract(debug_json, '$.plan_lag') AS INTEGER),
+                        COALESCE(CAST(json_extract(debug_json, '$.plan_mismatch') AS INTEGER), 0)
+                    ) AS plan_lag
+                    """;
+            selects.add("""
+                    SELECT
+                        bucket_ms, observed_at_ms, group_id, leader_agent_id, leader_ip, cluster, area,
+                        group_generation, member_count, submitted_agent_count, accepted_agent_count,
+                        rejected_agent_count, stale_member_count, missing_member_count, direct_fallback_count,
+                        leader_collect_ms, group_latency_ms, arrival_gap_ms,
+                        response_bytes, file_payload_bytes, file_payload_base64_bytes,
+                        file_command_copy_count, file_unique_content_count, file_shared_lower_bound_bytes,
+                        %s,
+                        status, debug_json, stored_at_ms
+                    FROM %s.group_leader_sample
+                    """.formatted(planColumns, alias));
+        }
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("CREATE TEMP VIEW group_leader_sample AS " + String.join(" UNION ALL ", selects));
+        }
+    }
+
+    private static boolean hasColumn(
+            Connection connection, String alias, String table, String expectedColumn) throws SQLException {
+        try (Statement statement = connection.createStatement();
+                ResultSet result = statement.executeQuery("PRAGMA " + alias + ".table_info(" + table + ")")) {
+            while (result.next()) {
+                if (expectedColumn.equals(result.getString("name"))) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 
@@ -166,7 +224,7 @@ final class LocalMetricStorage implements MetricStorage {
             statement.setLong(15, sample.agentSendMs());
             statement.setLong(16, sample.agentThreadCount());
             statement.setLong(17, sample.agentRssKb());
-            statement.setString(18, MAPPER.writeValueAsString(sample.state()));
+            statement.setString(18, MAPPER.writeValueAsString(persistedState(sample.state(), HEARTBEAT_STATE_KEYS)));
             statement.executeUpdate();
         }
         upsertHostDimension(sample);
@@ -183,8 +241,8 @@ final class LocalMetricStorage implements MetricStorage {
                     leader_collect_ms, group_latency_ms, arrival_gap_ms,
                     response_bytes, file_payload_bytes, file_payload_base64_bytes,
                     file_command_copy_count, file_unique_content_count, file_shared_lower_bound_bytes,
-                    status, debug_json, stored_at_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    plan_mismatch, plan_lag, status, debug_json, stored_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             int index = 1;
@@ -212,8 +270,13 @@ final class LocalMetricStorage implements MetricStorage {
             statement.setLong(index++, sample.fileCommandCopyCount());
             statement.setLong(index++, sample.fileUniqueContentCount());
             statement.setLong(index++, sample.fileSharedLowerBoundBytes());
+            long planMismatch = longValue(sample.debug().get("plan_mismatch"));
+            statement.setLong(index++, planMismatch);
+            statement.setLong(index++, sample.debug().containsKey("plan_lag")
+                    ? longValue(sample.debug().get("plan_lag"))
+                    : planMismatch);
             statement.setString(index++, sample.status());
-            statement.setString(index++, MAPPER.writeValueAsString(sample.debug()));
+            statement.setString(index++, MAPPER.writeValueAsString(persistedState(sample.debug(), GROUP_DEBUG_KEYS)));
             statement.setLong(index, System.currentTimeMillis());
             statement.executeUpdate();
         }
@@ -710,6 +773,8 @@ final class LocalMetricStorage implements MetricStorage {
                         file_command_copy_count INTEGER NOT NULL DEFAULT 0,
                         file_unique_content_count INTEGER NOT NULL DEFAULT 0,
                         file_shared_lower_bound_bytes INTEGER NOT NULL DEFAULT 0,
+                        plan_mismatch INTEGER NOT NULL DEFAULT 0,
+                        plan_lag INTEGER NOT NULL DEFAULT 0,
                         status TEXT NOT NULL,
                         debug_json TEXT,
                         stored_at_ms INTEGER NOT NULL,
@@ -722,6 +787,8 @@ final class LocalMetricStorage implements MetricStorage {
             ensureColumn(statement, "group_leader_sample", "file_command_copy_count", "INTEGER NOT NULL DEFAULT 0");
             ensureColumn(statement, "group_leader_sample", "file_unique_content_count", "INTEGER NOT NULL DEFAULT 0");
             ensureColumn(statement, "group_leader_sample", "file_shared_lower_bound_bytes", "INTEGER NOT NULL DEFAULT 0");
+            ensureColumn(statement, "group_leader_sample", "plan_mismatch", "INTEGER NOT NULL DEFAULT 0");
+            ensureColumn(statement, "group_leader_sample", "plan_lag", "INTEGER NOT NULL DEFAULT 0");
             statement.execute("CREATE INDEX IF NOT EXISTS idx_group_leader_time ON group_leader_sample(bucket_ms, observed_at_ms)");
             statement.execute("CREATE INDEX IF NOT EXISTS idx_group_leader_cluster_time ON group_leader_sample(cluster, area, bucket_ms)");
             statement.execute("CREATE INDEX IF NOT EXISTS idx_group_leader_agent_time ON group_leader_sample(leader_agent_id, observed_at_ms)");
@@ -783,7 +850,7 @@ final class LocalMetricStorage implements MetricStorage {
             statement.setLong(8, sample.observedAtMs());
             statement.setLong(9, sample.observedAtMs());
             statement.setLong(10, sample.seq());
-            statement.setString(11, MAPPER.writeValueAsString(sample.state()));
+            statement.setString(11, MAPPER.writeValueAsString(persistedState(sample.state(), HEARTBEAT_STATE_KEYS)));
             statement.executeUpdate();
         }
     }
@@ -828,7 +895,7 @@ final class LocalMetricStorage implements MetricStorage {
                 statement.setString(index++, stringValue(worker.get("mode"), ""));
                 statement.setLong(index++, longValue(worker.get("size_current")));
                 statement.setLong(index++, longValue(worker.get("size_total")));
-                statement.setString(index++, MAPPER.writeValueAsString(worker));
+                statement.setString(index++, "{}");
                 statement.setLong(index, System.currentTimeMillis());
                 statement.addBatch();
             }
@@ -841,6 +908,19 @@ final class LocalMetricStorage implements MetricStorage {
             return Map.of();
         }
         return MAPPER.readValue(json, MAP_TYPE);
+    }
+
+    private static Map<String, Object> persistedState(Map<String, Object> state, Set<String> allowedKeys) {
+        if (state == null || state.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Object> persisted = new LinkedHashMap<>();
+        for (String key : allowedKeys) {
+            if (state.containsKey(key)) {
+                persisted.put(key, state.get(key));
+            }
+        }
+        return persisted;
     }
 
     private static long bucketMs(long observedAtMs) {
@@ -1000,8 +1080,8 @@ final class LocalMetricStorage implements MetricStorage {
         GROUP_DIRECT_FALLBACK("group.direct_fallback_count", "direct_fallback_count", "count", MetricSource.GROUP_LEADER),
         GROUP_UNHEALTHY("group.status_unhealthy", "CASE WHEN status = 'ok' THEN 0 ELSE 1 END", "ratio", MetricSource.GROUP_LEADER),
         GROUP_GENERATION("group.plan_generation", "group_generation", "generation", MetricSource.GROUP_LEADER),
-        GROUP_PLAN_MISMATCH("group.plan_mismatch", "COALESCE(CAST(json_extract(debug_json, '$.plan_mismatch') AS INTEGER), 0)", "ratio", MetricSource.GROUP_LEADER),
-        GROUP_PLAN_LAG("group.plan_lag", "COALESCE(CAST(json_extract(debug_json, '$.plan_lag') AS INTEGER), COALESCE(CAST(json_extract(debug_json, '$.plan_mismatch') AS INTEGER), 0))", "ratio", MetricSource.GROUP_LEADER),
+        GROUP_PLAN_MISMATCH("group.plan_mismatch", "plan_mismatch", "ratio", MetricSource.GROUP_LEADER),
+        GROUP_PLAN_LAG("group.plan_lag", "plan_lag", "ratio", MetricSource.GROUP_LEADER),
         GROUP_COLLECT("group.leader_collect_ms", "leader_collect_ms", "ms", MetricSource.GROUP_LEADER),
         GROUP_LATENCY("group.group_latency_ms", "group_latency_ms", "ms", MetricSource.GROUP_LEADER),
         GROUP_ARRIVAL_GAP("group.arrival_gap_ms", "arrival_gap_ms", "ms", MetricSource.GROUP_LEADER),

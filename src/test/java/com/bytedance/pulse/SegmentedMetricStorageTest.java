@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.sql.Connection;
 import java.sql.DriverManager;
 import java.time.Clock;
 import java.time.Duration;
@@ -70,7 +71,7 @@ class SegmentedMetricStorageTest {
     @Test
     void retentionDeletesWholeExpiredShard() throws Exception {
         long day0 = Instant.parse("2026-08-01T00:00:00Z").toEpochMilli();
-        MutableClock clock = new MutableClock(Instant.ofEpochMilli(day0 + 2 * DAY_MS + 60_000));
+        MutableClock clock = new MutableClock(Instant.ofEpochMilli(day0));
         Path shards = tempDir.resolve("metrics-v2");
 
         try (SegmentedMetricStorage storage = SegmentedMetricStorage.open(
@@ -87,7 +88,7 @@ class SegmentedMetricStorageTest {
             storage.writeHeartbeat(sample("agent-1", day0 + DAY_MS + 1_000, 2, 20));
             storage.writeHeartbeat(sample("agent-1", day0 + 2 * DAY_MS + 1_000, 3, 30));
             assertTrue(storage.awaitIdle(Duration.ofSeconds(2)));
-            clock.advance(Duration.ofMinutes(1));
+            clock.advance(Duration.ofDays(2).plusMinutes(1));
             assertTrue(awaitCondition(() -> storage.health().maintenanceCommands() > 0, Duration.ofSeconds(2)));
 
             assertFalse(Files.exists(shards.resolve("metrics-raw-2026-08-01.db")));
@@ -161,7 +162,7 @@ class SegmentedMetricStorageTest {
             assertTrue(awaitCondition(() -> storage.health().maintenanceCommands() > 0, Duration.ofSeconds(2)));
 
             assertFalse(Files.exists(shards.resolve("metrics-raw-2026-08-01.db")));
-            assertTrue(Files.exists(shards.resolve("metrics-rollup-2026-08-01.db")));
+            assertTrue(Files.exists(shards.resolve("metrics-rollup-v2-2026-08-01.db")));
 
             MetricQueryResult result = storage.queryRange(new MetricQuery(
                     "agent.thread_count",
@@ -217,6 +218,52 @@ class SegmentedMetricStorageTest {
                         "cluster-a"));
                 assertFalse(result.series().isEmpty(), item.metric());
             }
+        }
+    }
+
+    @Test
+    void normalizedRollupUsesWithoutRowidAndQueriesAcrossGenericCutover() throws Exception {
+        long day0 = Instant.parse("2026-08-01T00:00:00Z").toEpochMilli();
+        long day1 = day0 + DAY_MS;
+        Path legacyRollup = tempDir.resolve("metrics-rollup-2026-08-01.db");
+        createGenericRollup(legacyRollup, day0, 10);
+        Files.setLastModifiedTime(legacyRollup, FileTime.fromMillis(day0 + 60_000));
+        MutableClock clock = new MutableClock(Instant.ofEpochMilli(day1 + 30_000));
+
+        try (RollupMetricStorage storage =
+                new RollupMetricStorage(tempDir, 30, 1024L * 1024 * 1024, clock)) {
+            storage.write(List.of(new RollupRecord(
+                    day1,
+                    "agent.thread_count",
+                    "agent_id=agent-1\u0000cluster=cluster-a",
+                    Map.of("agent_id", "agent-1", "cluster", "cluster-a"),
+                    20,
+                    1,
+                    Map.of())));
+
+            MetricQueryResult result = storage.query(new MetricQuery(
+                    "agent.thread_count",
+                    List.of("agent-1"),
+                    day0,
+                    day1,
+                    60_000,
+                    100));
+
+            assertEquals(List.of(10.0, 20.0),
+                    result.series().get(0).points().stream().map(MetricPoint::value).toList());
+        }
+
+        Path v2Rollup = tempDir.resolve("metrics-rollup-v2-2026-08-02.db");
+        assertTrue(Files.isRegularFile(v2Rollup));
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + v2Rollup);
+                var statement = connection.createStatement();
+                var result = statement.executeQuery(
+                        "SELECT sql FROM sqlite_master WHERE type='table' AND name='metric_rollup_1m'")) {
+            assertTrue(result.next());
+            assertTrue(result.getString(1).contains("WITHOUT ROWID"));
+            assertEquals(1, countRows(connection, "metric_catalog"));
+            assertEquals(1, countRows(connection, "metric_series"));
+            assertEquals(1, countRows(connection, "metric_rollup_1m"));
         }
     }
 
@@ -361,6 +408,44 @@ class SegmentedMetricStorageTest {
             try (var result = statement.executeQuery()) {
                 return result.next() && result.getInt(1) == 1;
             }
+        }
+    }
+
+    private static void createGenericRollup(Path db, long bucketMs, long value) throws Exception {
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + db);
+                var statement = connection.createStatement()) {
+            statement.execute("""
+                    CREATE TABLE metric_rollup_1m (
+                        bucket_ms INTEGER NOT NULL,
+                        metric TEXT NOT NULL,
+                        series_key TEXT NOT NULL,
+                        labels_json TEXT NOT NULL,
+                        value_sum REAL NOT NULL,
+                        value_count INTEGER NOT NULL,
+                        metadata_json TEXT NOT NULL,
+                        PRIMARY KEY (metric, series_key, bucket_ms)
+                    )
+                    """);
+            try (var insert = connection.prepareStatement("""
+                    INSERT INTO metric_rollup_1m (
+                        bucket_ms, metric, series_key, labels_json,
+                        value_sum, value_count, metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, 1, '{}')
+                    """)) {
+                insert.setLong(1, bucketMs);
+                insert.setString(2, "agent.thread_count");
+                insert.setString(3, "agent_id=agent-1\u0000cluster=cluster-a");
+                insert.setString(4, "{\"agent_id\":\"agent-1\",\"cluster\":\"cluster-a\"}");
+                insert.setLong(5, value);
+                insert.executeUpdate();
+            }
+        }
+    }
+
+    private static int countRows(Connection connection, String table) throws Exception {
+        try (var statement = connection.createStatement();
+                var result = statement.executeQuery("SELECT COUNT(*) FROM " + table)) {
+            return result.next() ? result.getInt(1) : 0;
         }
     }
 

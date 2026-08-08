@@ -38,8 +38,10 @@ query
   pulse-metrics.db-shm
   metrics-v2/
     legacy-cutover-ms
+    rollup-v2-cutover-ms
     metrics-raw-2026-08-09.db
-    metrics-rollup-2026-08-09.db
+    metrics-rollup-2026-08-09.db       # generic legacy rollup，只读
+    metrics-rollup-v2-2026-08-09.db    # normalized rollup，当前写入
 ```
 
 Raw 和 rollup 都使用 UTC 日期命名。
@@ -47,6 +49,9 @@ Raw 和 rollup 都使用 UTC 日期命名。
 Raw shard：
 
 - 保存完整 heartbeat、tide worker、group leader 和 host event schema；
+- heartbeat `state_json` 只保留主机状态白名单，不重复保存 `tide_workers`；
+- tide worker 已有结构化列，不再重复保存完整 `debug_json`；
+- group `plan_mismatch`、`plan_lag` 使用结构化列，`debug_json` 仅保留低频白名单；
 - 当前 shard 使用 WAL；
 - 日切后 checkpoint、TRUNCATE WAL 并关闭；
 - 新 shard 从空库创建时间索引，不对 legacy DB 执行 schema migration。
@@ -54,7 +59,9 @@ Raw shard：
 Rollup shard：
 
 - 粒度固定 1 分钟；
-- 通用主键为 `(metric, series_key, bucket_ms)`；
+- metric string 和 labels JSON 分别归一化到 `metric_catalog`、`metric_series`；
+- 数据主表为 `WITHOUT ROWID`，主键为 `(metric_id, bucket_ms, series_id)`；
+- 主键直接支持 metric/time 查询，不再维护 rowid、PK autoindex 和独立 time index；
 - writer 内存聚合同一分钟样本，分钟闭合后批量 UPSERT；
 - 保存 `sum/count`，查询时保持 `sample_policy=avg`。
 
@@ -142,6 +149,7 @@ Legacy DB 单独计量并展示，不计入 v2 managed quota。Legacy 退出由�
 Rollup query：
 
 - 最小 step 为 60 秒；
+- `rollup-v2-cutover-ms` 之前读取 generic shard，之后读取 normalized v2 shard；
 - 跨 shard 合并同一 series；
 - 保持 TopN、aggregate、point limit 和 series limit；
 - point metadata 标记 `rollup=1m`。
@@ -156,6 +164,14 @@ Rollup query：
 - legacy 保留窗口结束后，由运维逐台移除。
 
 这样不需要双写，也不需要在 500 GB legacy DB 上建新索引。
+
+Rollup v2 使用独立 cutover marker，且 marker 向下对齐到分钟桶：
+
+- cutover 前的 `metrics-rollup-*.db` 保持只读；
+- cutover 后只写 `metrics-rollup-v2-*.db`；
+- 查询按 cutover 分别读取 generic 和 normalized schema；
+- 如果回滚到旧版本后 generic rollup 的 mtime 推进，再次启用 v2 时原子推进 marker；
+- generic 与 v2 shard 共同参与 30 日 retention 和 64 GiB quota。
 
 ## Health Contract
 
@@ -209,6 +225,19 @@ V2 raw shard 从空库创建：
 8. canary 通过后再处理下一台。
 
 禁止三台同时切换。
+
+P0 storage 优化的 canary 门禁：
+
+```text
+projected_rollup_30d <= 51.2 GiB
+json_bytes / raw_bytes <= 20%
+historical_query_p95 <= 300 ms
+metric query contract unchanged
+dropped_commands = 0
+failed_commands = 0
+```
+
+任一门禁失败都停止扩大发布，保留原始 evidence 并回滚 canary。
 
 ## 回滚
 

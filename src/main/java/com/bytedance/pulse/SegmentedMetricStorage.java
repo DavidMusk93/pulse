@@ -86,8 +86,13 @@ final class SegmentedMetricStorage implements MetricStorage {
         this.maxBytes = Math.max(1, maxBytes);
         Files.createDirectories(this.shardDir);
         this.rollupStorage =
-                new RollupMetricStorage(this.shardDir, rollupRetentionDays, rollupMaxBytes);
+                new RollupMetricStorage(this.shardDir, rollupRetentionDays, rollupMaxBytes, clock);
         this.legacyCutoverMs = loadOrCreateCutover();
+        for (Path existingShard : shardPaths()) {
+            try (LocalMetricStorage storage = LocalMetricStorage.open(existingShard)) {
+                storage.initializeSegmentIndexes();
+            }
+        }
         try (LocalMetricStorage ignored = LocalMetricStorage.open(shardPath(dateAt(clock.millis())))) {
             ignored.initializeSegmentIndexes();
         }
