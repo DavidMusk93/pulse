@@ -1,79 +1,6 @@
-# Pulse Agent 变更日志
+# 豆包集群合并、Agent 发布与移出节点卸载
 
-本文记录 Pulse Agent 的生产变更。新记录按时间倒序追加，每次变更至少包含：
-
-- inventory 来源、提交和 SHA；
-- 明确的主机范围与 `--max-hosts`；
-- 目标产物 SHA、变更分类和执行结果；
-- 逐机强校验、回滚点和原始证据路径。
-
-## 2026-08-08 Coordinator 过期节点自动清理
-
-### 背景
-
-豆包节点 `fdbd:dc06:1:71e::42` 的 Agent 卸载后，三个 coordinator
-仍永久保留该节点的 `expired` 内存快照，导致 `/api/hosts` 和 UI 持续显示
-`doubao=16`。
-
-根因是 TTL 只把 `NodeState` 状态切换为 `expired`，没有从 coordinator 的
-当前态容器中删除。原设计也明确要求 expired host 永久保留在 host 视图。
-
-### 机制
-
-- 新增 `PULSE_EXPIRED_HOST_RETENTION_MS`，默认 `300000ms`；
-- TTL 到期后先保留 expired 状态 5 分钟，供故障观察；
-- retention 到期后，从 host 当前态、group plan、group metric 基线和内存
-  task 状态中清理该 Agent；
-- 历史 SQLite metrics 不删除；
-- 后续收到新心跳时，该 Agent 可以作为新节点重新加入；
-- 清理时输出结构化日志 `host_state_cleanup status=removed ...`。
-
-实现提交：
-
-```text
-1c565b2 Prune retired agents from coordinator state
-```
-
-### 验证与发布
-
-- 聚焦测试：`CoordinatorServiceTest` 26/26 通过；
-- 全量测试：81/81 通过；
-- 构建：`mvn clean package` 通过；
-- 目标 JAR SHA：
-  `c1e30f58051cf146d4bf1a159de0cfe7860944831d7d116929f05f24c62820c5`；
-- coordinator dry-run：3 台；
-- canary：1 台 `updated`；
-- full rollout：1 台 `unchanged`、2 台 `updated`、0 台 `failed`；
-- 三台均保留 `/data24/otf/pulse/bin/pulse.jar.rollback`。
-
-发布前基线，三台 coordinator 一致：
-
-```text
-DOUBAO_TOTAL=16 REMOVED_PRESENT=1 REMOVED_STATUS=expired
-```
-
-发布后逐机强校验，三台 coordinator 一致：
-
-```text
-DOUBAO_TOTAL=15 REMOVED_PRESENT=0 ALIVE=15
-JAR_SHA=c1e30f58051cf146d4bf1a159de0cfe7860944831d7d116929f05f24c62820c5
-COORDINATOR_ACTIVE=active
-```
-
-原始证据：
-
-- `.tmp/auto-ops/coordinator-host-prune-20260808/baseline-retry.raw.log`
-- `.tmp/auto-ops/coordinator-host-prune-20260808/canary.raw.log`
-- `.tmp/auto-ops/coordinator-host-prune-20260808/canary-verify.raw.log`
-- `.tmp/auto-ops/coordinator-host-prune-20260808/full-deploy.raw.log`
-- `.tmp/auto-ops/coordinator-host-prune-20260808/final-verify.raw.log`
-
-回滚时必须先校验 `pulse.jar.rollback` SHA，再替换当前 JAR并重启
-`pulse-coordinator.service`。
-
-## 2026-08-08 豆包集群合并、Agent 发布与移出节点卸载
-
-### 变更摘要
+## 变更摘要
 
 | 项目 | 值 |
 | --- | --- |
@@ -93,7 +20,7 @@ COORDINATOR_ACTIVE=active
 Fleet 提交 `1187057` 将原 `doubao2` 合并到 `doubao`，同时从旧 `doubao`
 范围移除 `fdbd:dc06:1:71e::42`。
 
-### 当前 Agent 范围
+## 当前 Agent 范围
 
 | 主机 | 变更方式 |
 | --- | --- |
@@ -113,7 +40,7 @@ Fleet 提交 `1187057` 将原 `doubao2` 合并到 `doubao`，同时从旧 `douba
 | `fdbd:dc07:2:81e::38` | 新节点初装 |
 | `fdbd:dc07:2:81e::39` | 新节点初装 |
 
-### 发布前检查
+## 发布前检查
 
 1. 从 `origin/main` 拉取并确认 `HEAD=e348cdb`。
 2. 执行 `mvn clean package`，结果为 `80/80` 测试通过。
@@ -139,7 +66,7 @@ bash scripts/call.sh \
   36705150ef9c9fd5106240be04cc1523edcb3b66a1a4bd81b47ea3fea7449d83
 ```
 
-### Agent 发布
+## Agent 发布
 
 已安装的 7 台节点先比较远端
 `/data24/otf/pulse/bin/pulse.jar` SHA。SHA 不一致时才上传 JAR、保留
@@ -163,7 +90,7 @@ OpenJDK 17.0.19。初装采用 1 台 canary 加剩余 7 台的范围，避免重
 - 最终均为 `PULSE_AGENT_CLUSTER=doubao`、`PULSE_AGENT_ROLE=agent`；
 - `pulse-agent.service` 15/15 active。
 
-### Task-Only 差分同步
+## Task-Only 差分同步
 
 相对上次豆包发布，`docs/task/analyze-block-layout.py` 已变化，因此使用
 `docs/script/pulse-cdn-new-task-diff-sync.sh` 对同一 `doubao` 范围执行独立
@@ -193,7 +120,7 @@ REMOTE_TASK_PATH=/data24/otf/pulse/tasks/analyze-block-layout.py \
 - 旧节点均满足 `service_start_epoch < task_mtime`，证明同步任务脚本后
   Agent 未重启。
 
-### 移出节点卸载
+## 移出节点卸载
 
 旧、新 inventory 集合差只得到：
 
@@ -228,7 +155,7 @@ fdbd:dc06:1:71e::42
 - 回滚备份完整保留在：
   `/data24/otf/pulse-agent-uninstall-backup-20260808T150306Z`。
 
-### 最终验证
+## 最终验证
 
 卸载后重新对当前 `doubao` 15 台执行权限刷新和逐机强校验：
 
@@ -245,7 +172,7 @@ fdbd:dc06:1:71e::42
 - unit、进程和安装目录 absent；
 - backup present，backup JAR SHA 与卸载前一致。
 
-### 证据
+## 证据
 
 原始证据保存在项目 `.tmp/`，不提交到 Git：
 
@@ -262,7 +189,7 @@ fdbd:dc06:1:71e::42
 - 当前 15 台回归校验：
   `.tmp/auto-ops/doubao-agent-uninstall-20260808/current-cluster-verify.raw.log`
 
-### 回滚
+## 回滚
 
 已安装节点的 JAR 差分更新保留
 `/data24/otf/pulse/bin/pulse.jar.rollback`。回滚前必须先核对该文件 SHA，

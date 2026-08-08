@@ -32,6 +32,13 @@
 - Push every validated patch to the current upstream branch promptly; do not leave completed work only in the local worktree.
 - Keep unrelated generated files and user changes out of the patch.
 
+## Operations Logs
+
+- Record each production operation in a new self-contained file under `docs/ops/` named `YYYY-MM-DD-<scope>-<action>.md`.
+- Never append a new operation to an existing aggregate changelog; append-oriented logs are not accepted because they degrade ownership, reviewability, and long-term maintenance.
+- Treat a completed operations log as immutable except for factual corrections to that operation.
+- Bind every operations log to its inventory scope, artifact SHA, raw evidence, verification result, rollback point, and delivery commit.
+
 ## Memory
 
 - Use nmem (Nowledge Mem) as the only project memory module and source of durable memory.
