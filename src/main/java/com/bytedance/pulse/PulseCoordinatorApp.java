@@ -31,6 +31,22 @@ public final class PulseCoordinatorApp {
         if (dbPath.isBlank()) {
             return null;
         }
+        String mode = env.getOrDefault("PULSE_LOCAL_STORAGE_MODE", "legacy");
+        if ("segmented".equalsIgnoreCase(mode)) {
+            Path legacyPath = Path.of(dbPath);
+            String defaultShardDir = legacyPath.toAbsolutePath().getParent().resolve("metrics-v2").toString();
+            return SegmentedMetricStorage.open(
+                    Path.of(env.getOrDefault("PULSE_LOCAL_STORAGE_SHARD_DIR", defaultShardDir)),
+                    legacyPath,
+                    positiveInt(env, "PULSE_LOCAL_STORAGE_QUEUE_SIZE", 20_000),
+                    positiveInt(env, "PULSE_LOCAL_STORAGE_BATCH_SIZE", 500),
+                    Duration.ofMillis(positiveLong(env, "PULSE_LOCAL_STORAGE_FLUSH_MS", 1_000)),
+                    positiveInt(env, "PULSE_LOCAL_STORAGE_RETENTION_DAYS", 7),
+                    Duration.ofMillis(positiveLong(env, "PULSE_LOCAL_STORAGE_MAINTENANCE_INTERVAL_MS", 300_000)),
+                    positiveLong(env, "PULSE_LOCAL_STORAGE_MAX_BYTES", 256L * 1024 * 1024 * 1024),
+                    positiveInt(env, "PULSE_LOCAL_STORAGE_ROLLUP_RETENTION_DAYS", 30),
+                    positiveLong(env, "PULSE_LOCAL_STORAGE_ROLLUP_MAX_BYTES", 64L * 1024 * 1024 * 1024));
+        }
         return AsyncLocalMetricStorage.open(
                 Path.of(dbPath),
                 positiveInt(env, "PULSE_LOCAL_STORAGE_QUEUE_SIZE", 20_000),

@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 final class AsyncLocalMetricStorage implements MetricStorage {
@@ -25,10 +26,12 @@ final class AsyncLocalMetricStorage implements MetricStorage {
     private final AtomicLong deletedSamples = new AtomicLong();
     private final AtomicLong checkpointCommands = new AtomicLong();
     private final AtomicLong transactionBatches = new AtomicLong();
+    private final AtomicInteger queueHighWatermark = new AtomicInteger();
     private final Thread writerThread;
     private volatile boolean running = true;
     private volatile String lastError = "";
     private volatile long nextMaintenanceAtMs;
+    private volatile long lastMaintenanceDurationMs;
 
     private AsyncLocalMetricStorage(Path dbPath, int queueSize, int batchSize, Duration flushInterval) throws Exception {
         this(dbPath, queueSize, batchSize, flushInterval, Duration.ofDays(7), Duration.ofMinutes(5), 10_000);
@@ -100,6 +103,7 @@ final class AsyncLocalMetricStorage implements MetricStorage {
         }
         if (queue.offer(command)) {
             acceptedCommands.incrementAndGet();
+            queueHighWatermark.accumulateAndGet(queue.size(), Math::max);
         } else {
             droppedCommands.incrementAndGet();
         }
@@ -122,6 +126,7 @@ final class AsyncLocalMetricStorage implements MetricStorage {
     @Override
     public MetricStorageHealth health() {
         String status = failedCommands.get() > 0 || droppedCommands.get() > 0 ? "degraded" : "ok";
+        long storageBytes = fileSize(dbPath) + fileSize(Path.of(dbPath + "-wal")) + fileSize(Path.of(dbPath + "-shm"));
         return new MetricStorageHealth(
                 status,
                 queue.size(),
@@ -133,7 +138,24 @@ final class AsyncLocalMetricStorage implements MetricStorage {
                 deletedSamples.get(),
                 checkpointCommands.get(),
                 transactionBatches.get(),
-                lastError);
+                lastError,
+                storageBytes,
+                0,
+                0,
+                1,
+                0,
+                0,
+                queueHighWatermark.get(),
+                lastMaintenanceDurationMs,
+                0);
+    }
+
+    private static long fileSize(Path path) {
+        try {
+            return java.nio.file.Files.size(path);
+        } catch (Exception ignored) {
+            return 0;
+        }
     }
 
     boolean awaitIdle(Duration timeout) throws InterruptedException {
@@ -215,6 +237,7 @@ final class AsyncLocalMetricStorage implements MetricStorage {
             return;
         }
         nextMaintenanceAtMs = now + maintenanceInterval.toMillis();
+        long startedAtMs = now;
         try {
             long cutoffMs = now - retention.toMillis();
             int deleted = storage.deleteExpiredSamples(cutoffMs, maintenanceDeleteLimit);
@@ -225,6 +248,8 @@ final class AsyncLocalMetricStorage implements MetricStorage {
         } catch (Exception exception) {
             failedCommands.incrementAndGet();
             lastError = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
+        } finally {
+            lastMaintenanceDurationMs = Math.max(0, System.currentTimeMillis() - startedAtMs);
         }
     }
 
@@ -252,4 +277,13 @@ record MetricStorageHealth(
         long deletedSamples,
         long checkpointCommands,
         long transactionBatches,
-        String lastError) {}
+        String lastError,
+        long storageBytes,
+        long legacyBytes,
+        long maxBytes,
+        int shardCount,
+        long deletedShards,
+        long capacityDroppedCommands,
+        int queueHighWatermark,
+        long maintenanceDurationMs,
+        long retentionLagMs) {}

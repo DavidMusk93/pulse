@@ -58,6 +58,50 @@ class PulseCoordinatorAppTest {
     }
 
     @Test
+    void opensSegmentedMetricStorageWhenConfigured() throws Exception {
+        Path legacy = tempDir.resolve("coordinator/metrics.db");
+        Path shards = tempDir.resolve("coordinator/metrics-v2");
+        long now = System.currentTimeMillis();
+
+        try (MetricStorage storage = PulseCoordinatorApp.metricStorageFromEnv(Map.of(
+                "PULSE_METRICS_DB", legacy.toString(),
+                "PULSE_LOCAL_STORAGE_MODE", "segmented",
+                "PULSE_LOCAL_STORAGE_SHARD_DIR", shards.toString(),
+                "PULSE_LOCAL_STORAGE_MAX_BYTES", String.valueOf(1024L * 1024 * 1024)))) {
+            assertEquals(SegmentedMetricStorage.class, storage.getClass());
+            storage.writeHeartbeat(new HeartbeatMetricSample(
+                    now,
+                    "agent-1",
+                    "host-1",
+                    "cluster-a",
+                    "area-a",
+                    "direct",
+                    "direct",
+                    1,
+                    1,
+                    30_000,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    9,
+                    42_000,
+                    Map.of()));
+            assertEquals(true, ((SegmentedMetricStorage) storage).awaitIdle(Duration.ofSeconds(2)));
+            MetricQueryResult result = storage.queryRange(new MetricQuery(
+                    "agent.thread_count",
+                    List.of("agent-1"),
+                    now,
+                    now,
+                    1_000,
+                    10));
+            assertEquals(9.0, result.series().get(0).points().get(0).value());
+            assertEquals(1, storage.health().shardCount());
+        }
+    }
+
+    @Test
     void leavesMetricStorageDisabledWhenDatabasePathIsBlank() throws Exception {
         assertNull(PulseCoordinatorApp.metricStorageFromEnv(Map.of()));
         assertNull(PulseCoordinatorApp.metricStorageFromEnv(Map.of("PULSE_METRICS_DB", " ")));

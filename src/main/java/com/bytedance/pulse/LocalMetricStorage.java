@@ -43,8 +43,14 @@ final class LocalMetricStorage implements MetricStorage {
     private final Connection connection;
 
     private LocalMetricStorage(Connection connection) throws SQLException {
+        this(connection, true);
+    }
+
+    private LocalMetricStorage(Connection connection, boolean initialize) throws SQLException {
         this.connection = connection;
-        initialize();
+        if (initialize) {
+            initialize();
+        }
     }
 
     static LocalMetricStorage open(Path dbPath) throws Exception {
@@ -54,6 +60,50 @@ final class LocalMetricStorage implements MetricStorage {
         }
         Connection connection = DriverManager.getConnection("jdbc:sqlite:" + dbPath.toAbsolutePath());
         return new LocalMetricStorage(connection);
+    }
+
+    static LocalMetricStorage openFederated(List<Path> dbPaths) throws Exception {
+        if (dbPaths == null || dbPaths.isEmpty()) {
+            throw new IllegalArgumentException("at least one metric shard is required");
+        }
+        Connection connection = DriverManager.getConnection("jdbc:sqlite::memory:");
+        try {
+            List<String> aliases = new ArrayList<>();
+            int index = 0;
+            for (Path dbPath : dbPaths.stream().map(Path::toAbsolutePath).distinct().toList()) {
+                if (!Files.isRegularFile(dbPath)) {
+                    continue;
+                }
+                String alias = "shard" + index++;
+                try (PreparedStatement statement = connection.prepareStatement("ATTACH DATABASE ? AS " + alias)) {
+                    statement.setString(1, "file:" + dbPath + "?mode=ro");
+                    statement.execute();
+                }
+                aliases.add(alias);
+            }
+            if (aliases.isEmpty()) {
+                throw new IllegalArgumentException("no readable metric shards");
+            }
+            createFederatedView(connection, aliases, "heartbeat_sample");
+            createFederatedView(connection, aliases, "host_dimension");
+            createFederatedView(connection, aliases, "tide_worker_sample");
+            createFederatedView(connection, aliases, "group_leader_sample");
+            createFederatedView(connection, aliases, "host_event");
+            return new LocalMetricStorage(connection, false);
+        } catch (Exception exception) {
+            connection.close();
+            throw exception;
+        }
+    }
+
+    private static void createFederatedView(Connection connection, List<String> aliases, String table) throws SQLException {
+        String union = aliases.stream()
+                .map(alias -> "SELECT * FROM " + alias + "." + table)
+                .reduce((left, right) -> left + " UNION ALL " + right)
+                .orElseThrow();
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("CREATE TEMP VIEW " + table + " AS " + union);
+        }
     }
 
     static List<MetricCatalogItem> catalog() {
@@ -202,6 +252,20 @@ final class LocalMetricStorage implements MetricStorage {
         }
     }
 
+    public void checkpointWalTruncate() throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("PRAGMA wal_checkpoint(TRUNCATE)");
+        }
+    }
+
+    void initializeSegmentIndexes() throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_tide_worker_observed_at ON tide_worker_sample(observed_at_ms)");
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_group_leader_observed_at ON group_leader_sample(observed_at_ms)");
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_host_event_observed_at ON host_event(observed_at_ms)");
+        }
+    }
+
     private int deleteExpired(String table, long cutoffMs, int limit) throws SQLException {
         String sql = """
                 DELETE FROM %s
@@ -333,7 +397,7 @@ final class LocalMetricStorage implements MetricStorage {
 
     @Override
     public MetricStorageHealth health() {
-        return new MetricStorageHealth("ok", 0, 0, 0, 0, 0, 0, 0, 0, 0, "");
+        return new MetricStorageHealth("ok", 0, 0, 0, 0, 0, 0, 0, 0, 0, "", 0, 0, 0, 1, 0, 0, 0, 0, 0);
     }
 
     private MetricQueryResult queryTideWorkerRange(MetricQuery query, MetricColumn metric) throws Exception {
@@ -787,19 +851,19 @@ final class LocalMetricStorage implements MetricStorage {
         return value == null ? "" : value;
     }
 
-    private static int effectivePointLimit(MetricQuery query) {
+    static int effectivePointLimit(MetricQuery query) {
         return Math.min(MAX_POINT_LIMIT, Math.max(1, query.pointLimit()));
     }
 
-    private static int effectiveSeriesLimit(MetricQuery query) {
+    static int effectiveSeriesLimit(MetricQuery query) {
         return Math.min(MAX_SERIES_LIMIT, Math.max(1, query.seriesLimit()));
     }
 
-    private static long effectiveStepMs(MetricQuery query) {
+    static long effectiveStepMs(MetricQuery query) {
         return Math.max(1, query.stepMs());
     }
 
-    private static long suggestedStepMs(
+    static long suggestedStepMs(
             MetricQuery query, int pointLimit, int seriesLimit, boolean truncated, long actualStepMs) {
         if (!truncated) {
             return actualStepMs;
@@ -822,7 +886,7 @@ final class LocalMetricStorage implements MetricStorage {
         return List.copyOf(query.agentIds().subList(0, seriesLimit));
     }
 
-    private static SeriesBudgetResult applySeriesBudget(List<MetricSeries> series, MetricQuery query, int seriesLimit) {
+    static SeriesBudgetResult applySeriesBudget(List<MetricSeries> series, MetricQuery query, int seriesLimit) {
         int limit = Math.min(seriesLimit, query.topN() > 0 ? query.topN() : seriesLimit);
         boolean truncated = series.size() > limit;
         List<MetricSeries> ordered = query.topN() > 0
@@ -907,7 +971,7 @@ final class LocalMetricStorage implements MetricStorage {
         }
     }
 
-    private static String queryId(MetricQuery query) {
+    static String queryId(MetricQuery query) {
         int hash = Math.abs((query.metric() + query.agentIds() + query.cluster()).hashCode());
         return "q-" + query.startMs() + "-" + query.endMs() + "-" + hash;
     }
@@ -976,6 +1040,10 @@ final class LocalMetricStorage implements MetricStorage {
             }
             throw new IllegalArgumentException("unsupported metric: " + name);
         }
+    }
+
+    static String metricUnit(String name) {
+        return MetricColumn.fromName(name).unit();
     }
 
     private enum MetricSource {

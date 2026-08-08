@@ -1726,8 +1726,15 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
           <div className="metrics-scope-card"><span>Leader</span><b>{clusterLeaderCount}</b><em>nodes</em></div>
           <div className="metrics-scope-card"><span>Direct</span><b>{clusterDirectCount}</b><em>nodes</em></div>
           <div className="metrics-scope-card"><span>写入队列</span><b>{storage?.queue_depth ?? 0}</b><em>pending</em></div>
+          <div className="metrics-scope-card"><span>队列峰值</span><b>{storage?.queue_high_watermark ?? 0}</b><em>pending</em></div>
           <div className="metrics-scope-card"><span>失败</span><b>{storage?.failed_commands ?? 0}</b><em>commands</em></div>
           <div className="metrics-scope-card"><span>事务批次</span><b>{storage?.transaction_batches ?? 0}</b><em>batches</em></div>
+          <div className="metrics-scope-card"><span>存储分片</span><b>{storage?.shard_count ?? 0}</b><em>files</em></div>
+          <div className="metrics-scope-card"><span>V2 存储</span><b>{formatBytes(storage?.storage_bytes)}</b><em>managed</em></div>
+          {(storage?.legacy_bytes ?? 0) > 0 && (
+            <div className="metrics-scope-card"><span>Legacy</span><b>{formatBytes(storage?.legacy_bytes)}</b><em>read only</em></div>
+          )}
+          <div className="metrics-scope-card"><span>Retention Lag</span><b>{formatDuration(storage?.retention_lag_ms)}</b><em>lag</em></div>
         </div>
       </div>
       <div className="metrics-control-grid">
@@ -3167,6 +3174,7 @@ function firstMeaningfulShellLine(content: string) {
 
 function formatBytes(value: any) {
   const bytes = Number(value || 0);
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GiB`;
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${bytes} B`;

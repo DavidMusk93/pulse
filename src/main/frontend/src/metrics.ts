@@ -16,6 +16,15 @@ export type MetricStorageHealth = {
   checkpoint_commands?: number;
   transaction_batches?: number;
   last_error?: string;
+  storage_bytes?: number;
+  legacy_bytes?: number;
+  max_bytes?: number;
+  shard_count?: number;
+  deleted_shards?: number;
+  capacity_dropped_commands?: number;
+  queue_high_watermark?: number;
+  maintenance_duration_ms?: number;
+  retention_lag_ms?: number;
 };
 
 export type MetricPointView = {

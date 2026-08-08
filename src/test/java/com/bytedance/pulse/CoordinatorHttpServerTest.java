@@ -228,6 +228,9 @@ class CoordinatorHttpServerTest {
         assertEquals(200, storage.statusCode());
         JsonNode health = mapper.readTree(storage.body());
         assertEquals("ok", health.get("status").asText());
+        assertTrue(health.has("storage_bytes"));
+        assertTrue(health.has("shard_count"));
+        assertTrue(health.has("retention_lag_ms"));
 
         HttpResponse<String> stream = client.send(
                 HttpRequest.newBuilder(URI.create(baseUrl + "/api/metrics/stream?once=true"))
@@ -366,6 +369,9 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("分析范围"));
         assertTrue(js.body().contains("/api/metrics/catalog"));
         assertTrue(js.body().contains("/api/metrics/storage"));
+        assertTrue(js.body().contains("存储分片"));
+        assertTrue(js.body().contains("Retention Lag"));
+        assertTrue(js.body().contains("read only"));
         assertTrue(js.body().contains("/api/metrics/query_range"));
         assertTrue(js.body().contains("/api/metrics/stream"));
         assertTrue(js.body().contains("metrics-echart"));

@@ -1,5 +1,9 @@
 # Coordinator 本地存储与时序展示设计
 
+> 单库 SQLite 的写入、查询和 UI 合同仍以本文为基础；分片、rollup、
+> retention、容量保护与 legacy 迁移终态由
+> `docs/design/segmented-metric-storage.md` 定义。两者冲突时以后者为准。
+
 ## 结论
 
 每个 Pulse coordinator 增加本地嵌入式时序存储，用于保存本 coordinator 观察到的 heartbeat 与 agent 运行状态历史数据。第一版使用 SQLite 作为本地数据库，按时间分桶、按 host 索引，并通过 coordinator Web API 与 SSE 向前端提供类似 Grafana 的 range query 和增量刷新数据。
