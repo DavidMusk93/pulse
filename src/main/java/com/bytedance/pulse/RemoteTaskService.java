@@ -72,6 +72,19 @@ public class RemoteTaskService {
                         .toList());
     }
 
+    synchronized void removeAgent(String agentId) {
+        executionQueues.remove(agentId);
+        controlQueues.remove(agentId);
+        inFlight.remove(agentId);
+        fileTransfers.remove(agentId);
+        completionQueues.remove(agentId);
+        traceLogs.entrySet().removeIf(entry ->
+                entry.getValue().stream().anyMatch(trace -> agentId.equals(trace.agentId())));
+        String assemblyPrefix = agentId + "\u0000";
+        pendingResults.keySet().removeIf(key -> key.startsWith(assemblyPrefix));
+        streamLogs.entrySet().removeIf(entry -> agentId.equals(entry.getValue().agentId()));
+    }
+
     public synchronized TaskSnapshot enqueue(String agentId, String taskType) {
         return enqueue(agentId, taskType, null);
     }
@@ -624,7 +637,7 @@ public class RemoteTaskService {
     }
 
     private static String assemblyKey(String agentId, String taskId) {
-        return agentId + ":" + taskId;
+        return agentId + "\u0000" + taskId;
     }
 
     static TaskResult resultFrom(String agentId, Map<String, Object> payload, String encodedOutput) {

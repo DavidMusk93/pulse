@@ -242,7 +242,10 @@ NodeState(agent_id) -> HostView -> GroupAssignment
 - 已有 group member 不能因为一次 `alive -> warming` 边界抖动立即被踢出 group；只要该 member 尚未 `expired`，coordinator 必须在 group recompute 中保留其 membership，形成 graceful hysteresis。
 - `expired` host 不参与新 group，也不享受 membership grace；过期节点必须退出 group，避免 leader 长期等待失联 follower。
 - group membership grace 只稳定已有成员，不把 direct warming 节点拉入 group；这保证 group 降压能力稳定，同时避免 stale follower 与 leader `acceptedMembers` 短时间不一致导致 `not_group_member` 循环。
-- `expired` host 不参与新 group，但仍保留在 host 视图中。
+- `expired` host 不参与新 group，但在 `PULSE_EXPIRED_HOST_RETENTION_MS`
+  观察窗口内仍保留在 host 视图中；默认 `300000ms`。窗口结束后 coordinator
+  必须清理该节点的当前态、group plan 和内存任务状态。后续心跳可将节点作为
+  新节点重新加入。
 
 下发方式：
 

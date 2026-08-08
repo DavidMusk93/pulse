@@ -20,6 +20,7 @@ public class CoordinatorService {
     private static final int MIN_AGENTS_FOR_GROUP_LEADER = 5;
     private static final long DEFAULT_HOST_SNAPSHOT_TTL_MS = 1_000;
     private static final long DEFAULT_GROUP_RECOMPUTE_INTERVAL_MS = 1_000;
+    private static final long DEFAULT_EXPIRED_HOST_RETENTION_MS = 300_000;
     private static final ObjectMapper MAPPER = JsonSupport.objectMapper();
 
     private final String coordinatorId;
@@ -33,6 +34,7 @@ public class CoordinatorService {
     private final MetricStorage metricStorage;
     private final long hostSnapshotTtlMs;
     private final long groupRecomputeIntervalMs;
+    private final long expiredHostRetentionMs;
     private final Object hostSnapshotLock = new Object();
     private final Object groupRecomputeLock = new Object();
     private volatile List<HostView> hostSnapshot = List.of();
@@ -52,6 +54,8 @@ public class CoordinatorService {
         this.metricStorage = metricStorage;
         this.hostSnapshotTtlMs = positiveLong("PULSE_HOST_SNAPSHOT_TTL_MS", DEFAULT_HOST_SNAPSHOT_TTL_MS);
         this.groupRecomputeIntervalMs = positiveLong("PULSE_GROUP_RECOMPUTE_INTERVAL_MS", DEFAULT_GROUP_RECOMPUTE_INTERVAL_MS);
+        this.expiredHostRetentionMs = positiveLong(
+                "PULSE_EXPIRED_HOST_RETENTION_MS", DEFAULT_EXPIRED_HOST_RETENTION_MS);
     }
 
     public String coordinatorId() {
@@ -109,11 +113,15 @@ public class CoordinatorService {
     }
 
     public List<HostView> hosts() {
-        return hostSnapshot(clock.millis());
+        long now = clock.millis();
+        pruneExpiredStates(now);
+        return hostSnapshot(now);
     }
 
     public List<GroupView> groups() {
-        maybeRecomputeGroups(clock.millis(), true);
+        long now = clock.millis();
+        pruneExpiredStates(now);
+        maybeRecomputeGroups(now, true);
         return groupViews.values().stream()
                 .sorted(Comparator.comparing(GroupView::groupId))
                 .toList();
@@ -156,6 +164,7 @@ public class CoordinatorService {
         if (agentId == null || agentId.isBlank()) {
             return Optional.empty();
         }
+        pruneExpiredStates(clock.millis());
         NodeState state = states.get(agentId);
         return state == null || state.coordinatorId.isBlank() ? Optional.empty() : Optional.of(state.coordinatorId);
     }
@@ -288,6 +297,30 @@ public class CoordinatorService {
     private void markStateChanged() {
         groupRecomputeDirty = true;
         hostSnapshotAtMs = Long.MIN_VALUE;
+    }
+
+    private void pruneExpiredStates(long now) {
+        List<String> removedAgentIds = new ArrayList<>();
+        for (Map.Entry<String, NodeState> entry : states.entrySet()) {
+            NodeState state = entry.getValue();
+            if (state.removableAt(now, expiredHostRetentionMs) && states.remove(entry.getKey(), state)) {
+                removedAgentIds.add(entry.getKey());
+                System.out.printf(
+                        "host_state_cleanup status=removed agent_id=%s observed_at_ms=%d expire_at_ms=%d retention_ms=%d%n",
+                        entry.getKey(),
+                        state.observedAtMs,
+                        state.expireAtMs,
+                        expiredHostRetentionMs);
+            }
+        }
+        if (removedAgentIds.isEmpty()) {
+            return;
+        }
+        for (String agentId : removedAgentIds) {
+            groupPlans.remove(agentId);
+            taskService.removeAgent(agentId);
+        }
+        markStateChanged();
     }
 
     private void writeHeartbeatMetric(
@@ -786,6 +819,7 @@ public class CoordinatorService {
         groupPlans.putAll(nextPlans);
         groupViews.clear();
         groupViews.putAll(nextGroups);
+        groupMetricObservedAt.keySet().retainAll(nextGroups.keySet());
         hostSnapshotAtMs = Long.MIN_VALUE;
     }
 
@@ -1091,6 +1125,10 @@ public class CoordinatorService {
                     value("role", "-"),
                     value("load", "-"),
                     state);
+        }
+
+        private boolean removableAt(long now, long retentionMs) {
+            return now >= expireAtMs && now - expireAtMs >= retentionMs;
         }
 
         private int recentConfirmations(long now) {

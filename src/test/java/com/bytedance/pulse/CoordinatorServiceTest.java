@@ -60,6 +60,31 @@ class CoordinatorServiceTest {
     }
 
     @Test
+    void expiredHostIsRetainedForObservationThenPurgedAndCanRejoin() {
+        MutableClock mutableClock = new MutableClock(Instant.ofEpochMilli(1_710_000_000_000L));
+        CoordinatorService service = new CoordinatorService("coordinator-a", mutableClock);
+        service.handleHeartbeat(singleHeartbeat("agent-1", 1, 42, "host-a", "10.0.0.1"));
+        service.enqueueTask("agent-1", "prepare_disk_layout_dry_run");
+
+        mutableClock.advance(Duration.ofMillis(30_000 + 300_000 - 1));
+
+        assertEquals("expired", service.hosts().get(0).status());
+        assertEquals(1, service.taskSnapshot("agent-1").executionQueue().size());
+
+        mutableClock.advance(Duration.ofMillis(1));
+
+        assertTrue(service.hosts().isEmpty());
+        assertTrue(service.agentCoordinatorId("agent-1").isEmpty());
+        assertTrue(service.taskSnapshot("agent-1").executionQueue().isEmpty());
+
+        service.handleHeartbeat(singleHeartbeat("agent-1", 2, 1, "host-a", "10.0.0.1"));
+
+        assertEquals(1, service.hosts().size());
+        assertEquals("warming", service.hosts().get(0).status());
+        assertEquals("coordinator-a", service.agentCoordinatorId("agent-1").orElseThrow());
+    }
+
+    @Test
     void heartbeatWritesDiagnosticMetricSamples() throws Exception {
         MutableClock mutableClock = new MutableClock(Instant.ofEpochMilli(1_710_000_000_000L));
         try (LocalMetricStorage storage = LocalMetricStorage.open(tempDir.resolve("metrics.db"))) {
