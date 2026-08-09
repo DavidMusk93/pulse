@@ -36,6 +36,7 @@ public class CoordinatorHttpServer {
     private final ObjectMapper mapper = JsonSupport.objectMapper();
     private final PeerForwarder peerForwarder;
     private final HttpClient routeClient = HttpClient.newHttpClient();
+    private final JvmRuntimeMetrics runtimeMetrics = JvmRuntimeMetrics.system();
     private final BiFunction<String, URI, URI> taskRouteResolver;
     private final List<String> metricPeerUrls;
     private final ArrayDeque<SseEvent> metricEventCache = new ArrayDeque<>();
@@ -135,6 +136,10 @@ public class CoordinatorHttpServer {
             }
             if ("GET".equals(method) && "/api/metrics/storage".equals(path)) {
                 writeJson(exchange, 200, service.metricStorageHealth());
+                return;
+            }
+            if ("GET".equals(method) && "/api/runtime/health".equals(path)) {
+                writeJson(exchange, 200, runtimeMetrics.sample());
                 return;
             }
             if ("GET".equals(method) && "/api/metrics/stream".equals(path)) {
