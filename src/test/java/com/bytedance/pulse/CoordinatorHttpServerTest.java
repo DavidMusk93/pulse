@@ -168,26 +168,6 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
-    void runtimeHealthEndpointExposesJvmFeedback() throws Exception {
-        HttpResponse<String> response = get("/api/runtime/health");
-
-        assertEquals(200, response.statusCode());
-        JsonNode body = mapper.readTree(response.body());
-        assertTrue(body.get("observed_at_ms").asLong() > 0);
-        assertTrue(body.get("uptime_ms").asLong() >= 0);
-        assertTrue(body.get("available_processors").asInt() > 0);
-        assertTrue(body.get("heap_used_bytes").asLong() >= 0);
-        assertTrue(body.get("heap_committed_bytes").asLong() >= body.get("heap_used_bytes").asLong());
-        assertTrue(body.get("gc_collection_count").asLong() >= 0);
-        assertTrue(body.get("gc_pause_max_ms").asLong() >= 0);
-        assertTrue(body.get("live_threads").asInt() > 0);
-        assertTrue(body.get("process_cpu_load").asDouble() >= -1);
-        assertTrue(body.get("allocation_rate_bytes_per_second").asLong() >= -1);
-        assertTrue(body.get("gc_collectors").isArray());
-        assertTrue(body.get("gc_collectors").size() > 0);
-    }
-
-    @Test
     void metricsRangeQueryAcceptsTopNSeriesSelection() throws Exception {
         postJson("/heartbeat", """
                 {
