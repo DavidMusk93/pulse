@@ -318,7 +318,7 @@ class CoordinatorHttpServerTest {
     void readsAndUpdatesEventBusConfigurationWithoutReturningSecrets() throws Exception {
         HttpResponse<String> initial = get("/api/eventbus");
         assertEquals(200, initial.statusCode());
-        assertTrue(initial.body().contains("metric_threshold"));
+        assertTrue(initial.body().contains("pulse_message"));
         assertTrue(initial.body().contains("lark_webhook"));
 
         HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/api/eventbus/config"))
@@ -336,18 +336,10 @@ class CoordinatorHttpServerTest {
                   "sources": [{
                     "id": "disk-source",
                     "name": "disk source",
-                    "plugin_type": "metric_threshold",
+                    "plugin_type": "pulse_message",
                     "event_type": "disk.io_saturation",
                     "enabled": true,
-                    "config": {
-                      "collection_path": "disks",
-                      "subject_field": "device",
-                      "value_field": "io_util_pct",
-                      "operator": "gt",
-                      "threshold": 95,
-                      "duration_field": "saturated_for_ms",
-                      "duration_ms": 10000
-                    }
+                    "config": {}
                   }],
                   "sinks": [{
                     "id": "lark-sink",
@@ -1218,7 +1210,7 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
-    void peerForwarderOnlyBuildsStateMessages() {
+    void peerForwarderBuildsStateAndEventMessages() {
         CoordinatorHttpServer.HttpPeerForwarder forwarder = new CoordinatorHttpServer.HttpPeerForwarder(
                 "coordinator-a",
                 List.of("http://127.0.0.1:1"),
@@ -1231,6 +1223,7 @@ class CoordinatorHttpServerTest {
                 15_000L,
                 List.of(
                         new PulseMessage("state-1", "state.heartbeat", 1, null, null, Map.of("host", "host-a")),
+                        new PulseMessage("event-1", "event.publish", 1, null, null, Map.of("event_id", "event-1")),
                         new PulseMessage("cmd-1", "cmd.group_plan", 1, null, null, Map.of("ignored", true))),
                 List.of());
 
@@ -1239,8 +1232,9 @@ class CoordinatorHttpServerTest {
         assertEquals("coordinator-a", forwardRequest.sourceCoordinatorId());
         assertEquals(1, forwardRequest.states().size());
         assertEquals("direct", forwardRequest.states().get(0).source());
-        assertEquals(1, forwardRequest.states().get(0).messages().size());
+        assertEquals(2, forwardRequest.states().get(0).messages().size());
         assertEquals("state.heartbeat", forwardRequest.states().get(0).messages().get(0).type());
+        assertEquals("event.publish", forwardRequest.states().get(0).messages().get(1).type());
     }
 
     @Test

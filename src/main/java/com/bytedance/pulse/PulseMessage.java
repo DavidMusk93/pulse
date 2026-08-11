@@ -12,4 +12,12 @@ public record PulseMessage(
     public boolean isStateMessage() {
         return type != null && type.startsWith("state.");
     }
+
+    public boolean isEventMessage() {
+        return "event.publish".equals(type);
+    }
+
+    public boolean isForwardableHeartbeatMessage() {
+        return isStateMessage() || isEventMessage();
+    }
 }

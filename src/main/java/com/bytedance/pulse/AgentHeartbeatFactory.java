@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.ServiceLoader;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
@@ -41,6 +42,7 @@ public class AgentHeartbeatFactory {
     private final long tideDiscoveryIntervalMs;
     private final long memTotalKb;
     private final double diskIoThresholdPct;
+    private final List<AgentEventSourcePlugin> eventSourcePlugins;
     private volatile long nextTideDiscoveryAtMs;
 
     public AgentHeartbeatFactory(
@@ -97,6 +99,12 @@ public class AgentHeartbeatFactory {
         this.tideDiscoveryIntervalMs = Math.max(5_000, tideDiscoveryIntervalMs);
         this.memTotalKb = memTotalKb(procDir);
         this.diskIoThresholdPct = positiveDouble(env("PULSE_DISK_IO_THRESHOLD_PCT", "95"), 95);
+        List<AgentEventSourcePlugin> sourcePlugins = new ArrayList<>();
+        sourcePlugins.add(new AgentDiskIoEventEmitter(
+                diskIoThresholdPct,
+                positiveLong(env("PULSE_DISK_IO_SUSTAIN_MS", "10000"), 10_000)));
+        ServiceLoader.load(AgentEventSourcePlugin.class).forEach(sourcePlugins::add);
+        this.eventSourcePlugins = List.copyOf(sourcePlugins);
     }
 
     public HeartbeatRequest nextHeartbeat() {
@@ -109,15 +117,19 @@ public class AgentHeartbeatFactory {
 
     public HeartbeatRequest nextHeartbeat(List<PulseMessage> extraMessages, List<Map<String, Object>> asyncTasks) {
         long nextSeq = seq.incrementAndGet();
+        Map<String, Object> payload = heartbeatPayload(asyncTasks);
         PulseMessage message = new PulseMessage(
                 "msg-" + agentId + "-" + epoch + "-" + nextSeq + "-state",
                 "state.heartbeat",
                 1,
                 null,
                 null,
-                heartbeatPayload(asyncTasks));
+                payload);
         List<PulseMessage> messages = new ArrayList<>();
         messages.add(message);
+        AgentEventSourcePlugin.Context eventContext =
+                new AgentEventSourcePlugin.Context(agentId, clock.millis(), payload);
+        eventSourcePlugins.forEach(plugin -> messages.addAll(plugin.evaluate(eventContext)));
         if (extraMessages != null) {
             messages.addAll(extraMessages);
         }
@@ -434,6 +446,15 @@ public class AgentHeartbeatFactory {
         try {
             double parsed = Double.parseDouble(value);
             return Double.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private static long positiveLong(String value, long fallback) {
+        try {
+            long parsed = Long.parseLong(value);
+            return parsed > 0 ? parsed : fallback;
         } catch (NumberFormatException ignored) {
             return fallback;
         }

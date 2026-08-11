@@ -99,12 +99,12 @@ public class CoordinatorService {
         int merged = 0;
         String fallbackSource = request.sourceCoordinatorId() == null ? "peer" : request.sourceCoordinatorId();
         for (ForwardState state : request.states()) {
-            List<PulseMessage> stateMessages = state.messages().stream()
-                    .filter(PulseMessage::isStateMessage)
+            List<PulseMessage> forwardedMessages = state.messages().stream()
+                    .filter(PulseMessage::isForwardableHeartbeatMessage)
                     .toList();
             accepted++;
             String source = state.source() == null || state.source().isBlank() ? fallbackSource : state.source();
-            boolean changed = mergeForwardState(state, source, request.sourceCoordinatorId(), stateMessages);
+            boolean changed = mergeForwardState(state, source, request.sourceCoordinatorId(), forwardedMessages);
             if (changed) {
                 merged++;
             }
@@ -287,7 +287,7 @@ public class CoordinatorService {
         states.merge(heartbeat.agentId(), incoming, NodeState::newer);
         writeHeartbeatMetric(heartbeat, source, observedAtMs, messages, previous);
         if (acceptedNewVersion) {
-            ingestEvents(heartbeat.agentId(), observedAtMs, NodeState.extractState(messages));
+            ingestEvents(heartbeat.agentId(), observedAtMs, messages);
         }
         markStateChanged();
         return states.get(heartbeat.agentId()).seq;
@@ -309,16 +309,16 @@ public class CoordinatorService {
         states.put(state.agentId(), selected);
         boolean acceptedNewVersion = existing == null || NodeState.isNewerVersion(incoming, existing);
         if (acceptedNewVersion) {
-            ingestEvents(state.agentId(), state.observedAtMs(), NodeState.extractState(messages));
+            ingestEvents(state.agentId(), state.observedAtMs(), messages);
         }
         markStateChanged();
         return acceptedNewVersion;
     }
 
-    private void ingestEvents(String agentId, long observedAtMs, Map<String, Object> state) {
+    private void ingestEvents(String agentId, long observedAtMs, List<PulseMessage> messages) {
         EventBusService eventBus = eventBusService;
         if (eventBus != null) {
-            eventBus.ingest(agentId, observedAtMs, state);
+            eventBus.ingestMessages(agentId, observedAtMs, messages);
         }
     }
 

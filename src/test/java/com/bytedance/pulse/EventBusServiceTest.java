@@ -22,7 +22,7 @@ class EventBusServiceTest {
     Path tempDir;
 
     @Test
-    void thresholdSourceFeedsPeriodicRouteAndSingleRecovery() throws Exception {
+    void heartbeatMessagesFeedPeriodicRouteAndSingleRecovery() throws Exception {
         MutableClock clock = new MutableClock(1_710_000_010_000L);
         List<HostEvent> recorded = new ArrayList<>();
         RecordingSink sinkPlugin = new RecordingSink();
@@ -46,9 +46,10 @@ class EventBusServiceTest {
                             PeriodicDigestGatePlugin.TYPE,
                             Map.of("interval_ms", 300_000, "publish_recovery", true)))));
 
-            eventBus.ingest("agent-1", clock.millis() - 5_000, state(96, 5_000));
-            assertTrue(recorded.isEmpty());
-            eventBus.ingest("agent-1", clock.millis(), state(97, 10_000));
+            eventBus.ingestMessages(
+                    "agent-1",
+                    clock.millis(),
+                    List.of(eventMessage("firing", clock.millis())));
 
             assertEquals(1, recorded.size());
             assertEquals("firing", recorded.get(0).details().get("status"));
@@ -63,7 +64,10 @@ class EventBusServiceTest {
             eventBus.dispatchDue();
             assertEquals(2, sinkPlugin.deliveries.size());
 
-            eventBus.ingest("agent-1", clock.millis(), state(20, 0));
+            eventBus.ingestMessages(
+                    "agent-1",
+                    clock.millis(),
+                    List.of(eventMessage("resolved", clock.millis())));
             assertEquals(2, recorded.stream()
                     .filter(event -> "disk.io_saturation".equals(event.eventType()))
                     .count());
@@ -215,15 +219,27 @@ class EventBusServiceTest {
         }
     }
 
-    private static Map<String, Object> state(double utilizationPct, long saturatedForMs) {
-        return Map.of(
-                "host", "host-1",
-                "ip", "10.0.0.1",
-                "cluster", "cdn_new",
-                "disks", List.of(Map.of(
-                        "device", "nvme0n1",
-                        "io_util_pct", utilizationPct,
-                        "saturated_for_ms", saturatedForMs)));
+    private static PulseMessage eventMessage(String status, long observedAtMs) {
+        return new PulseMessage(
+                "incident-1:" + status,
+                AgentDiskIoEventEmitter.MESSAGE_TYPE,
+                1,
+                null,
+                null,
+                Map.ofEntries(
+                        Map.entry("event_id", "incident-1:" + status),
+                        Map.entry("incident_id", "incident-1"),
+                        Map.entry("event_type", AgentDiskIoEventEmitter.EVENT_TYPE),
+                        Map.entry("source_id", AgentDiskIoEventEmitter.SOURCE_ID),
+                        Map.entry("subject", "nvme0n1"),
+                        Map.entry("agent_id", "agent-1"),
+                        Map.entry("severity", "firing".equals(status) ? "error" : "info"),
+                        Map.entry("status", status),
+                        Map.entry("observed_at_ms", observedAtMs),
+                        Map.entry("summary", "disk " + status),
+                        Map.entry("attributes", Map.of(
+                                "ip", "10.0.0.1",
+                                "io_util_pct", "firing".equals(status) ? 97 : 20))));
     }
 
     private static final class RecordingSink implements EventPlugin.Sink {

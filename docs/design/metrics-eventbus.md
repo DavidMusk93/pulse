@@ -5,11 +5,15 @@
 Pulse is a metrics collection, event generation, policy gate, and delivery platform. Event generation and delivery are separate state machines:
 
 ```text
-Input -> Source plugin -> Event envelope -> active incident state
-      -> Route filter -> Gate plugin -> Delivery batch -> Sink plugin
+Agent Source plugin
+  -> PulseMessage(type=event.publish)
+  -> direct/group heartbeat transport
+  -> coordinator peer forward
+  -> EventBus ingress -> active incident state
+  -> Route filter -> Gate plugin -> Delivery batch -> Sink plugin
 ```
 
-A metric threshold is one source type. A Lark custom-bot webhook is one sink type. Neither is embedded into the EventBus core.
+A metric threshold is one agent source. A Lark custom-bot webhook is one sink. Neither is embedded into the EventBus core or implemented as a coordinator-side scan of heartbeat state.
 
 ## Stable Contracts
 
@@ -19,12 +23,14 @@ An event type defines a stable semantic ID, display name, description, default s
 
 ### Source
 
-A source binds a `plugin_type`, an event type, and plugin configuration. Built-ins:
+A source binds a transport adapter, a stable source ID, and an event type. Built-ins:
 
-- `metric_threshold`: evaluates numeric collections in accepted heartbeat state.
+- `pulse_message`: consumes `event.publish` messages transported by the existing heartbeat path.
 - `webhook_event`: accepts external `firing` and `resolved` event payloads through the source ingress API.
 
-The default disk source reads `disks[]`, compares `io_util_pct > 95`, and requires `saturated_for_ms >= 10000`.
+Agent-side producers implement `AgentEventSourcePlugin` and are loaded through `ServiceLoader`. The default disk producer evaluates the locally collected `disks[]`, emits after `io_util_pct > 95` for `saturated_for_ms >= 10000`, and emits one resolved message after recovery. The numeric samples remain in `state.heartbeat` for time-series storage; only event transitions use `event.publish`.
+
+`event.publish` is marked urgent, so group heartbeat collection flushes it without waiting for the normal periodic batch. Peer forwarding preserves both `state.*` and `event.publish` messages. Command and reply messages retain their existing behavior.
 
 ### Event envelope
 
@@ -69,6 +75,7 @@ Every completed delivery also appends an `eventbus.delivery` event to `host_even
 Extensions implement one of:
 
 ```java
+AgentEventSourcePlugin
 EventPlugin.Source
 EventPlugin.Gate
 EventPlugin.Sink
@@ -76,7 +83,7 @@ EventPlugin.Sink
 
 Each plugin publishes a descriptor containing a stable type, kind, description, and typed configuration fields. The Web UI renders these fields without knowing plugin implementation classes.
 
-Extension JARs register implementations through Java `ServiceLoader`. Source plugins declare supported input channels; current channels are `heartbeat` and `webhook`.
+Extension JARs register implementations through Java `ServiceLoader`. `AgentEventSourcePlugin` runs beside metrics collection and returns normal `PulseMessage` instances. Coordinator `EventPlugin.Source` implementations are ingress adapters; current channels are `pulse_message` and `webhook`.
 
 ## APIs
 

@@ -1355,7 +1355,7 @@ public class CoordinatorHttpServer {
                     System.currentTimeMillis(),
                     source,
                     heartbeat.messages().stream()
-                            .filter(PulseMessage::isStateMessage)
+                            .filter(PulseMessage::isForwardableHeartbeatMessage)
                             .toList());
         }
     }

@@ -74,18 +74,29 @@ final class EventBusService implements AutoCloseable {
         }
     }
 
-    void ingest(String agentId, long observedAtMs, Map<String, Object> state) {
+    void ingestMessages(
+            String agentId,
+            long observedAtMs,
+            List<PulseMessage> messages) {
         List<EventPlugin.Event> emitted = new ArrayList<>();
         synchronized (this) {
             Map<String, EventTypeDefinition> eventTypes = eventTypes(config);
-            EventPlugin.Observation observation = new EventPlugin.Observation(agentId, observedAtMs, state);
-            for (EventSourceDefinition source : config.sources()) {
+            Map<String, EventSourceDefinition> sources = sources(config);
+            for (PulseMessage message : messages) {
+                if (!message.isEventMessage() || message.payload() == null) {
+                    continue;
+                }
+                String sourceId = String.valueOf(message.payload().getOrDefault("source_id", ""));
+                EventSourceDefinition source = sources.get(sourceId);
+                if (source == null) {
+                    continue;
+                }
                 EventTypeDefinition eventType = eventTypes.get(source.eventType());
                 if (!source.enabled() || eventType == null || !eventType.enabled()) {
                     continue;
                 }
                 EventPlugin.Source plugin = sourcePlugins.get(source.pluginType());
-                if (plugin == null || !plugin.supports("heartbeat")) {
+                if (plugin == null || !plugin.supports("pulse_message")) {
                     continue;
                 }
                 emitted.addAll(plugin.evaluate(
@@ -93,7 +104,7 @@ final class EventBusService implements AutoCloseable {
                         eventType.id(),
                         eventType.severity(),
                         source.config(),
-                        observation));
+                        new EventPlugin.Observation(agentId, observedAtMs, message.payload())));
             }
         }
         accept(emitted);
@@ -382,7 +393,7 @@ final class EventBusService implements AutoCloseable {
     }
 
     private void registerBuiltIns() {
-        register(new MetricThresholdSourcePlugin());
+        register(new PulseMessageEventSourcePlugin());
         register(new WebhookEventSourcePlugin());
         register(new PeriodicDigestGatePlugin());
         register(new LarkWebhookSinkPlugin());
@@ -638,18 +649,11 @@ final class EventBusService implements AutoCloseable {
                         true)),
                 List.of(new EventSourceDefinition(
                         "disk-io-saturation",
-                        "磁盘 IO 饱和检测",
-                        MetricThresholdSourcePlugin.TYPE,
+                        "Agent 磁盘 IO 事件",
+                        PulseMessageEventSourcePlugin.TYPE,
                         "disk.io_saturation",
                         true,
-                        Map.of(
-                                "collection_path", "disks",
-                                "subject_field", "device",
-                                "value_field", "io_util_pct",
-                                "operator", "gt",
-                                "threshold", 95,
-                                "duration_field", "saturated_for_ms",
-                                "duration_ms", 10_000))),
+                        Map.of())),
                 List.of(),
                 List.of());
     }

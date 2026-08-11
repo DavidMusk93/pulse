@@ -140,31 +140,47 @@ class AgentHeartbeatFactoryTest {
         AgentHeartbeatFactory factory = new AgentHeartbeatFactory(
                 "agent-1", "host-1", "fd00::1", "cdn_new", "area-a", "az-a", "worker", 100, 15_000, clock, proc, 60_000);
 
+        HeartbeatRequest baselineHeartbeat = factory.nextHeartbeat();
         List<Map<String, Object>> baseline =
-                (List<Map<String, Object>>) factory.nextHeartbeat().messages().get(0).payload().get("disks");
+                (List<Map<String, Object>>) baselineHeartbeat.messages().get(0).payload().get("disks");
         assertTrue(baseline.isEmpty());
+        assertEquals(1, baselineHeartbeat.messages().size());
 
         clock.advanceMillis(5_000);
         Files.writeString(proc.resolve("diskstats"), "8 0 sda 0 0 0 0 0 0 0 0 0 5800 0\n");
+        HeartbeatRequest firstHeartbeat = factory.nextHeartbeat();
         List<Map<String, Object>> first =
-                (List<Map<String, Object>>) factory.nextHeartbeat().messages().get(0).payload().get("disks");
+                (List<Map<String, Object>>) firstHeartbeat.messages().get(0).payload().get("disks");
         assertEquals(1, first.size());
         assertEquals("sda", first.get(0).get("device"));
         assertEquals(96.0, first.get(0).get("io_util_pct"));
         assertEquals(5_000L, first.get(0).get("saturated_for_ms"));
+        assertEquals(1, firstHeartbeat.messages().size());
 
         clock.advanceMillis(5_000);
         Files.writeString(proc.resolve("diskstats"), "8 0 sda 0 0 0 0 0 0 0 0 0 10600 0\n");
+        HeartbeatRequest sustainedHeartbeat = factory.nextHeartbeat();
         List<Map<String, Object>> sustained =
-                (List<Map<String, Object>>) factory.nextHeartbeat().messages().get(0).payload().get("disks");
+                (List<Map<String, Object>>) sustainedHeartbeat.messages().get(0).payload().get("disks");
         assertEquals(10_000L, sustained.get(0).get("saturated_for_ms"));
+        assertEquals(2, sustainedHeartbeat.messages().size());
+        PulseMessage firing = sustainedHeartbeat.messages().get(1);
+        assertEquals(AgentDiskIoEventEmitter.MESSAGE_TYPE, firing.type());
+        assertEquals("firing", firing.payload().get("status"));
+        assertEquals("disk-io-saturation", firing.payload().get("source_id"));
+        assertEquals(true, firing.payload().get("urgent"));
 
         clock.advanceMillis(5_000);
         Files.writeString(proc.resolve("diskstats"), "8 0 sda 0 0 0 0 0 0 0 0 0 11100 0\n");
+        HeartbeatRequest recoveredHeartbeat = factory.nextHeartbeat();
         List<Map<String, Object>> recovered =
-                (List<Map<String, Object>>) factory.nextHeartbeat().messages().get(0).payload().get("disks");
+                (List<Map<String, Object>>) recoveredHeartbeat.messages().get(0).payload().get("disks");
         assertEquals(10.0, recovered.get(0).get("io_util_pct"));
         assertEquals(0L, recovered.get(0).get("saturated_for_ms"));
+        assertEquals(2, recoveredHeartbeat.messages().size());
+        PulseMessage resolved = recoveredHeartbeat.messages().get(1);
+        assertEquals("resolved", resolved.payload().get("status"));
+        assertEquals(firing.payload().get("incident_id"), resolved.payload().get("incident_id"));
     }
 
     private static final class MutableClock extends Clock {

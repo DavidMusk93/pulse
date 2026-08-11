@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -139,17 +140,11 @@ class CoordinatorServiceTest {
                     false)) {
                 service.attachEventBus(eventBus);
 
-                service.handleHeartbeat(singleHeartbeatWithState(
-                        "agent-1", 1, 1, "host-1", "10.0.0.1", diskState(96, 5_000)));
+                service.handleHeartbeat(singleHeartbeatWithEvent(
+                        "agent-1", 1, 1, "host-1", "10.0.0.1", eventMessage("firing", mutableClock.millis())));
                 mutableClock.advance(Duration.ofSeconds(5));
-                service.handleHeartbeat(singleHeartbeatWithState(
-                        "agent-1", 1, 2, "host-1", "10.0.0.1", diskState(97, 10_000)));
-                mutableClock.advance(Duration.ofSeconds(5));
-                service.handleHeartbeat(singleHeartbeatWithState(
-                        "agent-1", 1, 3, "host-1", "10.0.0.1", diskState(99, 15_000)));
-                mutableClock.advance(Duration.ofSeconds(5));
-                service.handleHeartbeat(singleHeartbeatWithState(
-                        "agent-1", 1, 4, "host-1", "10.0.0.1", diskState(20, 0)));
+                service.handleHeartbeat(singleHeartbeatWithEvent(
+                        "agent-1", 1, 2, "host-1", "10.0.0.1", eventMessage("resolved", mutableClock.millis())));
 
                 List<HostEvent> events = storage.queryEvents(new MetricEventQuery(
                         1_710_000_000_000L,
@@ -166,6 +161,50 @@ class CoordinatorServiceTest {
                         events.get(1).details().get("incident_id"));
                 assertTrue(eventBus.view().activeEvents().isEmpty());
             }
+        }
+    }
+
+    @Test
+    void forwardedHeartbeatEventEntersEventBus() throws Exception {
+        MutableClock mutableClock = new MutableClock(Instant.ofEpochMilli(1_710_000_005_000L));
+        try (LocalMetricStorage storage = LocalMetricStorage.open(tempDir.resolve("forward-events.db"));
+                EventBusService eventBus = new EventBusService(
+                        tempDir.resolve("forward-eventbus.json"),
+                        mutableClock,
+                        storage::writeHostEvent,
+                        false)) {
+            CoordinatorService service = new CoordinatorService("coordinator-edge", mutableClock, storage);
+            service.attachEventBus(eventBus);
+
+            HeartbeatForwardResponse response = service.handleForward(new HeartbeatForwardRequest(
+                    "coordinator-owner",
+                    List.of(new ForwardState(
+                            "agent-1",
+                            1,
+                            1,
+                            15_000,
+                            mutableClock.millis(),
+                            "direct",
+                            List.of(
+                                    new PulseMessage(
+                                            "state-1",
+                                            "state.heartbeat",
+                                            1,
+                                            null,
+                                            null,
+                                            Map.of("host", "host-1", "ip", "10.0.0.1")),
+                                    eventMessage("firing", mutableClock.millis()))))));
+
+            assertTrue(response.ok());
+            assertEquals(1, eventBus.view().activeEvents().size());
+            List<HostEvent> events = storage.queryEvents(new MetricEventQuery(
+                    mutableClock.millis() - 1,
+                    mutableClock.millis() + 1,
+                    "agent-1",
+                    List.of(),
+                    10));
+            assertEquals(1, events.size());
+            assertEquals("disk.io_saturation", events.get(0).eventType());
         }
     }
 
@@ -917,11 +956,45 @@ class CoordinatorServiceTest {
                 List.of());
     }
 
-    private static Map<String, Object> diskState(double utilizationPct, long saturatedForMs) {
-        return Map.of("disks", List.of(Map.of(
-                "device", "nvme0n1",
-                "io_util_pct", utilizationPct,
-                "saturated_for_ms", saturatedForMs)));
+    private static HeartbeatRequest singleHeartbeatWithEvent(
+            String agentId,
+            long epoch,
+            long seq,
+            String host,
+            String ip,
+            PulseMessage event) {
+        AgentHeartbeat heartbeat = agent(agentId, epoch, seq, host, ip);
+        List<PulseMessage> messages = new ArrayList<>(heartbeat.messages());
+        messages.add(event);
+        return new HeartbeatRequest(
+                null,
+                heartbeat.agentId(),
+                heartbeat.epoch(),
+                heartbeat.seq(),
+                heartbeat.ttlMs(),
+                messages,
+                List.of());
+    }
+
+    private static PulseMessage eventMessage(String status, long observedAtMs) {
+        return new PulseMessage(
+                "incident-1:" + status,
+                AgentDiskIoEventEmitter.MESSAGE_TYPE,
+                1,
+                null,
+                null,
+                Map.ofEntries(
+                        Map.entry("event_id", "incident-1:" + status),
+                        Map.entry("incident_id", "incident-1"),
+                        Map.entry("event_type", AgentDiskIoEventEmitter.EVENT_TYPE),
+                        Map.entry("source_id", AgentDiskIoEventEmitter.SOURCE_ID),
+                        Map.entry("subject", "nvme0n1"),
+                        Map.entry("agent_id", "agent-1"),
+                        Map.entry("severity", "firing".equals(status) ? "error" : "info"),
+                        Map.entry("status", status),
+                        Map.entry("observed_at_ms", observedAtMs),
+                        Map.entry("summary", "disk " + status),
+                        Map.entry("attributes", Map.of("ip", "10.0.0.1"))));
     }
 
     private static void confirmAlive(CoordinatorService service, String agentId, String host, String ip) {

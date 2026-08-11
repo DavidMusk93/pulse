@@ -10,6 +10,7 @@ import {
   Card,
   Col,
   ConfigProvider,
+  Drawer,
   Empty,
   Flex,
   Input,
@@ -21,12 +22,26 @@ import {
   Segmented,
   Space,
   Statistic,
+  Switch,
   Tag,
   Typography,
   message,
   theme
 } from 'antd';
-import { CopyOutlined, DownloadOutlined, InboxOutlined } from '@ant-design/icons';
+import {
+  ApiOutlined,
+  ArrowRightOutlined,
+  CheckCircleFilled,
+  CopyOutlined,
+  DeleteOutlined,
+  DownloadOutlined,
+  ExclamationCircleFilled,
+  InboxOutlined,
+  PlusOutlined,
+  SendOutlined,
+  SettingOutlined,
+  ThunderboltOutlined
+} from '@ant-design/icons';
 import {
   MetricQueryController,
   RenderScheduler,
@@ -1506,11 +1521,10 @@ function EventPluginFields({
       const update = (next: unknown) => onChange({ ...config, [field.key]: next });
       let control: React.ReactNode;
       if (field.type === 'boolean') {
-        control = <Select
-          value={Boolean(value)}
-          options={[{ label: '启用', value: true }, { label: '关闭', value: false }]}
-          onChange={update}
-        />;
+        control = <div className="eventbus-switch-control">
+          <Switch checked={Boolean(value)} onChange={update} />
+          <span>{Boolean(value) ? '已启用' : '已关闭'}</span>
+        </div>;
       } else if (field.type === 'select') {
         control = <Select
           value={String(value)}
@@ -1547,6 +1561,7 @@ function EventBusPanel({
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testingSink, setTestingSink] = useState('');
+  const [section, setSection] = useState<'types' | 'sources' | 'routes' | 'sinks'>('types');
 
   const load = useCallback(() => controller.eventBus()
     .then(setView)
@@ -1608,40 +1623,75 @@ function EventBusPanel({
 
   const statusEntries = Object.entries(view?.route_status || {});
   const statusErrors = statusEntries.filter(([, status]) => status.last_error);
+  const activeCount = view?.active_events?.length || 0;
+  const healthy = statusErrors.length === 0;
+  const openEditor = () => {
+    if (view) setDraft(structuredClone(view.config));
+    setSection('types');
+    setOpen(true);
+  };
+  const deleteButton = (onClick: () => void, label: string) =>
+    <Button className="eventbus-icon-button" type="text" danger icon={<DeleteOutlined />} aria-label={label} title={label} onClick={onClick} />;
   return <>
     <div className="metrics-eventbus-card">
-      <div>
-        <span className="metrics-field-label">EVENTBUS</span>
-        <Typography.Text type="secondary">Source → Event Type → Gate → Route → Sink</Typography.Text>
+      <div className="eventbus-summary-head">
+        <span className={`eventbus-status-orb ${healthy ? 'is-healthy' : 'is-error'}`}>
+          {healthy ? <CheckCircleFilled /> : <ExclamationCircleFilled />}
+        </span>
+        <div>
+          <span className="metrics-field-label">PULSE EVENTBUS</span>
+          <strong>事件采集与分发</strong>
+          <Typography.Text type="secondary">复用 heartbeat message 通道，周期门禁后 fanout</Typography.Text>
+        </div>
       </div>
-      <Space size={5} wrap>
-        <Tag>{view?.config.event_types.length || 0} types</Tag>
-        <Tag color="cyan">{view?.config.sources.length || 0} sources</Tag>
-        <Tag color="purple">{view?.config.routes.length || 0} routes</Tag>
-        <Tag color="blue">{view?.config.sinks.length || 0} sinks</Tag>
-        <Tag color={(view?.active_events?.length || 0) ? 'error' : 'success'}>{view?.active_events?.length || 0} active</Tag>
-        {statusErrors.map(([key, status]) => <Tag key={key} color="error">{key}: {status.last_error}</Tag>)}
-      </Space>
-      <Button size="small" type="primary" onClick={() => {
-        if (view) setDraft(structuredClone(view.config));
-        setOpen(true);
-      }}>配置事件流</Button>
+      <div className="eventbus-flow" aria-label="事件传递链路">
+        <span><ApiOutlined /><b>Source</b><em>{view?.config.sources.length || 0}</em></span>
+        <ArrowRightOutlined className="eventbus-flow-arrow" />
+        <span><ThunderboltOutlined /><b>Heartbeat</b><em>event.publish</em></span>
+        <ArrowRightOutlined className="eventbus-flow-arrow" />
+        <span><SettingOutlined /><b>Gate</b><em>{view?.config.routes.length || 0} routes</em></span>
+        <ArrowRightOutlined className="eventbus-flow-arrow" />
+        <span><SendOutlined /><b>Sink</b><em>{view?.config.sinks.length || 0}</em></span>
+      </div>
+      <div className="eventbus-summary-actions">
+        <div className="eventbus-live-count">
+          <span className={activeCount ? 'is-active' : ''}>{activeCount}</span>
+          <small>活动事件</small>
+        </div>
+        <Button type="primary" icon={<SettingOutlined />} onClick={openEditor}>管理事件流</Button>
+      </div>
+      {statusErrors.length > 0 && <div className="eventbus-error-strip">
+        {statusErrors.map(([key, status]) => <span key={key}><ExclamationCircleFilled /> {key} · {status.last_error}</span>)}
+      </div>}
     </div>
-    <Modal
-      title="EventBus 配置"
-      width={1180}
+    <Drawer
+      className="eventbus-drawer"
+      title={<div className="eventbus-drawer-title"><span>事件流管理</span><small>配置会在保存后原子生效</small></div>}
+      width="min(960px, 92vw)"
+      placement="right"
       open={open}
-      onCancel={() => setOpen(false)}
-      okText="保存并生效"
-      confirmLoading={saving}
-      onOk={save}
+      onClose={() => setOpen(false)}
       destroyOnHidden
+      extra={<Button type="primary" loading={saving} onClick={save}>保存并生效</Button>}
     >
       {draft && <div className="eventbus-editor">
-        <section>
+        <Segmented
+          block
+          className="eventbus-stage-nav"
+          value={section}
+          onChange={value => setSection(value as typeof section)}
+          options={[
+            { value: 'types', label: `事件类型 ${draft.event_types.length}` },
+            { value: 'sources', label: `Sources ${draft.sources.length}` },
+            { value: 'routes', label: `Routes ${draft.routes.length}` },
+            { value: 'sinks', label: `Sinks ${draft.sinks.length}` }
+          ]}
+        />
+
+        {section === 'types' && <section className="eventbus-stage" key="types">
           <div className="eventbus-section-head">
-            <div><b>事件类型</b><span>定义稳定的事件语义与默认级别</span></div>
-            <Button size="small" onClick={() => append('event_types', {
+            <div><b>事件类型</b><span>先定义稳定语义，再由 Source 发布</span></div>
+            <Button icon={<PlusOutlined />} onClick={() => append('event_types', {
               id: `event.type.${Date.now()}`,
               name: '新事件类型',
               description: '',
@@ -1650,20 +1700,25 @@ function EventBusPanel({
             })}>新增</Button>
           </div>
           <div className="eventbus-items">
-            {draft.event_types.map((eventType, index) => <div className="eventbus-item eventbus-item-inline" key={`${eventType.id}-${index}`}>
-              <Input value={eventType.id} onChange={event => updateList('event_types', index, { ...eventType, id: event.target.value })} placeholder="event.type" />
-              <Input value={eventType.name} onChange={event => updateList('event_types', index, { ...eventType, name: event.target.value })} placeholder="显示名称" />
-              <Select value={eventType.severity} options={['info', 'warn', 'error', 'critical'].map(value => ({ value, label: value }))} onChange={severity => updateList('event_types', index, { ...eventType, severity })} />
-              <Select value={eventType.enabled} options={[{ label: '启用', value: true }, { label: '关闭', value: false }]} onChange={enabled => updateList('event_types', index, { ...eventType, enabled })} />
-              <Button danger size="small" onClick={() => updateList('event_types', index, null)}>删除</Button>
+            {draft.event_types.map((eventType, index) => <div className="eventbus-item" key={`${eventType.id}-${index}`}>
+              <div className="eventbus-item-head">
+                <div><span className={`eventbus-item-dot severity-${eventType.severity}`} /><b>{eventType.name || '未命名事件'}</b><code>{eventType.id}</code></div>
+                <Space size={8}><Switch size="small" checked={eventType.enabled} onChange={enabled => updateList('event_types', index, { ...eventType, enabled })} />{deleteButton(() => updateList('event_types', index, null), '删除事件类型')}</Space>
+              </div>
+              <div className="eventbus-form-grid">
+                <label className="eventbus-field"><span>类型 ID</span><Input value={eventType.id} onChange={event => updateList('event_types', index, { ...eventType, id: event.target.value })} placeholder="event.type" /></label>
+                <label className="eventbus-field"><span>显示名称</span><Input value={eventType.name} onChange={event => updateList('event_types', index, { ...eventType, name: event.target.value })} /></label>
+                <label className="eventbus-field"><span>默认级别</span><Select value={eventType.severity} options={['info', 'warn', 'error', 'critical'].map(value => ({ value, label: value }))} onChange={severity => updateList('event_types', index, { ...eventType, severity })} /></label>
+                <label className="eventbus-field eventbus-field-wide"><span>说明</span><Input value={eventType.description || ''} onChange={event => updateList('event_types', index, { ...eventType, description: event.target.value })} placeholder="事件何时产生、意味着什么" /></label>
+              </div>
             </div>)}
           </div>
-        </section>
+        </section>}
 
-        <section>
+        {section === 'sources' && <section className="eventbus-stage" key="sources">
           <div className="eventbus-section-head">
-            <div><b>Sources</b><span>插件从 heartbeat 或外部输入生成事件</span></div>
-            <Button size="small" disabled={!byKind('source').length} onClick={() => {
+            <div><b>Sources</b><span>Agent 插件通过 heartbeat message 发布，外部系统也可接入</span></div>
+            <Button icon={<PlusOutlined />} disabled={!byKind('source').length} onClick={() => {
               const plugin = byKind('source')[0];
               append('sources', {
                 id: `source-${Date.now()}`,
@@ -1675,60 +1730,30 @@ function EventBusPanel({
               });
             }}>新增</Button>
           </div>
-          <div className="eventbus-items eventbus-grid">
+          <div className="eventbus-items">
             {draft.sources.map((source, index) => <div className="eventbus-item" key={`${source.id}-${index}`}>
-              <div className="eventbus-item-inline">
-                <Input value={source.id} onChange={event => updateList('sources', index, { ...source, id: event.target.value })} placeholder="source-id" />
-                <Input value={source.name} onChange={event => updateList('sources', index, { ...source, name: event.target.value })} placeholder="显示名称" />
-                <Select value={source.plugin_type} options={byKind('source').map(plugin => ({ value: plugin.type, label: plugin.name }))} onChange={pluginType => {
+              <div className="eventbus-item-head">
+                <div><span className="eventbus-item-icon"><ApiOutlined /></span><b>{source.name || '未命名 Source'}</b><code>{source.id}</code><Tag bordered={false}>{source.plugin_type}</Tag></div>
+                <Space size={8}><Switch size="small" checked={source.enabled} onChange={enabled => updateList('sources', index, { ...source, enabled })} />{deleteButton(() => updateList('sources', index, null), '删除 Source')}</Space>
+              </div>
+              <div className="eventbus-form-grid">
+                <label className="eventbus-field"><span>Source ID</span><Input value={source.id} onChange={event => updateList('sources', index, { ...source, id: event.target.value })} /></label>
+                <label className="eventbus-field"><span>显示名称</span><Input value={source.name} onChange={event => updateList('sources', index, { ...source, name: event.target.value })} /></label>
+                <label className="eventbus-field"><span>接入插件</span><Select value={source.plugin_type} options={byKind('source').map(plugin => ({ value: plugin.type, label: plugin.name }))} onChange={pluginType => {
                   const plugin = descriptor('source', pluginType);
                   updateList('sources', index, { ...source, plugin_type: pluginType, config: pluginConfigDefaults(plugin) });
-                }} />
-                <Select value={source.event_type} options={draft.event_types.map(item => ({ value: item.id, label: item.name }))} onChange={eventType => updateList('sources', index, { ...source, event_type: eventType })} />
-                <Select value={source.enabled} options={[{ label: '启用', value: true }, { label: '关闭', value: false }]} onChange={enabled => updateList('sources', index, { ...source, enabled })} />
-                <Button danger size="small" onClick={() => updateList('sources', index, null)}>删除</Button>
+                }} /></label>
+                <label className="eventbus-field"><span>发布事件</span><Select value={source.event_type} options={draft.event_types.map(item => ({ value: item.id, label: item.name }))} onChange={eventType => updateList('sources', index, { ...source, event_type: eventType })} /></label>
               </div>
               <EventPluginFields plugin={descriptor('source', source.plugin_type)} config={source.config} onChange={config => updateList('sources', index, { ...source, config })} />
             </div>)}
           </div>
-        </section>
+        </section>}
 
-        <section>
+        {section === 'routes' && <section className="eventbus-stage" key="routes">
           <div className="eventbus-section-head">
-            <div><b>Sinks</b><span>Webhook 等投递能力，密钥只写入不回显</span></div>
-            <Button size="small" disabled={!byKind('sink').length} onClick={() => {
-              const plugin = byKind('sink')[0];
-              append('sinks', {
-                id: `sink-${Date.now()}`,
-                name: '新 Sink',
-                plugin_type: plugin.type,
-                enabled: true,
-                config: pluginConfigDefaults(plugin)
-              });
-            }}>新增</Button>
-          </div>
-          <div className="eventbus-items eventbus-grid">
-            {draft.sinks.map((sink, index) => <div className="eventbus-item" key={`${sink.id}-${index}`}>
-              <div className="eventbus-item-inline">
-                <Input value={sink.id} onChange={event => updateList('sinks', index, { ...sink, id: event.target.value })} placeholder="sink-id" />
-                <Input value={sink.name} onChange={event => updateList('sinks', index, { ...sink, name: event.target.value })} placeholder="显示名称" />
-                <Select value={sink.plugin_type} options={byKind('sink').map(plugin => ({ value: plugin.type, label: plugin.name }))} onChange={pluginType => {
-                  const plugin = descriptor('sink', pluginType);
-                  updateList('sinks', index, { ...sink, plugin_type: pluginType, config: pluginConfigDefaults(plugin) });
-                }} />
-                <Select value={sink.enabled} options={[{ label: '启用', value: true }, { label: '关闭', value: false }]} onChange={enabled => updateList('sinks', index, { ...sink, enabled })} />
-                <Button size="small" loading={testingSink === sink.id} disabled={!view?.config.sinks.some(item => item.id === sink.id)} onClick={() => testSink(sink.id)}>测试</Button>
-                <Button danger size="small" onClick={() => updateList('sinks', index, null)}>删除</Button>
-              </div>
-              <EventPluginFields plugin={descriptor('sink', sink.plugin_type)} config={sink.config} onChange={config => updateList('sinks', index, { ...sink, config })} />
-            </div>)}
-          </div>
-        </section>
-
-        <section>
-          <div className="eventbus-section-head">
-            <div><b>Routes & Gates</b><span>筛选事件并控制发布周期，再 fanout 到多个 Sink</span></div>
-            <Button size="small" disabled={!byKind('gate').length || !draft.sinks.length} onClick={() => {
+            <div><b>Routes & Gates</b><span>筛选事件、控制发布节奏，再 fanout 到目标</span></div>
+            <Button icon={<PlusOutlined />} disabled={!byKind('gate').length || !draft.sinks.length} onClick={() => {
               const plugin = byKind('gate')[0];
               append('routes', {
                 id: `route-${Date.now()}`,
@@ -1742,29 +1767,68 @@ function EventBusPanel({
               });
             }}>新增</Button>
           </div>
-          <div className="eventbus-items eventbus-grid">
+          <div className="eventbus-items">
             {draft.routes.map((route, index) => <div className="eventbus-item" key={`${route.id}-${index}`}>
-              <div className="eventbus-item-inline">
-                <Input value={route.id} onChange={event => updateList('routes', index, { ...route, id: event.target.value })} placeholder="route-id" />
-                <Input value={route.name} onChange={event => updateList('routes', index, { ...route, name: event.target.value })} placeholder="显示名称" />
-                <Select value={route.gate_type} options={byKind('gate').map(plugin => ({ value: plugin.type, label: plugin.name }))} onChange={gateType => {
+              <div className="eventbus-item-head">
+                <div><span className="eventbus-item-icon"><ThunderboltOutlined /></span><b>{route.name || '未命名 Route'}</b><code>{route.id}</code><Tag bordered={false}>{route.gate_type}</Tag></div>
+                <Space size={8}><Switch size="small" checked={route.enabled} onChange={enabled => updateList('routes', index, { ...route, enabled })} />{deleteButton(() => updateList('routes', index, null), '删除 Route')}</Space>
+              </div>
+              <div className="eventbus-form-grid">
+                <label className="eventbus-field"><span>Route ID</span><Input value={route.id} onChange={event => updateList('routes', index, { ...route, id: event.target.value })} /></label>
+                <label className="eventbus-field"><span>显示名称</span><Input value={route.name} onChange={event => updateList('routes', index, { ...route, name: event.target.value })} /></label>
+                <label className="eventbus-field"><span>发布门禁</span><Select value={route.gate_type} options={byKind('gate').map(plugin => ({ value: plugin.type, label: plugin.name }))} onChange={gateType => {
                   const plugin = descriptor('gate', gateType);
                   updateList('routes', index, { ...route, gate_type: gateType, gate_config: pluginConfigDefaults(plugin) });
-                }} />
-                <Select value={route.enabled} options={[{ label: '启用', value: true }, { label: '关闭', value: false }]} onChange={enabled => updateList('routes', index, { ...route, enabled })} />
-                <Button danger size="small" onClick={() => updateList('routes', index, null)}>删除</Button>
+                }} /></label>
               </div>
               <div className="eventbus-route-selectors">
-                <Select mode="multiple" value={route.source_ids} options={draft.sources.map(item => ({ value: item.id, label: item.name }))} placeholder="Sources" onChange={sourceIds => updateList('routes', index, { ...route, source_ids: sourceIds })} />
-                <Select mode="multiple" value={route.event_types} options={draft.event_types.map(item => ({ value: item.id, label: item.name }))} placeholder="Event types" onChange={eventTypes => updateList('routes', index, { ...route, event_types: eventTypes })} />
-                <Select mode="multiple" value={route.sink_ids} options={draft.sinks.map(item => ({ value: item.id, label: item.name }))} placeholder="Sinks" onChange={sinkIds => updateList('routes', index, { ...route, sink_ids: sinkIds })} />
+                <label className="eventbus-field"><span>接收 Sources</span><Select mode="multiple" value={route.source_ids} options={draft.sources.map(item => ({ value: item.id, label: item.name }))} placeholder="选择 Source" onChange={sourceIds => updateList('routes', index, { ...route, source_ids: sourceIds })} /></label>
+                <label className="eventbus-field"><span>匹配事件类型</span><Select mode="multiple" value={route.event_types} options={draft.event_types.map(item => ({ value: item.id, label: item.name }))} placeholder="选择事件类型" onChange={eventTypes => updateList('routes', index, { ...route, event_types: eventTypes })} /></label>
+                <label className="eventbus-field"><span>Fanout Sinks</span><Select mode="multiple" value={route.sink_ids} options={draft.sinks.map(item => ({ value: item.id, label: item.name }))} placeholder="选择 Sink" onChange={sinkIds => updateList('routes', index, { ...route, sink_ids: sinkIds })} /></label>
               </div>
               <EventPluginFields plugin={descriptor('gate', route.gate_type)} config={route.gate_config} onChange={gateConfig => updateList('routes', index, { ...route, gate_config: gateConfig })} />
             </div>)}
           </div>
-        </section>
+        </section>}
+
+        {section === 'sinks' && <section className="eventbus-stage" key="sinks">
+          <div className="eventbus-section-head">
+            <div><b>Sinks</b><span>配置投递目标；Webhook 与签名密钥只写入、不回显</span></div>
+            <Button icon={<PlusOutlined />} disabled={!byKind('sink').length} onClick={() => {
+              const plugin = byKind('sink')[0];
+              append('sinks', {
+                id: `sink-${Date.now()}`,
+                name: '新 Sink',
+                plugin_type: plugin.type,
+                enabled: true,
+                config: pluginConfigDefaults(plugin)
+              });
+            }}>新增</Button>
+          </div>
+          <div className="eventbus-items">
+            {draft.sinks.map((sink, index) => <div className="eventbus-item" key={`${sink.id}-${index}`}>
+              <div className="eventbus-item-head">
+                <div><span className="eventbus-item-icon"><SendOutlined /></span><b>{sink.name || '未命名 Sink'}</b><code>{sink.id}</code><Tag bordered={false}>{sink.plugin_type}</Tag></div>
+                <Space size={8}>
+                  <Button loading={testingSink === sink.id} disabled={!view?.config.sinks.some(item => item.id === sink.id)} onClick={() => testSink(sink.id)}>测试连接</Button>
+                  <Switch size="small" checked={sink.enabled} onChange={enabled => updateList('sinks', index, { ...sink, enabled })} />
+                  {deleteButton(() => updateList('sinks', index, null), '删除 Sink')}
+                </Space>
+              </div>
+              <div className="eventbus-form-grid">
+                <label className="eventbus-field"><span>Sink ID</span><Input value={sink.id} onChange={event => updateList('sinks', index, { ...sink, id: event.target.value })} /></label>
+                <label className="eventbus-field"><span>显示名称</span><Input value={sink.name} onChange={event => updateList('sinks', index, { ...sink, name: event.target.value })} /></label>
+                <label className="eventbus-field"><span>投递插件</span><Select value={sink.plugin_type} options={byKind('sink').map(plugin => ({ value: plugin.type, label: plugin.name }))} onChange={pluginType => {
+                  const plugin = descriptor('sink', pluginType);
+                  updateList('sinks', index, { ...sink, plugin_type: pluginType, config: pluginConfigDefaults(plugin) });
+                }} /></label>
+              </div>
+              <EventPluginFields plugin={descriptor('sink', sink.plugin_type)} config={sink.config} onChange={config => updateList('sinks', index, { ...sink, config })} />
+            </div>)}
+          </div>
+        </section>}
       </div>}
-    </Modal>
+    </Drawer>
   </>;
 }
 
