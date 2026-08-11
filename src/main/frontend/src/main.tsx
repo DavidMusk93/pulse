@@ -10,7 +10,6 @@ import {
   Card,
   Col,
   ConfigProvider,
-  Drawer,
   Empty,
   Flex,
   Input,
@@ -1664,15 +1663,18 @@ function EventBusPanel({
         {statusErrors.map(([key, status]) => <span key={key}><ExclamationCircleFilled /> {key} · {status.last_error}</span>)}
       </div>}
     </div>
-    <Drawer
-      className="eventbus-drawer"
-      title={<div className="eventbus-drawer-title"><span>事件流管理</span><small>配置会在保存后原子生效</small></div>}
-      width="min(960px, 92vw)"
-      placement="right"
+    <Modal
+      className="eventbus-modal"
+      title={<div className="eventbus-modal-title"><span>事件流管理</span><small>配置会在保存后原子生效</small></div>}
+      width="clamp(760px, 61.8vw, 1180px)"
+      centered
       open={open}
-      onClose={() => setOpen(false)}
+      onCancel={() => setOpen(false)}
       destroyOnHidden
-      extra={<Button type="primary" loading={saving} onClick={save}>保存并生效</Button>}
+      footer={[
+        <Button key="cancel" onClick={() => setOpen(false)}>取消</Button>,
+        <Button key="save" type="primary" loading={saving} onClick={save}>保存并生效</Button>
+      ]}
     >
       {draft && <div className="eventbus-editor">
         <Segmented
@@ -1828,7 +1830,7 @@ function EventBusPanel({
           </div>
         </section>}
       </div>}
-    </Drawer>
+    </Modal>
   </>;
 }
 
