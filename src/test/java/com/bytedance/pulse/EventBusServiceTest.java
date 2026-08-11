@@ -22,6 +22,54 @@ class EventBusServiceTest {
     Path tempDir;
 
     @Test
+    void diskSourceExposesValidatedAgentRuntimeConfig() throws Exception {
+        Path statePath = tempDir.resolve("source-config-eventbus.json");
+        Files.writeString(statePath, JsonSupport.objectMapper().writeValueAsString(new EventBusState(
+                new EventBusConfig(
+                        1,
+                        List.of(new EventTypeDefinition(
+                                "disk.io_saturation", "Disk", "", "error", true)),
+                        List.of(new EventSourceDefinition(
+                                "disk-io-saturation",
+                                "Disk source",
+                                PulseMessageEventSourcePlugin.TYPE,
+                                "disk.io_saturation",
+                                true,
+                                Map.of())),
+                        List.of(),
+                        List.of()),
+                Map.of(),
+                List.of())));
+
+        try (EventBusService eventBus = new EventBusService(
+                statePath, Clock.systemUTC(), event -> {}, false)) {
+            EventSourceDefinition source = eventBus.view().config().sources().get(0);
+            assertEquals(AgentDiskIoEventSourcePlugin.TYPE, source.pluginType());
+            assertEquals(95.0, source.config().get("threshold_pct"));
+            assertEquals(10_000L, source.config().get("sustain_ms"));
+
+            PulseMessage command = eventBus.agentSourceConfigMessage();
+            assertEquals("cmd.event_source_config", command.type());
+            assertEquals(20, command.payload().get("generation").toString().length());
+            assertTrue(command.payload().toString().contains("threshold_pct=95.0"));
+
+            EventBusConfig current = eventBus.view().config();
+            assertThrows(IllegalArgumentException.class, () -> eventBus.update(new EventBusConfig(
+                    current.version(),
+                    current.eventTypes(),
+                    List.of(new EventSourceDefinition(
+                            source.id(),
+                            source.name(),
+                            source.pluginType(),
+                            source.eventType(),
+                            true,
+                            Map.of("threshold_pct", 101, "sustain_ms", 10_000))),
+                    current.sinks(),
+                    current.routes())));
+        }
+    }
+
+    @Test
     void heartbeatMessagesFeedPeriodicRouteAndSingleRecovery() throws Exception {
         MutableClock clock = new MutableClock(1_710_000_010_000L);
         List<HostEvent> recorded = new ArrayList<>();

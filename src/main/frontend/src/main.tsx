@@ -1721,9 +1721,9 @@ function EventBusPanel({
 
         {section === 'sources' && <section className="eventbus-stage" key="sources">
           <div className="eventbus-section-head">
-            <div><b>Sources</b><span>Agent 插件通过 heartbeat message 发布，外部系统也可接入</span></div>
+            <div><b>Sources</b><span>检测参数通过 heartbeat 下发到 Agent；满足门槛后才发布事件</span></div>
             <Button icon={<PlusOutlined />} disabled={!byKind('source').length} onClick={() => {
-              const plugin = byKind('source')[0];
+              const plugin = byKind('source').find(item => item.type !== 'agent_disk_io') || byKind('source')[0];
               append('sources', {
                 id: `source-${Date.now()}`,
                 name: '新 Source',
@@ -1737,17 +1737,23 @@ function EventBusPanel({
           <div className="eventbus-items">
             {draft.sources.map((source, index) => <div className="eventbus-item" key={`${source.id}-${index}`}>
               <div className="eventbus-item-head">
-                <div><span className="eventbus-item-icon"><ApiOutlined /></span><b>{source.name || '未命名 Source'}</b><code>{source.id}</code><Tag bordered={false}>{source.plugin_type}</Tag></div>
+                <div><span className="eventbus-item-icon"><ApiOutlined /></span><b>{source.name || '未命名 Source'}</b><code>{source.id}</code><Tag bordered={false}>{source.plugin_type}</Tag>{source.plugin_type === 'agent_disk_io' && <Tag color="blue" bordered={false}>Agent 执行</Tag>}</div>
                 <Space size={8}><Switch size="small" checked={source.enabled} onChange={enabled => updateList('sources', index, { ...source, enabled })} />{deleteButton(() => updateList('sources', index, null), '删除 Source')}</Space>
               </div>
               <div className="eventbus-form-grid">
-                <label className="eventbus-field"><span>Source ID</span><Input value={source.id} onChange={event => updateList('sources', index, { ...source, id: event.target.value })} /></label>
+                <label className="eventbus-field"><span>Source ID</span><Input disabled={source.plugin_type === 'agent_disk_io'} value={source.id} onChange={event => updateList('sources', index, { ...source, id: event.target.value })} /></label>
                 <label className="eventbus-field"><span>显示名称</span><Input value={source.name} onChange={event => updateList('sources', index, { ...source, name: event.target.value })} /></label>
                 <label className="eventbus-field"><span>接入插件</span><Select value={source.plugin_type} options={byKind('source').map(plugin => ({ value: plugin.type, label: plugin.name }))} onChange={pluginType => {
                   const plugin = descriptor('source', pluginType);
-                  updateList('sources', index, { ...source, plugin_type: pluginType, config: pluginConfigDefaults(plugin) });
+                  updateList('sources', index, {
+                    ...source,
+                    id: pluginType === 'agent_disk_io' ? 'disk-io-saturation' : source.id,
+                    event_type: pluginType === 'agent_disk_io' ? 'disk.io_saturation' : source.event_type,
+                    plugin_type: pluginType,
+                    config: pluginConfigDefaults(plugin)
+                  });
                 }} /></label>
-                <label className="eventbus-field"><span>发布事件</span><Select value={source.event_type} options={draft.event_types.map(item => ({ value: item.id, label: item.name }))} onChange={eventType => updateList('sources', index, { ...source, event_type: eventType })} /></label>
+                <label className="eventbus-field"><span>发布事件</span><Select disabled={source.plugin_type === 'agent_disk_io'} value={source.event_type} options={draft.event_types.map(item => ({ value: item.id, label: item.name }))} onChange={eventType => updateList('sources', index, { ...source, event_type: eventType })} /></label>
               </div>
               <EventPluginFields plugin={descriptor('source', source.plugin_type)} config={source.config} onChange={config => updateList('sources', index, { ...source, config })} />
             </div>)}

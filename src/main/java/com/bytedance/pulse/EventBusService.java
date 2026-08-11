@@ -191,7 +191,7 @@ final class EventBusService implements AutoCloseable {
     }
 
     synchronized EventBusView update(EventBusConfig requested) throws Exception {
-        EventBusConfig merged = mergeSecrets(requested);
+        EventBusConfig merged = withPluginDefaults(mergeSecrets(requested));
         validate(merged);
         Set<String> changedSources = changedSources(config, merged);
         for (String sourceId : changedSources) {
@@ -203,6 +203,38 @@ final class EventBusService implements AutoCloseable {
         routeStatus.keySet().removeIf(key -> !validStatusKeys.contains(key));
         persist();
         return view();
+    }
+
+    synchronized PulseMessage agentSourceConfigMessage() {
+        List<Map<String, Object>> agentSources = config.sources().stream()
+                .filter(source -> AgentDiskIoEventSourcePlugin.TYPE.equals(source.pluginType()))
+                .sorted(Comparator.comparing(EventSourceDefinition::id))
+                .map(source -> {
+                    Map<String, Object> value = new LinkedHashMap<>();
+                    value.put("source_id", source.id());
+                    value.put("event_type", source.eventType());
+                    value.put("enabled", source.enabled());
+                    value.put("config", new java.util.TreeMap<>(source.config()));
+                    return Map.copyOf(value);
+                })
+                .toList();
+        String serialized;
+        try {
+            serialized = MAPPER.writeValueAsString(agentSources);
+        } catch (Exception exception) {
+            throw new IllegalStateException("failed to serialize agent source config", exception);
+        }
+        String generation = TaskOutputCodec.sha256(serialized).substring(0, 20);
+        return new PulseMessage(
+                "event-source-config-" + generation,
+                "cmd.event_source_config",
+                1,
+                null,
+                null,
+                Map.of(
+                        "generation", generation,
+                        "config_version", config.version(),
+                        "sources", agentSources));
     }
 
     EventPlugin.DeliveryReceipt testSink(String sinkId) throws Exception {
@@ -393,6 +425,7 @@ final class EventBusService implements AutoCloseable {
     }
 
     private void registerBuiltIns() {
+        register(new AgentDiskIoEventSourcePlugin());
         register(new PulseMessageEventSourcePlugin());
         register(new WebhookEventSourcePlugin());
         register(new PeriodicDigestGatePlugin());
@@ -422,7 +455,7 @@ final class EventBusService implements AutoCloseable {
             return;
         }
         EventBusState state = MAPPER.readValue(Files.readString(statePath), EventBusState.class);
-        config = state.config() == null ? defaultConfig() : state.config();
+        config = withPluginDefaults(state.config() == null ? defaultConfig() : state.config());
         routeStatus.clear();
         routeStatus.putAll(state.routeStatus());
         activeEvents.clear();
@@ -471,6 +504,24 @@ final class EventBusService implements AutoCloseable {
                 throw new IllegalArgumentException("source references unknown event type: " + source.eventType());
             }
             requiredConfig(sourcePlugins.get(source.pluginType()).descriptor(), source.config(), source.id());
+            if (AgentDiskIoEventSourcePlugin.TYPE.equals(source.pluginType())) {
+                if (!AgentDiskIoEventEmitter.SOURCE_ID.equals(source.id())
+                        || !AgentDiskIoEventEmitter.EVENT_TYPE.equals(source.eventType())) {
+                    throw new IllegalArgumentException(
+                            "agent_disk_io requires source_id=disk-io-saturation"
+                                    + " and event_type=disk.io_saturation");
+                }
+                double thresholdPct = doubleValue(source.config().get("threshold_pct"), -1);
+                long sustainMs = longValue(source.config().get("sustain_ms"), -1);
+                if (thresholdPct <= 0 || thresholdPct > 100) {
+                    throw new IllegalArgumentException(
+                            source.id() + " threshold_pct must be in (0, 100]");
+                }
+                if (sustainMs < 1_000) {
+                    throw new IllegalArgumentException(
+                            source.id() + " sustain_ms must be at least 1000");
+                }
+            }
         }
         for (EventSinkDefinition sink : candidate.sinks()) {
             if (!sinkPlugins.containsKey(sink.pluginType())) {
@@ -538,6 +589,55 @@ final class EventBusService implements AutoCloseable {
                 mergedSources,
                 mergedSinks,
                 requested.routes());
+    }
+
+    private EventBusConfig withPluginDefaults(EventBusConfig value) {
+        if (value == null) {
+            return null;
+        }
+        List<EventSourceDefinition> sourcesWithDefaults = value.sources().stream()
+                .map(source -> {
+                    EventSourceDefinition migrated = migrateLegacyAgentSource(source);
+                    EventPlugin.Source plugin = sourcePlugins.get(migrated.pluginType());
+                    return plugin == null
+                            ? migrated
+                            : migrated.withConfig(withDefaults(plugin.descriptor(), migrated.config()));
+                })
+                .toList();
+        return new EventBusConfig(
+                value.version(),
+                value.eventTypes(),
+                sourcesWithDefaults,
+                value.sinks(),
+                value.routes());
+    }
+
+    private static EventSourceDefinition migrateLegacyAgentSource(EventSourceDefinition source) {
+        if (PulseMessageEventSourcePlugin.TYPE.equals(source.pluginType())
+                && AgentDiskIoEventEmitter.SOURCE_ID.equals(source.id())
+                && AgentDiskIoEventEmitter.EVENT_TYPE.equals(source.eventType())) {
+            return new EventSourceDefinition(
+                    source.id(),
+                    source.name(),
+                    AgentDiskIoEventSourcePlugin.TYPE,
+                    source.eventType(),
+                    source.enabled(),
+                    source.config());
+        }
+        return source;
+    }
+
+    private static Map<String, Object> withDefaults(
+            EventPlugin.PluginDescriptor descriptor,
+            Map<String, Object> config) {
+        Map<String, Object> merged = new LinkedHashMap<>();
+        for (EventPlugin.ConfigField field : descriptor.configFields()) {
+            if (field.defaultValue() != null) {
+                merged.put(field.key(), field.defaultValue());
+            }
+        }
+        merged.putAll(config);
+        return merged;
     }
 
     private EventBusConfig redact(EventBusConfig value) {
@@ -650,10 +750,12 @@ final class EventBusService implements AutoCloseable {
                 List.of(new EventSourceDefinition(
                         "disk-io-saturation",
                         "Agent 磁盘 IO 事件",
-                        PulseMessageEventSourcePlugin.TYPE,
+                        AgentDiskIoEventSourcePlugin.TYPE,
                         "disk.io_saturation",
                         true,
-                        Map.of())),
+                        Map.of(
+                                "threshold_pct", AgentDiskIoEventEmitter.DEFAULT_THRESHOLD_PCT,
+                                "sustain_ms", AgentDiskIoEventEmitter.DEFAULT_SUSTAIN_MS))),
                 List.of(),
                 List.of());
     }
@@ -707,6 +809,17 @@ final class EventBusService implements AutoCloseable {
         }
         try {
             return value == null ? fallback : Long.parseLong(value.toString());
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private static double doubleValue(Object value, double fallback) {
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        try {
+            return value == null ? fallback : Double.parseDouble(value.toString());
         } catch (NumberFormatException ignored) {
             return fallback;
         }

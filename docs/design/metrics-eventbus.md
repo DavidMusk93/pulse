@@ -25,10 +25,20 @@ An event type defines a stable semantic ID, display name, description, default s
 
 A source binds a transport adapter, a stable source ID, and an event type. Built-ins:
 
+- `agent_disk_io`: configures the Agent disk IO producer and consumes its heartbeat event envelopes.
 - `pulse_message`: consumes `event.publish` messages transported by the existing heartbeat path.
 - `webhook_event`: accepts external `firing` and `resolved` event payloads through the source ingress API.
 
-Agent-side producers implement `AgentEventSourcePlugin` and are loaded through `ServiceLoader`. The default disk producer evaluates the locally collected `disks[]`, emits after `io_util_pct > 95` for `saturated_for_ms >= 10000`, and emits one resolved message after recovery. The numeric samples remain in `state.heartbeat` for time-series storage; only event transitions use `event.publish`.
+Agent-side producers implement `AgentEventSourcePlugin` and are loaded through `ServiceLoader`. The default disk producer evaluates the locally collected `disks[]`, emits after `io_util_pct > threshold_pct` continuously for `sustain_ms`, and emits one resolved message after recovery. Its default Source configuration is:
+
+```text
+threshold_pct = 95
+sustain_ms    = 10000
+```
+
+These are Source fields in the Web UI, not hidden deployment parameters. The Coordinator derives a stable generation from the active EventBus Source configuration and sends `cmd.event_source_config` in every heartbeat response. Agents apply only a changed generation and update the metric sampler and event state machine from one configuration snapshot. Disabling the Source or changing either field clears prior continuous-duration and incident state, so samples accumulated under an old policy cannot trigger under a new policy.
+
+The numeric samples remain in `state.heartbeat` for time-series storage; only event transitions use `event.publish`.
 
 `event.publish` is marked urgent, so group heartbeat collection flushes it without waiting for the normal periodic batch. Peer forwarding preserves both `state.*` and `event.publish` messages. Command and reply messages retain their existing behavior.
 
@@ -62,7 +72,7 @@ A sink binds a `plugin_type` and private configuration. The built-in `lark_webho
 
 - calls a Web-configured Lark custom-bot webhook directly;
 - supports optional HMAC-SHA256 signing;
-- renders an `interactive` card with severity color, event facts, folding, and optional detail link;
+- renders an `interactive` card with severity color, `lark_md` sections, structured fact fields, folding, and an optional detail link;
 - enforces the documented 20 KB body limit;
 - treats HTTP success and Lark `code == 0` as separate success conditions;
 - records delivery attempt, success, failure, format, and event count.
@@ -81,7 +91,7 @@ EventPlugin.Gate
 EventPlugin.Sink
 ```
 
-Each plugin publishes a descriptor containing a stable type, kind, description, and typed configuration fields. The Web UI renders these fields without knowing plugin implementation classes.
+Each plugin publishes a descriptor containing a stable type, kind, description, and typed configuration fields. The Web UI renders these fields without knowing plugin implementation classes. For a heartbeat-backed Agent Source, the Coordinator ingress descriptor mirrors the producer fields and passes their values through `cmd.event_source_config`; `pulse_message` remains only the transport adapter.
 
 Extension JARs register implementations through Java `ServiceLoader`. `AgentEventSourcePlugin` runs beside metrics collection and returns normal `PulseMessage` instances. Coordinator `EventPlugin.Source` implementations are ingress adapters; current channels are `pulse_message` and `webhook`.
 

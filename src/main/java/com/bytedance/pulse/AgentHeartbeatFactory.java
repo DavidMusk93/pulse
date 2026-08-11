@@ -41,8 +41,9 @@ public class AgentHeartbeatFactory {
     private final Path sysDir;
     private final long tideDiscoveryIntervalMs;
     private final long memTotalKb;
-    private final double diskIoThresholdPct;
+    private final AgentDiskIoEventEmitter diskIoEventEmitter;
     private final List<AgentEventSourcePlugin> eventSourcePlugins;
+    private volatile String eventSourceConfigGeneration = "";
     private volatile long nextTideDiscoveryAtMs;
 
     public AgentHeartbeatFactory(
@@ -98,11 +99,16 @@ public class AgentHeartbeatFactory {
         this.sysDir = procDir.equals(Path.of("/proc")) ? Path.of("/sys") : procDir.getParent().resolve("sys");
         this.tideDiscoveryIntervalMs = Math.max(5_000, tideDiscoveryIntervalMs);
         this.memTotalKb = memTotalKb(procDir);
-        this.diskIoThresholdPct = positiveDouble(env("PULSE_DISK_IO_THRESHOLD_PCT", "95"), 95);
-        List<AgentEventSourcePlugin> sourcePlugins = new ArrayList<>();
-        sourcePlugins.add(new AgentDiskIoEventEmitter(
+        double diskIoThresholdPct = positiveDouble(
+                env("PULSE_DISK_IO_THRESHOLD_PCT", "95"),
+                AgentDiskIoEventEmitter.DEFAULT_THRESHOLD_PCT);
+        this.diskIoEventEmitter = new AgentDiskIoEventEmitter(
                 diskIoThresholdPct,
-                positiveLong(env("PULSE_DISK_IO_SUSTAIN_MS", "10000"), 10_000)));
+                positiveLong(
+                        env("PULSE_DISK_IO_SUSTAIN_MS", "10000"),
+                        AgentDiskIoEventEmitter.DEFAULT_SUSTAIN_MS));
+        List<AgentEventSourcePlugin> sourcePlugins = new ArrayList<>();
+        sourcePlugins.add(diskIoEventEmitter);
         ServiceLoader.load(AgentEventSourcePlugin.class).forEach(sourcePlugins::add);
         this.eventSourcePlugins = List.copyOf(sourcePlugins);
     }
@@ -134,6 +140,33 @@ public class AgentHeartbeatFactory {
             messages.addAll(extraMessages);
         }
         return new HeartbeatRequest(null, agentId, epoch, nextSeq, ttlMs, messages, List.of());
+    }
+
+    synchronized boolean applyEventSourceConfig(List<PulseMessage> messages) {
+        Optional<PulseMessage> command = messages == null
+                ? Optional.empty()
+                : messages.stream()
+                        .filter(message -> "cmd.event_source_config".equals(message.type()))
+                        .filter(message -> message.payload() != null)
+                        .findFirst();
+        if (command.isEmpty()) {
+            return false;
+        }
+        Map<String, Object> payload = command.get().payload();
+        String generation = text(payload.get("generation"));
+        if (generation.isBlank() || generation.equals(eventSourceConfigGeneration)) {
+            return false;
+        }
+        Map<String, SourceRuntimeConfig> configs = sourceRuntimeConfigs(payload.get("sources"));
+        for (AgentEventSourcePlugin plugin : eventSourcePlugins) {
+            SourceRuntimeConfig config = configs.get(plugin.descriptor().sourceId());
+            plugin.configure(
+                    config != null && config.enabled(),
+                    config == null ? Map.of() : config.config());
+        }
+        diskSaturatedSinceMs.clear();
+        eventSourceConfigGeneration = generation;
+        return true;
     }
 
     private Map<String, Object> heartbeatPayload(List<Map<String, Object>> asyncTasks) {
@@ -180,6 +213,10 @@ public class AgentHeartbeatFactory {
 
     private static String blankToUnknown(String value) {
         return value == null || value.isBlank() || "-".equals(value) ? "unknown" : value;
+    }
+
+    private static String text(Object value) {
+        return value == null ? "" : value.toString().trim();
     }
 
     private static Optional<String> firstNonLoopbackAddress() {
@@ -234,7 +271,8 @@ public class AgentHeartbeatFactory {
                 long busyMs = Math.min(intervalMs, ioTimeMs - previous.ioTimeMs());
                 double utilizationPct = Math.max(0, busyMs * 100.0 / intervalMs);
                 long saturatedForMs = 0;
-                if (utilizationPct > diskIoThresholdPct) {
+                if (diskIoEventEmitter.enabled()
+                        && utilizationPct > diskIoEventEmitter.thresholdPct()) {
                     long saturatedSince = diskSaturatedSinceMs.computeIfAbsent(device, ignored -> previous.observedAtMs());
                     saturatedForMs = Math.max(0, now - saturatedSince);
                 } else {
@@ -254,6 +292,33 @@ public class AgentHeartbeatFactory {
         diskSamples.keySet().removeIf(device -> !observedDevices.contains(device));
         diskSaturatedSinceMs.keySet().removeIf(device -> !observedDevices.contains(device));
         return disks;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, SourceRuntimeConfig> sourceRuntimeConfigs(Object value) {
+        Map<String, SourceRuntimeConfig> configs = new LinkedHashMap<>();
+        if (!(value instanceof List<?> sources)) {
+            return configs;
+        }
+        for (Object item : sources) {
+            if (!(item instanceof Map<?, ?> source)) {
+                continue;
+            }
+            String sourceId = text(source.get("source_id"));
+            if (sourceId.isBlank()) {
+                continue;
+            }
+            Map<String, Object> config = new LinkedHashMap<>();
+            Object rawConfig = source.get("config");
+            if (rawConfig instanceof Map<?, ?> map) {
+                map.forEach((key, fieldValue) -> config.put(String.valueOf(key), fieldValue));
+            }
+            Object enabled = source.get("enabled");
+            configs.put(sourceId, new SourceRuntimeConfig(
+                    Boolean.parseBoolean(String.valueOf(enabled == null ? false : enabled)),
+                    Map.copyOf(config)));
+        }
+        return configs;
     }
 
     private boolean isPhysicalDisk(String device) {
@@ -494,4 +559,7 @@ public class AgentHeartbeatFactory {
     private record ProcessSample(ProcessTicks cpuTicks, long observedAtMs) {}
 
     private record DiskSample(long ioTimeMs, long observedAtMs) {}
+
+    private record SourceRuntimeConfig(boolean enabled, Map<String, Object> config) {
+    }
 }

@@ -266,6 +266,10 @@ public class CoordinatorService {
         List<PulseMessage> messages = new ArrayList<>();
         messages.add(groupPlanMessage(agentId));
         taskService.nextCommand(agentId).ifPresent(messages::add);
+        EventBusService eventBus = eventBusService;
+        if (eventBus != null) {
+            messages.add(eventBus.agentSourceConfigMessage());
+        }
         return messages;
     }
 

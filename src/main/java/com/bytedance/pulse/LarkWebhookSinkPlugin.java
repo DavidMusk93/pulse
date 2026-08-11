@@ -8,6 +8,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -98,21 +99,32 @@ final class LarkWebhookSinkPlugin implements EventPlugin.Sink {
         boolean recovery = delivery.recovery();
         String title = text(config, "title", "Pulse 事件中心");
         List<Map<String, Object>> elements = new ArrayList<>();
-        elements.add(markdown(recovery
-                ? "**状态：** 全部恢复\n**活动事件：** 0"
-                : "**状态：** 触发中\n**活动事件：** " + delivery.events().size()
-                        + "\n**最高级别：** " + highestSeverity(delivery.events())));
+        elements.add(facts(List.of(
+                "**状态**\n" + (recovery ? "全部恢复" : "触发中"),
+                "**活动事件**\n" + delivery.events().size(),
+                "**最高级别**\n" + highestSeverity(delivery.events()),
+                "**生成时间**\n" + Instant.ofEpochMilli(delivery.createdAtMs()))));
         elements.add(Map.of("tag", "hr"));
         for (Event event : delivery.events().stream().limit(Math.max(0, visibleEvents)).toList()) {
             String host = attribute(event, "ip", attribute(event, "host", event.agentId()));
-            String value = attribute(event, "value", "-");
+            String value = attribute(
+                    event,
+                    "io_util_pct",
+                    attribute(event, "value", "-"));
             String threshold = attribute(event, "threshold", "-");
-            String duration = attribute(event, "sustained_for_ms", "0");
+            String duration = attribute(
+                    event,
+                    "saturated_for_ms",
+                    attribute(event, "sustained_for_ms", "0"));
             elements.add(markdown(
-                    "**" + escape(host) + " / " + escape(event.subject()) + "**\n"
-                            + escape(event.eventType()) + " · " + escape(event.severity())
-                            + "\n值 `" + escape(value) + "` / 门槛 `" + escape(threshold)
-                            + "` / 持续 `" + escape(duration) + "ms`"));
+                    "**" + escape(event.subject()) + "**  ·  "
+                            + escape(event.severity().toUpperCase(java.util.Locale.ROOT))
+                            + "\n" + escape(event.summary())));
+            elements.add(facts(List.of(
+                    "**主机**\n" + escape(host),
+                    "**IO 利用率**\n" + formatPercent(value),
+                    "**触发门槛**\n> " + formatPercent(threshold),
+                    "**连续时长**\n" + formatDuration(duration))));
         }
         int folded = delivery.events().size() - Math.max(0, visibleEvents);
         if (folded > 0) {
@@ -150,6 +162,39 @@ final class LarkWebhookSinkPlugin implements EventPlugin.Sink {
 
     private static Map<String, Object> markdown(String content) {
         return Map.of("tag", "div", "text", Map.of("tag", "lark_md", "content", content));
+    }
+
+    private static Map<String, Object> facts(List<String> values) {
+        return Map.of(
+                "tag", "div",
+                "fields", values.stream()
+                        .map(value -> Map.<String, Object>of(
+                                "is_short", true,
+                                "text", Map.of("tag", "lark_md", "content", value)))
+                        .toList());
+    }
+
+    private static String formatPercent(String value) {
+        try {
+            return String.format(
+                    java.util.Locale.ROOT,
+                    "%.2f%%",
+                    Double.parseDouble(value));
+        } catch (NumberFormatException ignored) {
+            return escape(value);
+        }
+    }
+
+    private static String formatDuration(String value) {
+        try {
+            long millis = Long.parseLong(value);
+            if (millis >= 1_000) {
+                return String.format(java.util.Locale.ROOT, "%.1fs", millis / 1_000.0);
+            }
+            return millis + "ms";
+        } catch (NumberFormatException ignored) {
+            return escape(value);
+        }
     }
 
     private static String highestSeverity(List<Event> events) {

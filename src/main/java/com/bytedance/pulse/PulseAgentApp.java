@@ -57,7 +57,7 @@ public final class PulseAgentApp {
             HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat(taskRunner.drainReplies(), taskRunner.runningTasks());
             HeartbeatResponse response = client.sendForResponse("/heartbeat", heartbeat);
             if (response != null) {
-                taskRunner.handleMessages(response.messages());
+                handleMessages(heartbeatFactory, taskRunner, response.messages());
             }
             Thread.sleep(intervalMs);
         }
@@ -79,7 +79,10 @@ public final class PulseAgentApp {
             HeartbeatResponse response = client.sendForResponse("/heartbeat", batch);
             if (response != null) {
                 receiver.updatePlans(response);
-                taskRunner.handleMessages(receiver.messagesFor(leaderHeartbeat.agentId()));
+                handleMessages(
+                        heartbeatFactory,
+                        taskRunner,
+                        receiver.messagesFor(leaderHeartbeat.agentId()));
             }
             Thread.sleep(intervalMs);
         }
@@ -97,7 +100,7 @@ public final class PulseAgentApp {
             HeartbeatRequest heartbeat = heartbeatFactory.nextHeartbeat(taskRunner.drainReplies(), taskRunner.runningTasks());
             HeartbeatResponse response = leaderClient.sendForResponse("/group/heartbeat", heartbeat);
             if (response != null) {
-                taskRunner.handleMessages(response.messages());
+                handleMessages(heartbeatFactory, taskRunner, response.messages());
             }
             Thread.sleep(intervalMs);
         }
@@ -128,7 +131,7 @@ public final class PulseAgentApp {
                 if (response != null) {
                     receiver.updatePlans(response);
                     List<PulseMessage> selfMessages = receiver.messagesFor(heartbeat.agentId());
-                    taskRunner.handleMessages(selfMessages);
+                    handleMessages(heartbeatFactory, taskRunner, selfMessages);
                     currentPlan = planFromMessages(heartbeat.agentId(), selfMessages).orElse(currentPlan);
                 }
             } else if ("follower".equalsIgnoreCase(mode) && !currentPlan.leaderUrl().isBlank()) {
@@ -139,18 +142,26 @@ public final class PulseAgentApp {
                     response = client.sendForResponse("/heartbeat", heartbeat);
                 }
                 if (response != null) {
-                    taskRunner.handleMessages(response.messages());
+                    handleMessages(heartbeatFactory, taskRunner, response.messages());
                     currentPlan = planFromMessages(heartbeat.agentId(), response.messages()).orElse(currentPlan);
                 }
             } else {
                 HeartbeatResponse response = client.sendForResponse("/heartbeat", heartbeat);
                 if (response != null) {
-                    taskRunner.handleMessages(response.messages());
+                    handleMessages(heartbeatFactory, taskRunner, response.messages());
                     currentPlan = planFromMessages(heartbeat.agentId(), response.messages()).orElse(currentPlan);
                 }
             }
             Thread.sleep(intervalMs);
         }
+    }
+
+    private static void handleMessages(
+            AgentHeartbeatFactory heartbeatFactory,
+            AgentTaskRunner taskRunner,
+            List<PulseMessage> messages) {
+        heartbeatFactory.applyEventSourceConfig(messages);
+        taskRunner.handleMessages(messages);
     }
 
     private static java.util.Optional<AgentGroupPlan> planFromMessages(String agentId, List<PulseMessage> messages) {

@@ -40,6 +40,10 @@ class LarkWebhookSinkPluginTest {
                 LarkWebhookSinkPlugin.sign(now / 1_000, "private-secret"),
                 payload.get("sign").asText());
         assertTrue(payload.toString().contains("nvme0n1"));
+        assertTrue(payload.toString().contains("98.20%"));
+        assertTrue(payload.toString().contains("95.00%"));
+        assertTrue(payload.toString().contains("20.0s"));
+        assertTrue(payload.at("/card/elements/0/fields").isArray());
     }
 
     @Test
@@ -83,9 +87,9 @@ class LarkWebhookSinkPluginTest {
                 "Disk IO saturated",
                 Map.of(
                         "ip", "10.0.0.1",
-                        "value", 98.2,
+                        "io_util_pct", 98.2,
                         "threshold", 95,
-                        "sustained_for_ms", 20_000));
+                        "saturated_for_ms", 20_000));
     }
 
     private static final class RecordingTransport implements LarkWebhookSinkPlugin.Transport {

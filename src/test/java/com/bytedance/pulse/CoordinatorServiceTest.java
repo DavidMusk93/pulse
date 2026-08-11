@@ -50,6 +50,28 @@ class CoordinatorServiceTest {
     }
 
     @Test
+    void heartbeatResponseCarriesAgentEventSourceConfig() throws Exception {
+        CoordinatorService service = new CoordinatorService("coordinator-a", clock);
+        try (EventBusService eventBus = new EventBusService(
+                tempDir.resolve("event-source-config.json"),
+                clock,
+                event -> {},
+                false)) {
+            service.attachEventBus(eventBus);
+
+            HeartbeatResponse response = service.handleHeartbeat(
+                    singleHeartbeat("agent-1", 1, 42, "host-a", "10.0.0.1"));
+
+            PulseMessage command = response.messages().stream()
+                    .filter(message -> "cmd.event_source_config".equals(message.type()))
+                    .findFirst()
+                    .orElseThrow();
+            assertTrue(command.payload().toString().contains("sustain_ms=10000"));
+            assertTrue(command.payload().toString().contains("threshold_pct=95.0"));
+        }
+    }
+
+    @Test
     void heartbeatRequiresThreeConfirmationsWithinWindowToBeAlive() {
         CoordinatorService service = new CoordinatorService("coordinator-a", clock);
 

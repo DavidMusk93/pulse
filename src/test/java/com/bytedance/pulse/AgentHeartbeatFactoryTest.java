@@ -183,6 +183,68 @@ class AgentHeartbeatFactoryTest {
         assertEquals(firing.payload().get("incident_id"), resolved.payload().get("incident_id"));
     }
 
+    @Test
+    void heartbeatSourceConfigControlsThresholdDurationAndEnableState() throws Exception {
+        Path proc = tempDir.resolve("dynamic-proc");
+        Path sys = tempDir.resolve("sys");
+        Files.createDirectories(proc.resolve("self"));
+        Files.createDirectories(sys.resolve("class/block/sda"));
+        Files.writeString(proc.resolve("meminfo"), "MemTotal:       1000000 kB\n");
+        Files.writeString(proc.resolve("diskstats"), "8 0 sda 0 0 0 0 0 0 0 0 0 1000 0\n");
+        MutableClock clock = new MutableClock(1_710_000_000_000L);
+        AgentHeartbeatFactory factory = new AgentHeartbeatFactory(
+                "agent-1", "host-1", "fd00::1", "cdn_new", "area-a", "az-a",
+                "worker", 100, 15_000, clock, proc, 60_000);
+
+        assertTrue(factory.applyEventSourceConfig(List.of(sourceConfig(
+                "generation-a", true, 95, 10_000))));
+        factory.nextHeartbeat();
+
+        clock.advanceMillis(5_000);
+        Files.writeString(proc.resolve("diskstats"), "8 0 sda 0 0 0 0 0 0 0 0 0 5750 0\n");
+        assertEquals(1, factory.nextHeartbeat().messages().size());
+
+        assertTrue(!factory.applyEventSourceConfig(List.of(sourceConfig(
+                "generation-a", true, 95, 10_000))));
+        clock.advanceMillis(5_000);
+        Files.writeString(proc.resolve("diskstats"), "8 0 sda 0 0 0 0 0 0 0 0 0 10550 0\n");
+        assertEquals(1, factory.nextHeartbeat().messages().size());
+
+        clock.advanceMillis(5_000);
+        Files.writeString(proc.resolve("diskstats"), "8 0 sda 0 0 0 0 0 0 0 0 0 15350 0\n");
+        HeartbeatRequest firing = factory.nextHeartbeat();
+        assertEquals(2, firing.messages().size());
+        assertEquals("firing", firing.messages().get(1).payload().get("status"));
+
+        assertTrue(factory.applyEventSourceConfig(List.of(sourceConfig(
+                "generation-b", false, 95, 10_000))));
+        clock.advanceMillis(5_000);
+        Files.writeString(proc.resolve("diskstats"), "8 0 sda 0 0 0 0 0 0 0 0 0 20150 0\n");
+        assertEquals(1, factory.nextHeartbeat().messages().size());
+    }
+
+    private static PulseMessage sourceConfig(
+            String generation,
+            boolean enabled,
+            double thresholdPct,
+            long sustainMs) {
+        return new PulseMessage(
+                "source-config-" + generation,
+                "cmd.event_source_config",
+                1,
+                null,
+                null,
+                Map.of(
+                        "generation", generation,
+                        "config_version", 1,
+                        "sources", List.of(Map.of(
+                                "source_id", AgentDiskIoEventEmitter.SOURCE_ID,
+                                "enabled", enabled,
+                                "config", Map.of(
+                                        "threshold_pct", thresholdPct,
+                                        "sustain_ms", sustainMs)))));
+    }
+
     private static final class MutableClock extends Clock {
         private long millis;
 
