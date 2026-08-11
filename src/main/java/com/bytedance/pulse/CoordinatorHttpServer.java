@@ -38,7 +38,7 @@ public class CoordinatorHttpServer {
     private final HttpClient routeClient = HttpClient.newHttpClient();
     private final BiFunction<String, URI, URI> taskRouteResolver;
     private final List<String> metricPeerUrls;
-    private final FanoutService fanoutService;
+    private final EventBusService eventBusService;
     private final ArrayDeque<SseEvent> metricEventCache = new ArrayDeque<>();
     private final AtomicLong metricEventSequence = new AtomicLong();
     private final int metricEventCacheLimit;
@@ -56,7 +56,7 @@ public class CoordinatorHttpServer {
             CoordinatorService service,
             String bindHost,
             int port,
-            FanoutService fanoutService) throws IOException {
+            EventBusService eventBusService) throws IOException {
         this(
                 service,
                 bindHost,
@@ -64,7 +64,7 @@ public class CoordinatorHttpServer {
                 PeerForwarder.fromEnvironment(service.coordinatorId()),
                 CoordinatorHttpServer::defaultTaskRouteUri,
                 peerUrlsFromEnvironment(),
-                fanoutService);
+                eventBusService);
     }
 
     CoordinatorHttpServer(CoordinatorService service, String bindHost, int port, PeerForwarder peerForwarder) throws IOException {
@@ -97,12 +97,12 @@ public class CoordinatorHttpServer {
             PeerForwarder peerForwarder,
             BiFunction<String, URI, URI> taskRouteResolver,
             List<String> metricPeerUrls,
-            FanoutService fanoutService) throws IOException {
+            EventBusService eventBusService) throws IOException {
         this.service = service;
         this.peerForwarder = peerForwarder;
         this.taskRouteResolver = taskRouteResolver;
         this.metricPeerUrls = metricPeerUrls == null ? List.of() : List.copyOf(metricPeerUrls);
-        this.fanoutService = fanoutService;
+        this.eventBusService = eventBusService;
         this.metricEventCacheLimit = positiveInt("PULSE_METRIC_SSE_CACHE_EVENTS", 256);
         this.taskOutputPreviewChars = positiveInt("PULSE_TASK_OUTPUT_PREVIEW_CHARS", 8 * 1024);
         this.server = HttpServer.create(new InetSocketAddress(bindHost, port), httpBacklog());
@@ -165,28 +165,64 @@ public class CoordinatorHttpServer {
                 writeJson(exchange, 200, service.metricStorageHealth());
                 return;
             }
-            if ("GET".equals(method) && "/api/fanout/sources".equals(path)) {
-                writeJson(exchange, 200, fanoutService == null ? List.of() : fanoutService.sources());
+            if ("GET".equals(method) && "/api/eventbus".equals(path)) {
+                if (eventBusService == null) {
+                    throw new IllegalArgumentException("eventbus is disabled");
+                }
+                writeJson(exchange, 200, eventBusService.view());
                 return;
             }
-            if ("POST".equals(method) && "/api/fanout/sources".equals(path)) {
-                if (fanoutService == null) {
-                    throw new IllegalArgumentException("fanout is disabled");
+            if ("PUT".equals(method) && "/api/eventbus/config".equals(path)) {
+                if (eventBusService == null) {
+                    throw new IllegalArgumentException("eventbus is disabled");
                 }
-                FanoutRegistration registration = mapper.readValue(readBody(exchange), FanoutRegistration.class);
-                writeJson(exchange, 201, fanoutService.register(registration));
+                EventBusConfig config = mapper.readValue(readBody(exchange), EventBusConfig.class);
+                writeJson(exchange, 200, eventBusService.update(config));
                 return;
             }
-            if ("DELETE".equals(method) && path.startsWith("/api/fanout/sources/")) {
-                if (fanoutService == null) {
-                    throw new IllegalArgumentException("fanout is disabled");
+            if ("POST".equals(method)
+                    && path.startsWith("/api/eventbus/sources/")
+                    && path.endsWith("/events")) {
+                if (eventBusService == null) {
+                    throw new IllegalArgumentException("eventbus is disabled");
                 }
-                String sourceId = path.substring("/api/fanout/sources/".length());
+                String sourceId = path.substring(
+                        "/api/eventbus/sources/".length(),
+                        path.length() - "/events".length());
                 if (sourceId.isBlank()) {
                     throw new IllegalArgumentException("source_id is required");
                 }
-                boolean removed = fanoutService.remove(sourceId);
-                writeJson(exchange, removed ? 200 : 404, Map.of("removed", removed));
+                try {
+                    Map<String, Object> payload = mapper.readValue(readBody(exchange), Map.class);
+                    writeJson(exchange, 202, eventBusService.publish(
+                            URLDecoder.decode(sourceId, StandardCharsets.UTF_8),
+                            exchange.getRequestHeaders().getFirst("x-pulse-event-token"),
+                            payload));
+                } catch (SecurityException exception) {
+                    writeJson(exchange, 401, Map.of("error", exception.getMessage()));
+                }
+                return;
+            }
+            if ("POST".equals(method)
+                    && path.startsWith("/api/eventbus/sinks/")
+                    && path.endsWith("/test")) {
+                if (eventBusService == null) {
+                    throw new IllegalArgumentException("eventbus is disabled");
+                }
+                String sinkId = path.substring(
+                        "/api/eventbus/sinks/".length(),
+                        path.length() - "/test".length());
+                if (sinkId.isBlank()) {
+                    throw new IllegalArgumentException("sink_id is required");
+                }
+                try {
+                    writeJson(exchange, 200, eventBusService.testSink(URLDecoder.decode(
+                            sinkId, StandardCharsets.UTF_8)));
+                } catch (IllegalArgumentException exception) {
+                    throw exception;
+                } catch (Exception exception) {
+                    writeJson(exchange, 502, Map.of("error", exception.getMessage()));
+                }
                 return;
             }
             if ("GET".equals(method) && "/api/metrics/stream".equals(path)) {

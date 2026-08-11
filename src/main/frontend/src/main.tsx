@@ -39,7 +39,9 @@ import {
   type MetricCatalogItem,
   type MetricQueryResultView,
   type MetricStorageHealth,
-  type FanoutSourceView
+  type EventBusConfig,
+  type EventBusView,
+  type EventPluginDescriptor
 } from './metrics';
 import 'antd/dist/reset.css';
 import './style.css';
@@ -1482,8 +1484,288 @@ function App() {
   </ConfigProvider>;
 }
 
-function fanoutSourceId(source: FanoutSourceView) {
-  return source.source_id ?? source.sourceId ?? '';
+function pluginConfigDefaults(plugin?: EventPluginDescriptor) {
+  return Object.fromEntries((plugin?.config_fields || [])
+    .filter(field => field.default_value !== undefined && field.default_value !== null)
+    .map(field => [field.key, field.default_value]));
+}
+
+function EventPluginFields({
+  plugin,
+  config,
+  onChange
+}: {
+  plugin?: EventPluginDescriptor;
+  config: Record<string, unknown>;
+  onChange: (config: Record<string, unknown>) => void;
+}) {
+  if (!plugin) return <Typography.Text type="secondary">选择插件后显示配置字段</Typography.Text>;
+  return <div className="eventbus-plugin-fields">
+    {(plugin.config_fields || []).map(field => {
+      const value = config[field.key] ?? field.default_value ?? '';
+      const update = (next: unknown) => onChange({ ...config, [field.key]: next });
+      let control: React.ReactNode;
+      if (field.type === 'boolean') {
+        control = <Select
+          value={Boolean(value)}
+          options={[{ label: '启用', value: true }, { label: '关闭', value: false }]}
+          onChange={update}
+        />;
+      } else if (field.type === 'select') {
+        control = <Select
+          value={String(value)}
+          options={(field.options || []).map(option => ({ label: option, value: option }))}
+          onChange={update}
+        />;
+      } else if (field.type === 'password') {
+        control = <Input.Password value={String(value)} onChange={event => update(event.target.value)} />;
+      } else {
+        control = <Input
+          type={field.type === 'number' ? 'number' : 'text'}
+          value={String(value)}
+          onChange={event => update(field.type === 'number' ? Number(event.target.value) : event.target.value)}
+        />;
+      }
+      return <label key={field.key} className="eventbus-field">
+        <span>{field.label}{field.required ? ' *' : ''}</span>
+        {control}
+        {field.description && <small>{field.description}</small>}
+      </label>;
+    })}
+  </div>;
+}
+
+function EventBusPanel({
+  controller,
+  onError
+}: {
+  controller: MetricQueryController;
+  onError: (error: string) => void;
+}) {
+  const [view, setView] = useState<EventBusView | null>(null);
+  const [draft, setDraft] = useState<EventBusConfig | null>(null);
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [testingSink, setTestingSink] = useState('');
+
+  const load = useCallback(() => controller.eventBus()
+    .then(setView)
+    .catch(error => onError(error instanceof Error ? error.message : String(error))), [controller, onError]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const plugins = view?.plugins || [];
+  const byKind = (kind: EventPluginDescriptor['kind']) => plugins.filter(plugin => plugin.kind === kind);
+  const descriptor = (kind: EventPluginDescriptor['kind'], type: string) =>
+    plugins.find(plugin => plugin.kind === kind && plugin.type === type);
+  const updateList = <K extends 'event_types' | 'sources' | 'sinks' | 'routes'>(
+    key: K,
+    index: number,
+    value: EventBusConfig[K][number] | null
+  ) => {
+    if (!draft) return;
+    const next = [...draft[key]] as EventBusConfig[K];
+    if (value === null) next.splice(index, 1);
+    else next[index] = value as never;
+    setDraft({ ...draft, [key]: next });
+  };
+  const append = <K extends 'event_types' | 'sources' | 'sinks' | 'routes'>(
+    key: K,
+    value: EventBusConfig[K][number]
+  ) => draft && setDraft({ ...draft, [key]: [...draft[key], value] });
+
+  async function save() {
+    if (!draft) return;
+    setSaving(true);
+    onError('');
+    try {
+      const next = await controller.updateEventBus(draft);
+      setView(next);
+      setDraft(structuredClone(next.config));
+      setOpen(false);
+      message.success('EventBus 配置已生效');
+    } catch (error) {
+      onError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function testSink(sinkId: string) {
+    setTestingSink(sinkId);
+    try {
+      const receipt = await controller.testEventSink(sinkId);
+      message.success(`Sink 投递成功：${receipt.format || 'unknown'}`);
+      await load();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setTestingSink('');
+    }
+  }
+
+  const statusEntries = Object.entries(view?.route_status || {});
+  const statusErrors = statusEntries.filter(([, status]) => status.last_error);
+  return <>
+    <div className="metrics-eventbus-card">
+      <div>
+        <span className="metrics-field-label">EVENTBUS</span>
+        <Typography.Text type="secondary">Source → Event Type → Gate → Route → Sink</Typography.Text>
+      </div>
+      <Space size={5} wrap>
+        <Tag>{view?.config.event_types.length || 0} types</Tag>
+        <Tag color="cyan">{view?.config.sources.length || 0} sources</Tag>
+        <Tag color="purple">{view?.config.routes.length || 0} routes</Tag>
+        <Tag color="blue">{view?.config.sinks.length || 0} sinks</Tag>
+        <Tag color={(view?.active_events?.length || 0) ? 'error' : 'success'}>{view?.active_events?.length || 0} active</Tag>
+        {statusErrors.map(([key, status]) => <Tag key={key} color="error">{key}: {status.last_error}</Tag>)}
+      </Space>
+      <Button size="small" type="primary" onClick={() => {
+        if (view) setDraft(structuredClone(view.config));
+        setOpen(true);
+      }}>配置事件流</Button>
+    </div>
+    <Modal
+      title="EventBus 配置"
+      width={1180}
+      open={open}
+      onCancel={() => setOpen(false)}
+      okText="保存并生效"
+      confirmLoading={saving}
+      onOk={save}
+      destroyOnHidden
+    >
+      {draft && <div className="eventbus-editor">
+        <section>
+          <div className="eventbus-section-head">
+            <div><b>事件类型</b><span>定义稳定的事件语义与默认级别</span></div>
+            <Button size="small" onClick={() => append('event_types', {
+              id: `event.type.${Date.now()}`,
+              name: '新事件类型',
+              description: '',
+              severity: 'warn',
+              enabled: true
+            })}>新增</Button>
+          </div>
+          <div className="eventbus-items">
+            {draft.event_types.map((eventType, index) => <div className="eventbus-item eventbus-item-inline" key={`${eventType.id}-${index}`}>
+              <Input value={eventType.id} onChange={event => updateList('event_types', index, { ...eventType, id: event.target.value })} placeholder="event.type" />
+              <Input value={eventType.name} onChange={event => updateList('event_types', index, { ...eventType, name: event.target.value })} placeholder="显示名称" />
+              <Select value={eventType.severity} options={['info', 'warn', 'error', 'critical'].map(value => ({ value, label: value }))} onChange={severity => updateList('event_types', index, { ...eventType, severity })} />
+              <Select value={eventType.enabled} options={[{ label: '启用', value: true }, { label: '关闭', value: false }]} onChange={enabled => updateList('event_types', index, { ...eventType, enabled })} />
+              <Button danger size="small" onClick={() => updateList('event_types', index, null)}>删除</Button>
+            </div>)}
+          </div>
+        </section>
+
+        <section>
+          <div className="eventbus-section-head">
+            <div><b>Sources</b><span>插件从 heartbeat 或外部输入生成事件</span></div>
+            <Button size="small" disabled={!byKind('source').length} onClick={() => {
+              const plugin = byKind('source')[0];
+              append('sources', {
+                id: `source-${Date.now()}`,
+                name: '新 Source',
+                plugin_type: plugin.type,
+                event_type: draft.event_types[0]?.id || '',
+                enabled: true,
+                config: pluginConfigDefaults(plugin)
+              });
+            }}>新增</Button>
+          </div>
+          <div className="eventbus-items eventbus-grid">
+            {draft.sources.map((source, index) => <div className="eventbus-item" key={`${source.id}-${index}`}>
+              <div className="eventbus-item-inline">
+                <Input value={source.id} onChange={event => updateList('sources', index, { ...source, id: event.target.value })} placeholder="source-id" />
+                <Input value={source.name} onChange={event => updateList('sources', index, { ...source, name: event.target.value })} placeholder="显示名称" />
+                <Select value={source.plugin_type} options={byKind('source').map(plugin => ({ value: plugin.type, label: plugin.name }))} onChange={pluginType => {
+                  const plugin = descriptor('source', pluginType);
+                  updateList('sources', index, { ...source, plugin_type: pluginType, config: pluginConfigDefaults(plugin) });
+                }} />
+                <Select value={source.event_type} options={draft.event_types.map(item => ({ value: item.id, label: item.name }))} onChange={eventType => updateList('sources', index, { ...source, event_type: eventType })} />
+                <Select value={source.enabled} options={[{ label: '启用', value: true }, { label: '关闭', value: false }]} onChange={enabled => updateList('sources', index, { ...source, enabled })} />
+                <Button danger size="small" onClick={() => updateList('sources', index, null)}>删除</Button>
+              </div>
+              <EventPluginFields plugin={descriptor('source', source.plugin_type)} config={source.config} onChange={config => updateList('sources', index, { ...source, config })} />
+            </div>)}
+          </div>
+        </section>
+
+        <section>
+          <div className="eventbus-section-head">
+            <div><b>Sinks</b><span>Webhook 等投递能力，密钥只写入不回显</span></div>
+            <Button size="small" disabled={!byKind('sink').length} onClick={() => {
+              const plugin = byKind('sink')[0];
+              append('sinks', {
+                id: `sink-${Date.now()}`,
+                name: '新 Sink',
+                plugin_type: plugin.type,
+                enabled: true,
+                config: pluginConfigDefaults(plugin)
+              });
+            }}>新增</Button>
+          </div>
+          <div className="eventbus-items eventbus-grid">
+            {draft.sinks.map((sink, index) => <div className="eventbus-item" key={`${sink.id}-${index}`}>
+              <div className="eventbus-item-inline">
+                <Input value={sink.id} onChange={event => updateList('sinks', index, { ...sink, id: event.target.value })} placeholder="sink-id" />
+                <Input value={sink.name} onChange={event => updateList('sinks', index, { ...sink, name: event.target.value })} placeholder="显示名称" />
+                <Select value={sink.plugin_type} options={byKind('sink').map(plugin => ({ value: plugin.type, label: plugin.name }))} onChange={pluginType => {
+                  const plugin = descriptor('sink', pluginType);
+                  updateList('sinks', index, { ...sink, plugin_type: pluginType, config: pluginConfigDefaults(plugin) });
+                }} />
+                <Select value={sink.enabled} options={[{ label: '启用', value: true }, { label: '关闭', value: false }]} onChange={enabled => updateList('sinks', index, { ...sink, enabled })} />
+                <Button size="small" loading={testingSink === sink.id} disabled={!view?.config.sinks.some(item => item.id === sink.id)} onClick={() => testSink(sink.id)}>测试</Button>
+                <Button danger size="small" onClick={() => updateList('sinks', index, null)}>删除</Button>
+              </div>
+              <EventPluginFields plugin={descriptor('sink', sink.plugin_type)} config={sink.config} onChange={config => updateList('sinks', index, { ...sink, config })} />
+            </div>)}
+          </div>
+        </section>
+
+        <section>
+          <div className="eventbus-section-head">
+            <div><b>Routes & Gates</b><span>筛选事件并控制发布周期，再 fanout 到多个 Sink</span></div>
+            <Button size="small" disabled={!byKind('gate').length || !draft.sinks.length} onClick={() => {
+              const plugin = byKind('gate')[0];
+              append('routes', {
+                id: `route-${Date.now()}`,
+                name: '新 Route',
+                enabled: true,
+                source_ids: draft.sources[0] ? [draft.sources[0].id] : [],
+                event_types: draft.event_types[0] ? [draft.event_types[0].id] : [],
+                sink_ids: draft.sinks[0] ? [draft.sinks[0].id] : [],
+                gate_type: plugin.type,
+                gate_config: pluginConfigDefaults(plugin)
+              });
+            }}>新增</Button>
+          </div>
+          <div className="eventbus-items eventbus-grid">
+            {draft.routes.map((route, index) => <div className="eventbus-item" key={`${route.id}-${index}`}>
+              <div className="eventbus-item-inline">
+                <Input value={route.id} onChange={event => updateList('routes', index, { ...route, id: event.target.value })} placeholder="route-id" />
+                <Input value={route.name} onChange={event => updateList('routes', index, { ...route, name: event.target.value })} placeholder="显示名称" />
+                <Select value={route.gate_type} options={byKind('gate').map(plugin => ({ value: plugin.type, label: plugin.name }))} onChange={gateType => {
+                  const plugin = descriptor('gate', gateType);
+                  updateList('routes', index, { ...route, gate_type: gateType, gate_config: pluginConfigDefaults(plugin) });
+                }} />
+                <Select value={route.enabled} options={[{ label: '启用', value: true }, { label: '关闭', value: false }]} onChange={enabled => updateList('routes', index, { ...route, enabled })} />
+                <Button danger size="small" onClick={() => updateList('routes', index, null)}>删除</Button>
+              </div>
+              <div className="eventbus-route-selectors">
+                <Select mode="multiple" value={route.source_ids} options={draft.sources.map(item => ({ value: item.id, label: item.name }))} placeholder="Sources" onChange={sourceIds => updateList('routes', index, { ...route, source_ids: sourceIds })} />
+                <Select mode="multiple" value={route.event_types} options={draft.event_types.map(item => ({ value: item.id, label: item.name }))} placeholder="Event types" onChange={eventTypes => updateList('routes', index, { ...route, event_types: eventTypes })} />
+                <Select mode="multiple" value={route.sink_ids} options={draft.sinks.map(item => ({ value: item.id, label: item.name }))} placeholder="Sinks" onChange={sinkIds => updateList('routes', index, { ...route, sink_ids: sinkIds })} />
+              </div>
+              <EventPluginFields plugin={descriptor('gate', route.gate_type)} config={route.gate_config} onChange={gateConfig => updateList('routes', index, { ...route, gate_config: gateConfig })} />
+            </div>)}
+          </div>
+        </section>
+      </div>}
+    </Modal>
+  </>;
 }
 
 const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }) {
@@ -1504,10 +1786,6 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState !== 'hidden');
   const [fixedRangeEndMs, setFixedRangeEndMs] = useState<number | null>(null);
   const [frontendMetrics, setFrontendMetrics] = useState({ queryMs: 0, renderMs: 0 });
-  const [fanoutSources, setFanoutSources] = useState<FanoutSourceView[]>([]);
-  const [fanoutTarget, setFanoutTarget] = useState('');
-  const [fanoutIntervalMs, setFanoutIntervalMs] = useState(900_000);
-  const [fanoutLoading, setFanoutLoading] = useState(false);
   const [isApplyingHostSelection, startHostSelectionTransition] = useTransition();
   const queryController = useMemo(() => new MetricQueryController(fetchJson), []);
   const renderScheduler = useMemo(() => new RenderScheduler(), []);
@@ -1601,39 +1879,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
       }
     }).catch(err => setError(err instanceof Error ? err.message : String(err)));
     queryController.storage().then(setStorage).catch(err => setError(err instanceof Error ? err.message : String(err)));
-    queryController.fanoutSources().then(setFanoutSources).catch(err => setError(err instanceof Error ? err.message : String(err)));
   }, []);
-
-  async function registerFanoutSource() {
-    const target = fanoutTarget.trim();
-    if (!target) return;
-    setFanoutLoading(true);
-    setError('');
-    try {
-      const source = await queryController.registerFanoutSource(target, fanoutIntervalMs);
-      setFanoutSources(current => [...current.filter(item => fanoutSourceId(item) !== fanoutSourceId(source)), source]);
-      setFanoutTarget('');
-      message.success(`已注册事件分发：${source.name || target}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setFanoutLoading(false);
-    }
-  }
-
-  async function removeFanoutSource(source: FanoutSourceView) {
-    const sourceId = fanoutSourceId(source);
-    if (!sourceId) return;
-    setFanoutLoading(true);
-    try {
-      await queryController.removeFanoutSource(sourceId);
-      setFanoutSources(current => current.filter(item => fanoutSourceId(item) !== sourceId));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setFanoutLoading(false);
-    }
-  }
 
   useEffect(() => {
     if (fleetMode || selectedAgents.length || scopedAgentOptions.length === 0) return;
@@ -1778,57 +2024,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
           <div className="metrics-scope-card"><span>Retention Lag</span><b>{formatDuration(storage?.retention_lag_ms)}</b><em>lag</em></div>
         </div>
       </div>
-      <div className="metrics-fanout-card">
-        <div className="metrics-fanout-head">
-          <div>
-            <span className="metrics-field-label">事件分发</span>
-            <Typography.Text type="secondary">磁盘 IO &gt;95% 持续 10s 后生成事件；按 source 周期聚合发送。</Typography.Text>
-          </div>
-          <Tag color={fanoutSources.length ? 'blue' : 'default'}>{fanoutSources.length} sources</Tag>
-        </div>
-        <Space.Compact className="metrics-fanout-register">
-          <Input
-            value={fanoutTarget}
-            onChange={event => setFanoutTarget(event.target.value)}
-            onPressEnter={registerFanoutSource}
-            placeholder="字节群名称（由 bytedcli 定位）"
-          />
-          <Select
-            value={fanoutIntervalMs}
-            options={[
-              { label: '5 分钟', value: 300_000 },
-              { label: '15 分钟', value: 900_000 },
-              { label: '30 分钟', value: 1_800_000 },
-              { label: '60 分钟', value: 3_600_000 }
-            ]}
-            onChange={setFanoutIntervalMs}
-          />
-          <Button type="primary" loading={fanoutLoading} disabled={!fanoutTarget.trim()} onClick={registerFanoutSource}>
-            注册
-          </Button>
-        </Space.Compact>
-        <div className="metrics-fanout-sources">
-          {fanoutSources.map(source => {
-            const intervalMs = source.interval_ms ?? source.intervalMs ?? 0;
-            const lastSuccessAt = source.last_success_at_ms ?? source.lastSuccessAtMs ?? 0;
-            const lastError = source.last_error ?? source.lastError ?? '';
-            return <Tag
-              key={fanoutSourceId(source)}
-              color={lastError ? 'error' : 'processing'}
-              closable
-              onClose={event => {
-                event.preventDefault();
-                removeFanoutSource(source);
-              }}
-            >
-              {source.name || source.target_query || source.targetQuery} · {Math.round(intervalMs / 60_000)}m
-              {lastSuccessAt ? ` · success ${formatSeenTime(lastSuccessAt)}` : ''}
-              {lastError ? ` · ${lastError}` : ''}
-            </Tag>;
-          })}
-          {!fanoutSources.length && <Typography.Text type="secondary">尚未注册 fanout source</Typography.Text>}
-        </div>
-      </div>
+      <EventBusPanel controller={queryController} onError={setError} />
       <div className="metrics-control-grid">
         <div className="metrics-control-card metrics-preset-card">
           <span className="metrics-field-label">健康视角</span>

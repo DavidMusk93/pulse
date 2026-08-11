@@ -15,11 +15,12 @@ public final class PulseCoordinatorApp {
 
         MetricStorage metricStorage = metricStorageFromEnv(System.getenv());
         CoordinatorService service = new CoordinatorService(coordinatorId, Clock.systemUTC(), metricStorage);
-        FanoutService fanoutService = fanoutServiceFromEnv(System.getenv(), service);
-        CoordinatorHttpServer server = new CoordinatorHttpServer(service, bindHost, port, fanoutService);
+        EventBusService eventBusService = eventBusServiceFromEnv(System.getenv(), service);
+        service.attachEventBus(eventBusService);
+        CoordinatorHttpServer server = new CoordinatorHttpServer(service, bindHost, port, eventBusService);
         Runtime.getRuntime().addShutdownHook(new Thread(
                 () -> {
-                    closeQuietly(fanoutService);
+                    closeQuietly(eventBusService);
                     closeQuietly(metricStorage);
                 },
                 "pulse-coordinator-shutdown"));
@@ -63,25 +64,19 @@ public final class PulseCoordinatorApp {
                 positiveInt(env, "PULSE_LOCAL_STORAGE_CLEANUP_LIMIT", 10_000));
     }
 
-    static FanoutService fanoutServiceFromEnv(Map<String, String> env, CoordinatorService service) throws Exception {
-        String explicitPath = env.getOrDefault("PULSE_FANOUT_CONFIG_PATH", "");
+    static EventBusService eventBusServiceFromEnv(Map<String, String> env, CoordinatorService service) throws Exception {
+        String explicitPath = env.getOrDefault("PULSE_EVENTBUS_CONFIG_PATH", "");
         String storagePath = env.getOrDefault("PULSE_LOCAL_STORAGE_PATH", env.getOrDefault("PULSE_METRICS_DB", ""));
         if (explicitPath.isBlank() && storagePath.isBlank()) {
             return null;
         }
         Path configPath = explicitPath.isBlank()
-                ? Path.of(storagePath).toAbsolutePath().getParent().resolve("pulse-fanout.json")
+                ? Path.of(storagePath).toAbsolutePath().getParent().resolve("pulse-eventbus.json")
                 : Path.of(explicitPath);
-        String executable = env.getOrDefault("PULSE_BYTEDCLI_PATH", "bytedcli");
-        String identity = env.getOrDefault("PULSE_BYTEDCLI_LARK_AS", "user");
-        return new FanoutService(
+        return new EventBusService(
                 configPath,
                 Clock.systemUTC(),
-                service::activeMetricEvents,
-                new FanoutService.BytedCliLarkClient(
-                        executable,
-                        identity,
-                        Duration.ofMillis(positiveLong(env, "PULSE_BYTEDCLI_TIMEOUT_MS", 30_000))),
+                service::recordMetricEvent,
                 true);
     }
 

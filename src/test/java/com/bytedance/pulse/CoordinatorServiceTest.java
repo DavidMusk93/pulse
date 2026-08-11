@@ -132,33 +132,40 @@ class CoordinatorServiceTest {
         MutableClock mutableClock = new MutableClock(Instant.ofEpochMilli(1_710_000_005_000L));
         try (LocalMetricStorage storage = LocalMetricStorage.open(tempDir.resolve("metrics.db"))) {
             CoordinatorService service = new CoordinatorService("coordinator-a", mutableClock, storage);
+            try (EventBusService eventBus = new EventBusService(
+                    tempDir.resolve("eventbus.json"),
+                    mutableClock,
+                    service::recordMetricEvent,
+                    false)) {
+                service.attachEventBus(eventBus);
 
-            service.handleHeartbeat(singleHeartbeatWithState(
-                    "agent-1", 1, 1, "host-1", "10.0.0.1", diskState(96, 5_000)));
-            mutableClock.advance(Duration.ofSeconds(5));
-            service.handleHeartbeat(singleHeartbeatWithState(
-                    "agent-1", 1, 2, "host-1", "10.0.0.1", diskState(97, 10_000)));
-            mutableClock.advance(Duration.ofSeconds(5));
-            service.handleHeartbeat(singleHeartbeatWithState(
-                    "agent-1", 1, 3, "host-1", "10.0.0.1", diskState(99, 15_000)));
-            mutableClock.advance(Duration.ofSeconds(5));
-            service.handleHeartbeat(singleHeartbeatWithState(
-                    "agent-1", 1, 4, "host-1", "10.0.0.1", diskState(20, 0)));
+                service.handleHeartbeat(singleHeartbeatWithState(
+                        "agent-1", 1, 1, "host-1", "10.0.0.1", diskState(96, 5_000)));
+                mutableClock.advance(Duration.ofSeconds(5));
+                service.handleHeartbeat(singleHeartbeatWithState(
+                        "agent-1", 1, 2, "host-1", "10.0.0.1", diskState(97, 10_000)));
+                mutableClock.advance(Duration.ofSeconds(5));
+                service.handleHeartbeat(singleHeartbeatWithState(
+                        "agent-1", 1, 3, "host-1", "10.0.0.1", diskState(99, 15_000)));
+                mutableClock.advance(Duration.ofSeconds(5));
+                service.handleHeartbeat(singleHeartbeatWithState(
+                        "agent-1", 1, 4, "host-1", "10.0.0.1", diskState(20, 0)));
 
-            List<HostEvent> events = storage.queryEvents(new MetricEventQuery(
-                    1_710_000_000_000L,
-                    1_710_000_020_000L,
-                    "agent-1",
-                    List.of(),
-                    10));
-            assertEquals(2, events.size());
-            assertEquals(List.of("firing", "resolved"), events.stream()
-                    .map(event -> event.details().get("status").toString())
-                    .toList());
-            assertEquals(
-                    events.get(0).details().get("incident_id"),
-                    events.get(1).details().get("incident_id"));
-            assertTrue(service.activeMetricEvents().isEmpty());
+                List<HostEvent> events = storage.queryEvents(new MetricEventQuery(
+                        1_710_000_000_000L,
+                        1_710_000_020_000L,
+                        "agent-1",
+                        List.of(),
+                        10));
+                assertEquals(2, events.size());
+                assertEquals(List.of("firing", "resolved"), events.stream()
+                        .map(event -> event.details().get("status").toString())
+                        .toList());
+                assertEquals(
+                        events.get(0).details().get("incident_id"),
+                        events.get(1).details().get("incident_id"));
+                assertTrue(eventBus.view().activeEvents().isEmpty());
+            }
         }
     }
 

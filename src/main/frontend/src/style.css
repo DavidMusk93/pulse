@@ -298,9 +298,9 @@ body {
   font-size: 11px;
   font-style: normal;
 }
-.metrics-fanout-card {
+.metrics-eventbus-card {
   display: grid;
-  grid-template-columns: minmax(260px, .8fr) minmax(420px, 1fr) minmax(320px, 1.2fr);
+  grid-template-columns: minmax(250px, .8fr) minmax(0, 1.8fr) auto;
   gap: 10px;
   align-items: center;
   padding: 8px 10px;
@@ -308,46 +308,88 @@ body {
   border-radius: 16px;
   background: rgba(255, 255, 255, .72);
 }
-.metrics-fanout-head {
+.metrics-eventbus-card > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.metrics-eventbus-card .ant-typography {
+  font-size: 12px;
+}
+.eventbus-editor {
+  display: grid;
+  gap: 12px;
+  max-height: 68vh;
+  overflow-y: auto;
+  padding: 2px 4px 4px 0;
+}
+.eventbus-editor section {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid #e8e8ed;
+  border-radius: 12px;
+  background: #fbfbfd;
+}
+.eventbus-section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-width: 0;
 }
-.metrics-fanout-head > div {
-  min-width: 0;
-}
-.metrics-fanout-head .ant-typography {
-  display: block;
-  overflow: hidden;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.metrics-fanout-register {
-  width: 100%;
-}
-.metrics-fanout-register .ant-input {
-  min-width: 160px;
-}
-.metrics-fanout-register .ant-select {
-  min-width: 92px;
-}
-.metrics-fanout-sources {
+.eventbus-section-head > div {
   display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.eventbus-section-head span,
+.eventbus-field small {
+  color: #86868b;
+  font-size: 11px;
+}
+.eventbus-items,
+.eventbus-item {
+  display: grid;
+  gap: 7px;
+}
+.eventbus-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.eventbus-item {
+  padding: 8px;
+  border: 1px solid #ededf2;
+  border-radius: 10px;
+  background: #fff;
+}
+.eventbus-item-inline {
+  display: grid;
+  grid-template-columns: minmax(130px, 1.1fr) minmax(120px, 1fr) minmax(110px, .8fr) minmax(88px, .7fr) minmax(82px, .55fr) auto;
   gap: 6px;
   align-items: center;
-  min-width: 0;
-  overflow-x: auto;
-  padding: 2px 0;
 }
-.metrics-fanout-sources .ant-tag {
-  flex: 0 0 auto;
-  max-width: 360px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.eventbus-plugin-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.eventbus-field {
+  display: grid;
+  gap: 3px;
+}
+.eventbus-field > span {
+  color: #515154;
+  font-size: 11px;
+  font-weight: 650;
+}
+.eventbus-field small {
+  min-height: 14px;
+  line-height: 1.2;
+}
+.eventbus-route-selectors {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
 }
 .metrics-control-grid {
   display: grid;
@@ -1576,9 +1618,15 @@ body {
     flex-direction: column;
   }
   .metrics-topline,
-  .metrics-fanout-card,
+  .metrics-eventbus-card,
   .metrics-control-grid,
   .metrics-insight-grid {
+    grid-template-columns: 1fr;
+  }
+  .eventbus-grid,
+  .eventbus-item-inline,
+  .eventbus-plugin-fields,
+  .eventbus-route-selectors {
     grid-template-columns: 1fr;
   }
   .metrics-scope-stats {

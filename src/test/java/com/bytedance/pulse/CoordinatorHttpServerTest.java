@@ -1,6 +1,7 @@
 package com.bytedance.pulse;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
@@ -40,7 +41,7 @@ class CoordinatorHttpServerTest {
     Path tempDir;
     private CoordinatorHttpServer server;
     private LocalMetricStorage metricStorage;
-    private FanoutService fanoutService;
+    private EventBusService eventBusService;
     private String baseUrl;
 
     @BeforeEach
@@ -50,13 +51,13 @@ class CoordinatorHttpServerTest {
                 "coordinator-a",
                 Clock.fixed(Instant.ofEpochMilli(1_710_000_000_000L), ZoneOffset.UTC),
                 metricStorage);
-        fanoutService = new FanoutService(
-                tempDir.resolve("fanout.json"),
+        eventBusService = new EventBusService(
+                tempDir.resolve("eventbus.json"),
                 Clock.fixed(Instant.ofEpochMilli(1_710_000_000_000L), ZoneOffset.UTC),
-                service::activeMetricEvents,
-                new TestLarkClient(),
+                service::recordMetricEvent,
                 false);
-        server = new CoordinatorHttpServer(service, "127.0.0.1", 0, fanoutService);
+        service.attachEventBus(eventBusService);
+        server = new CoordinatorHttpServer(service, "127.0.0.1", 0, eventBusService);
         server.start();
         baseUrl = "http://127.0.0.1:" + server.port();
     }
@@ -64,7 +65,7 @@ class CoordinatorHttpServerTest {
     @AfterEach
     void tearDown() {
         server.stop();
-        fanoutService.close();
+        eventBusService.close();
         if (metricStorage != null) {
             try {
                 metricStorage.close();
@@ -314,28 +315,116 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
-    void registersListsAndDeletesFanoutSource() throws Exception {
-        HttpResponse<String> created = postJson("/api/fanout/sources", """
+    void readsAndUpdatesEventBusConfigurationWithoutReturningSecrets() throws Exception {
+        HttpResponse<String> initial = get("/api/eventbus");
+        assertEquals(200, initial.statusCode());
+        assertTrue(initial.body().contains("metric_threshold"));
+        assertTrue(initial.body().contains("lark_webhook"));
+
+        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/api/eventbus/config"))
+                .header("content-type", "application/json")
+                .PUT(HttpRequest.BodyPublishers.ofString("""
                 {
-                  "type": "lark_chat",
-                  "target_query": "Pulse 告警群",
-                  "interval_ms": 900000
+                  "version": 1,
+                  "event_types": [{
+                    "id": "disk.io_saturation",
+                    "name": "磁盘 IO 饱和",
+                    "description": "disk alert",
+                    "severity": "error",
+                    "enabled": true
+                  }],
+                  "sources": [{
+                    "id": "disk-source",
+                    "name": "disk source",
+                    "plugin_type": "metric_threshold",
+                    "event_type": "disk.io_saturation",
+                    "enabled": true,
+                    "config": {
+                      "collection_path": "disks",
+                      "subject_field": "device",
+                      "value_field": "io_util_pct",
+                      "operator": "gt",
+                      "threshold": 95,
+                      "duration_field": "saturated_for_ms",
+                      "duration_ms": 10000
+                    }
+                  }],
+                  "sinks": [{
+                    "id": "lark-sink",
+                    "name": "飞书告警群",
+                    "plugin_type": "lark_webhook",
+                    "enabled": true,
+                    "config": {
+                      "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/private-token",
+                      "signing_secret": "private-secret",
+                      "title": "Pulse"
+                    }
+                  }],
+                  "routes": [{
+                    "id": "disk-to-lark",
+                    "name": "disk route",
+                    "enabled": true,
+                    "source_ids": ["disk-source"],
+                    "event_types": ["disk.io_saturation"],
+                    "sink_ids": ["lark-sink"],
+                    "gate_type": "periodic_digest",
+                    "gate_config": {"interval_ms": 900000, "publish_recovery": true}
+                  }]
                 }
-                """);
-        assertEquals(201, created.statusCode());
-        JsonNode source = mapper.readTree(created.body());
-        assertEquals("oc_test", source.get("target_id").asText());
-        assertEquals(900_000, source.get("interval_ms").asLong());
-
-        assertEquals(1, mapper.readTree(get("/api/fanout/sources").body()).size());
-
-        HttpRequest delete = HttpRequest.newBuilder(URI.create(
-                        baseUrl + "/api/fanout/sources/" + source.get("source_id").asText()))
-                .DELETE()
+                """))
                 .build();
-        HttpResponse<String> deleted = client.send(delete, HttpResponse.BodyHandlers.ofString());
-        assertEquals(200, deleted.statusCode());
-        assertEquals(0, mapper.readTree(get("/api/fanout/sources").body()).size());
+        HttpResponse<String> updated = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, updated.statusCode());
+        assertTrue(updated.body().contains(EventBusService.SECRET_MASK));
+        assertFalse(updated.body().contains("private-token"));
+        assertFalse(get("/api/eventbus").body().contains("private-secret"));
+    }
+
+    @Test
+    void acceptsAuthenticatedWebhookSourceEvents() throws Exception {
+        EventBusConfig current = eventBusService.view().config();
+        eventBusService.update(new EventBusConfig(
+                1,
+                current.eventTypes(),
+                List.of(new EventSourceDefinition(
+                        "external-source",
+                        "External",
+                        WebhookEventSourcePlugin.TYPE,
+                        "disk.io_saturation",
+                        true,
+                        Map.of(
+                                "ingest_token", "source-secret",
+                                "subject_field", "subject",
+                                "summary_field", "summary",
+                                "status_field", "status"))),
+                List.of(),
+                List.of()));
+        String body = """
+                {
+                  "agent_id": "external-agent",
+                  "subject": "nvme0n1",
+                  "summary": "external disk alert",
+                  "status": "firing",
+                  "incident_id": "incident-1"
+                }
+                """;
+        HttpRequest unauthorized = HttpRequest.newBuilder(
+                        URI.create(baseUrl + "/api/eventbus/sources/external-source/events"))
+                .header("content-type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+        HttpRequest authorized = HttpRequest.newBuilder(
+                        URI.create(baseUrl + "/api/eventbus/sources/external-source/events"))
+                .header("content-type", "application/json")
+                .header("x-pulse-event-token", "source-secret")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+
+        assertEquals(401, client.send(unauthorized, HttpResponse.BodyHandlers.ofString()).statusCode());
+        HttpResponse<String> response = client.send(authorized, HttpResponse.BodyHandlers.ofString());
+        assertEquals(202, response.statusCode());
+        assertTrue(response.body().contains("incident-1"));
     }
 
     @Test
@@ -1436,14 +1525,4 @@ class CoordinatorHttpServerTest {
         }
     }
 
-    private static final class TestLarkClient implements FanoutService.LarkClient {
-        @Override
-        public LarkTarget resolveChat(String query) {
-            return new LarkTarget("oc_test", query);
-        }
-
-        @Override
-        public void send(String chatId, String message, String idempotencyKey) {
-        }
-    }
 }

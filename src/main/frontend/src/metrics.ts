@@ -79,26 +79,101 @@ export type MetricInvalidation = {
   metrics: string[];
 };
 
-export type FanoutSourceView = {
-  source_id?: string;
-  sourceId?: string;
-  type?: string;
-  name?: string;
-  target_query?: string;
-  targetQuery?: string;
-  target_id?: string;
-  targetId?: string;
-  interval_ms?: number;
-  intervalMs?: number;
-  enabled?: boolean;
+export type EventPluginField = {
+  key: string;
+  label: string;
+  type: 'text' | 'password' | 'number' | 'boolean' | 'select';
+  required?: boolean;
+  secret?: boolean;
+  default_value?: unknown;
+  options?: string[];
+  description?: string;
+};
+
+export type EventPluginDescriptor = {
+  type: string;
+  kind: 'source' | 'gate' | 'sink';
+  name: string;
+  description?: string;
+  config_fields?: EventPluginField[];
+};
+
+export type EventTypeDefinition = {
+  id: string;
+  name: string;
+  description?: string;
+  severity: string;
+  enabled: boolean;
+};
+
+export type EventSourceDefinition = {
+  id: string;
+  name: string;
+  plugin_type: string;
+  event_type: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+};
+
+export type EventSinkDefinition = {
+  id: string;
+  name: string;
+  plugin_type: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+};
+
+export type EventRouteDefinition = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  source_ids: string[];
+  event_types: string[];
+  sink_ids: string[];
+  gate_type: string;
+  gate_config: Record<string, unknown>;
+};
+
+export type EventBusConfig = {
+  version: number;
+  event_types: EventTypeDefinition[];
+  sources: EventSourceDefinition[];
+  sinks: EventSinkDefinition[];
+  routes: EventRouteDefinition[];
+};
+
+export type EventRouteStatus = {
   last_attempt_at_ms?: number;
-  lastAttemptAtMs?: number;
   last_success_at_ms?: number;
-  lastSuccessAtMs?: number;
-  last_error?: string;
-  lastError?: string;
   last_active_count?: number;
-  lastActiveCount?: number;
+  last_error?: string;
+  last_delivery_id?: string;
+  last_delivered_events?: number;
+};
+
+export type EventBusEvent = {
+  event_id?: string;
+  event_type?: string;
+  source_id?: string;
+  subject?: string;
+  agent_id?: string;
+  severity?: string;
+  status?: string;
+  summary?: string;
+};
+
+export type EventBusView = {
+  config: EventBusConfig;
+  plugins: EventPluginDescriptor[];
+  route_status?: Record<string, EventRouteStatus>;
+  active_events?: EventBusEvent[];
+};
+
+export type EventDeliveryReceipt = {
+  upstream_id?: string;
+  format?: string;
+  delivered_events?: number;
+  metadata?: Record<string, unknown>;
 };
 
 type FetchJson = <T>(url: string, init?: RequestInit) => Promise<T>;
@@ -125,21 +200,21 @@ export class MetricQueryController {
     return this.fetchJson<MetricStorageHealth>('/api/metrics/storage');
   }
 
-  fanoutSources() {
-    return this.fetchJson<FanoutSourceView[]>('/api/fanout/sources');
+  eventBus() {
+    return this.fetchJson<EventBusView>('/api/eventbus');
   }
 
-  registerFanoutSource(targetQuery: string, intervalMs: number) {
-    return this.fetchJson<FanoutSourceView>('/api/fanout/sources', {
-      method: 'POST',
+  updateEventBus(config: EventBusConfig) {
+    return this.fetchJson<EventBusView>('/api/eventbus/config', {
+      method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ type: 'lark_chat', target_query: targetQuery, interval_ms: intervalMs })
+      body: JSON.stringify(config)
     });
   }
 
-  removeFanoutSource(sourceId: string) {
-    return this.fetchJson<{ removed: boolean }>(`/api/fanout/sources/${encodeURIComponent(sourceId)}`, {
-      method: 'DELETE'
+  testEventSink(sinkId: string) {
+    return this.fetchJson<EventDeliveryReceipt>(`/api/eventbus/sinks/${encodeURIComponent(sinkId)}/test`, {
+      method: 'POST'
     });
   }
 
