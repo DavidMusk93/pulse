@@ -32,6 +32,7 @@ public class CoordinatorService {
     private final int groupLeaderPort;
     private final RemoteTaskService taskService;
     private final MetricStorage metricStorage;
+    private final DiskIoEventDetector diskIoEventDetector;
     private final long hostSnapshotTtlMs;
     private final long groupRecomputeIntervalMs;
     private final long expiredHostRetentionMs;
@@ -52,6 +53,9 @@ public class CoordinatorService {
         this.groupLeaderPort = Integer.parseInt(System.getenv().getOrDefault("PULSE_GROUP_PORT", "9977"));
         this.taskService = new RemoteTaskService(clock);
         this.metricStorage = metricStorage;
+        this.diskIoEventDetector = new DiskIoEventDetector(
+                positiveDouble("PULSE_DISK_IO_THRESHOLD_PCT", 95),
+                positiveLong("PULSE_DISK_IO_SUSTAIN_MS", 10_000));
         this.hostSnapshotTtlMs = positiveLong("PULSE_HOST_SNAPSHOT_TTL_MS", DEFAULT_HOST_SNAPSHOT_TTL_MS);
         this.groupRecomputeIntervalMs = positiveLong("PULSE_GROUP_RECOMPUTE_INTERVAL_MS", DEFAULT_GROUP_RECOMPUTE_INTERVAL_MS);
         this.expiredHostRetentionMs = positiveLong(
@@ -152,6 +156,10 @@ public class CoordinatorService {
             throw new IllegalArgumentException("metric storage is disabled");
         }
         return metricStorage.queryEvents(query);
+    }
+
+    public List<HostEvent> activeMetricEvents() {
+        return diskIoEventDetector.activeEvents();
     }
 
     public TaskSnapshot taskSnapshot(String agentId) {
@@ -272,8 +280,12 @@ public class CoordinatorService {
                 messages,
                 ownerCoordinatorId,
                 previous == null ? Map.of() : previous.state);
+        boolean acceptedNewVersion = previous == null || NodeState.isNewerVersion(incoming, previous);
         states.merge(heartbeat.agentId(), incoming, NodeState::newer);
         writeHeartbeatMetric(heartbeat, source, observedAtMs, messages, previous);
+        if (acceptedNewVersion) {
+            detectDiskIoEvents(heartbeat.agentId(), observedAtMs, NodeState.extractState(messages));
+        }
         markStateChanged();
         return states.get(heartbeat.agentId()).seq;
     }
@@ -292,8 +304,30 @@ public class CoordinatorService {
                 existing == null ? Map.of() : existing.state);
         NodeState selected = existing == null ? incoming : NodeState.newer(existing, incoming);
         states.put(state.agentId(), selected);
+        boolean acceptedNewVersion = existing == null || NodeState.isNewerVersion(incoming, existing);
+        if (acceptedNewVersion) {
+            detectDiskIoEvents(state.agentId(), state.observedAtMs(), NodeState.extractState(messages));
+        }
         markStateChanged();
-        return selected == incoming;
+        return acceptedNewVersion;
+    }
+
+    private void detectDiskIoEvents(String agentId, long observedAtMs, Map<String, Object> state) {
+        List<HostEvent> events = diskIoEventDetector.evaluate(agentId, observedAtMs, state);
+        if (metricStorage == null) {
+            return;
+        }
+        for (HostEvent event : events) {
+            try {
+                metricStorage.writeHostEvent(event);
+            } catch (Exception exception) {
+                System.err.printf(
+                        "metric_event_write status=failed event_id=%s agent_id=%s error=%s%n",
+                        event.eventId(),
+                        agentId,
+                        exception.getMessage());
+            }
+        }
     }
 
     private void markStateChanged() {
@@ -1000,6 +1034,15 @@ public class CoordinatorService {
         }
     }
 
+    private static double positiveDouble(String key, double fallback) {
+        try {
+            double value = Double.parseDouble(System.getenv().getOrDefault(key, String.valueOf(fallback)));
+            return Double.isFinite(value) && value > 0 ? value : fallback;
+        } catch (NumberFormatException exception) {
+            return fallback;
+        }
+    }
+
     private static boolean isStale(long now, long lastBuiltAtMs, long ttlMs) {
         return lastBuiltAtMs == Long.MIN_VALUE || now < lastBuiltAtMs || now - lastBuiltAtMs >= ttlMs;
     }
@@ -1091,6 +1134,11 @@ public class CoordinatorService {
                 selected = right;
             }
             return selected.withConfirmations(mergeConfirmations(left.confirmations, right.confirmations, selected.observedAtMs));
+        }
+
+        private static boolean isNewerVersion(NodeState candidate, NodeState current) {
+            return candidate.epoch > current.epoch
+                    || (candidate.epoch == current.epoch && candidate.seq > current.seq);
         }
 
         private NodeState withConfirmations(List<HeartbeatConfirmation> nextConfirmations) {

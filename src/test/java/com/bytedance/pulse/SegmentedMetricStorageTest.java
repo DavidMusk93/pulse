@@ -362,13 +362,18 @@ class SegmentedMetricStorageTest {
                 4,
                 5,
                 6,
-                Map.of("tide_workers", List.of(Map.of(
-                        "pid", 1234,
-                        "component_version", "1.2.3",
-                        "role", "leader",
-                        "cpu_percent", 7.5,
-                        "rss_kb", 8,
-                        "threads", 9))));
+                Map.of(
+                        "tide_workers", List.of(Map.of(
+                                "pid", 1234,
+                                "component_version", "1.2.3",
+                                "role", "leader",
+                                "cpu_percent", 7.5,
+                                "rss_kb", 8,
+                                "threads", 9)),
+                        "disks", List.of(Map.of(
+                                "device", "nvme0n1",
+                                "io_util_pct", 97.5,
+                                "saturated_for_ms", 10_000))));
     }
 
     private static GroupLeaderMetricSample groupSample(long observedAtMs, long generation) {

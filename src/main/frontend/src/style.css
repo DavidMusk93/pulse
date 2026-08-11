@@ -298,6 +298,57 @@ body {
   font-size: 11px;
   font-style: normal;
 }
+.metrics-fanout-card {
+  display: grid;
+  grid-template-columns: minmax(260px, .8fr) minmax(420px, 1fr) minmax(320px, 1.2fr);
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, .16);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .72);
+}
+.metrics-fanout-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.metrics-fanout-head > div {
+  min-width: 0;
+}
+.metrics-fanout-head .ant-typography {
+  display: block;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.metrics-fanout-register {
+  width: 100%;
+}
+.metrics-fanout-register .ant-input {
+  min-width: 160px;
+}
+.metrics-fanout-register .ant-select {
+  min-width: 92px;
+}
+.metrics-fanout-sources {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 2px 0;
+}
+.metrics-fanout-sources .ant-tag {
+  flex: 0 0 auto;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .metrics-control-grid {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
@@ -371,7 +422,7 @@ body {
 .metrics-preset-card .ant-segmented-group {
   width: 100%;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 .metrics-preset-card .ant-segmented-item-label {
   padding-inline: 4px;
@@ -1525,6 +1576,7 @@ body {
     flex-direction: column;
   }
   .metrics-topline,
+  .metrics-fanout-card,
   .metrics-control-grid,
   .metrics-insight-grid {
     grid-template-columns: 1fr;

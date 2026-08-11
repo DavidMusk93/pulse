@@ -212,6 +212,12 @@ final class SegmentedMetricStorage implements MetricStorage {
         offer(new InsertGroupLeaderCommand(sample));
     }
 
+    @Override
+    public void writeHostEvent(HostEvent event) {
+        Objects.requireNonNull(event);
+        offer(new InsertHostEventCommand(event));
+    }
+
     private void offer(MetricWriteCommand command) {
         if (!running || capacityExceeded) {
             droppedCommands.incrementAndGet();
@@ -637,7 +643,8 @@ final class SegmentedMetricStorage implements MetricStorage {
         }
     }
 
-    private sealed interface MetricWriteCommand permits InsertHeartbeatCommand, InsertGroupLeaderCommand {
+    private sealed interface MetricWriteCommand
+            permits InsertHeartbeatCommand, InsertGroupLeaderCommand, InsertHostEventCommand {
         long observedAtMs();
 
         void write(LocalMetricStorage storage) throws Exception;
@@ -679,6 +686,23 @@ final class SegmentedMetricStorage implements MetricStorage {
         }
     }
 
+    private record InsertHostEventCommand(HostEvent event) implements MetricWriteCommand {
+        @Override
+        public long observedAtMs() {
+            return event.observedAtMs();
+        }
+
+        @Override
+        public void write(LocalMetricStorage storage) throws Exception {
+            storage.writeHostEvent(event);
+        }
+
+        @Override
+        public void accumulate(SegmentedMetricStorage storage) {
+            // Events are retained as discrete records and are not rolled up.
+        }
+    }
+
     private void accumulateRollups(List<MetricWriteCommand> commands) throws Exception {
         for (MetricWriteCommand command : commands) {
             command.accumulate(this);
@@ -701,6 +725,30 @@ final class SegmentedMetricStorage implements MetricStorage {
         addRollup("heartbeat.agent_send_ms", labels, sample.agentSendMs(), metadata, sample.observedAtMs());
         addRollup("agent.thread_count", labels, sample.agentThreadCount(), metadata, sample.observedAtMs());
         addRollup("agent.rss_kb", labels, sample.agentRssKb(), metadata, sample.observedAtMs());
+
+        Object disksValue = sample.state().get("disks");
+        if (disksValue instanceof List<?> disks) {
+            for (Object diskValue : disks) {
+                if (!(diskValue instanceof Map<?, ?> disk)) {
+                    continue;
+                }
+                String device = stringValue(disk.get("device"));
+                Map<String, String> diskLabels =
+                        Map.of("agent_id", sample.agentId(), "device", device, "cluster", sample.cluster());
+                addRollup(
+                        "disk.io_util_pct",
+                        diskLabels,
+                        doubleValue(disk.get("io_util_pct")),
+                        Map.of(),
+                        sample.observedAtMs());
+                addRollup(
+                        "disk.saturated_for_ms",
+                        diskLabels,
+                        longValue(disk.get("saturated_for_ms")),
+                        Map.of(),
+                        sample.observedAtMs());
+            }
+        }
 
         Object workersValue = sample.state().get("tide_workers");
         if (!(workersValue instanceof List<?> workers)) {

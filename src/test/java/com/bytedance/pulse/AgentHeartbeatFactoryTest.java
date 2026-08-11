@@ -121,6 +121,52 @@ class AgentHeartbeatFactoryTest {
         assertEquals("1.2.3", secondWorkers.get(0).get("component_version"));
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void reportsDiskIoUtilizationAndContinuousSaturation() throws Exception {
+        Path proc = tempDir.resolve("proc");
+        Path sys = tempDir.resolve("sys");
+        Files.createDirectories(proc.resolve("self"));
+        Files.createDirectories(sys.resolve("class/block/sda"));
+        Files.createDirectories(sys.resolve("class/block/sda1"));
+        Files.writeString(sys.resolve("class/block/sda1/partition"), "1\n");
+        Files.writeString(proc.resolve("meminfo"), "MemTotal:       1000000 kB\n");
+        Files.writeString(proc.resolve("diskstats"), """
+                8 0 sda 0 0 0 0 0 0 0 0 0 1000 0
+                8 1 sda1 0 0 0 0 0 0 0 0 0 1000 0
+                7 0 loop0 0 0 0 0 0 0 0 0 0 1000 0
+                """);
+        MutableClock clock = new MutableClock(1_710_000_000_000L);
+        AgentHeartbeatFactory factory = new AgentHeartbeatFactory(
+                "agent-1", "host-1", "fd00::1", "cdn_new", "area-a", "az-a", "worker", 100, 15_000, clock, proc, 60_000);
+
+        List<Map<String, Object>> baseline =
+                (List<Map<String, Object>>) factory.nextHeartbeat().messages().get(0).payload().get("disks");
+        assertTrue(baseline.isEmpty());
+
+        clock.advanceMillis(5_000);
+        Files.writeString(proc.resolve("diskstats"), "8 0 sda 0 0 0 0 0 0 0 0 0 5800 0\n");
+        List<Map<String, Object>> first =
+                (List<Map<String, Object>>) factory.nextHeartbeat().messages().get(0).payload().get("disks");
+        assertEquals(1, first.size());
+        assertEquals("sda", first.get(0).get("device"));
+        assertEquals(96.0, first.get(0).get("io_util_pct"));
+        assertEquals(5_000L, first.get(0).get("saturated_for_ms"));
+
+        clock.advanceMillis(5_000);
+        Files.writeString(proc.resolve("diskstats"), "8 0 sda 0 0 0 0 0 0 0 0 0 10600 0\n");
+        List<Map<String, Object>> sustained =
+                (List<Map<String, Object>>) factory.nextHeartbeat().messages().get(0).payload().get("disks");
+        assertEquals(10_000L, sustained.get(0).get("saturated_for_ms"));
+
+        clock.advanceMillis(5_000);
+        Files.writeString(proc.resolve("diskstats"), "8 0 sda 0 0 0 0 0 0 0 0 0 11100 0\n");
+        List<Map<String, Object>> recovered =
+                (List<Map<String, Object>>) factory.nextHeartbeat().messages().get(0).payload().get("disks");
+        assertEquals(10.0, recovered.get(0).get("io_util_pct"));
+        assertEquals(0L, recovered.get(0).get("saturated_for_ms"));
+    }
+
     private static final class MutableClock extends Clock {
         private long millis;
 

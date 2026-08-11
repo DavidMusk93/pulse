@@ -15,8 +15,14 @@ public final class PulseCoordinatorApp {
 
         MetricStorage metricStorage = metricStorageFromEnv(System.getenv());
         CoordinatorService service = new CoordinatorService(coordinatorId, Clock.systemUTC(), metricStorage);
-        CoordinatorHttpServer server = new CoordinatorHttpServer(service, bindHost, port);
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> closeQuietly(metricStorage), "pulse-coordinator-shutdown"));
+        FanoutService fanoutService = fanoutServiceFromEnv(System.getenv(), service);
+        CoordinatorHttpServer server = new CoordinatorHttpServer(service, bindHost, port, fanoutService);
+        Runtime.getRuntime().addShutdownHook(new Thread(
+                () -> {
+                    closeQuietly(fanoutService);
+                    closeQuietly(metricStorage);
+                },
+                "pulse-coordinator-shutdown"));
         server.start();
 
         System.out.printf("Pulse coordinator %s listening on %s:%d%n", coordinatorId, bindHost, server.port());
@@ -57,12 +63,34 @@ public final class PulseCoordinatorApp {
                 positiveInt(env, "PULSE_LOCAL_STORAGE_CLEANUP_LIMIT", 10_000));
     }
 
-    private static void closeQuietly(MetricStorage metricStorage) {
-        if (metricStorage == null) {
+    static FanoutService fanoutServiceFromEnv(Map<String, String> env, CoordinatorService service) throws Exception {
+        String explicitPath = env.getOrDefault("PULSE_FANOUT_CONFIG_PATH", "");
+        String storagePath = env.getOrDefault("PULSE_LOCAL_STORAGE_PATH", env.getOrDefault("PULSE_METRICS_DB", ""));
+        if (explicitPath.isBlank() && storagePath.isBlank()) {
+            return null;
+        }
+        Path configPath = explicitPath.isBlank()
+                ? Path.of(storagePath).toAbsolutePath().getParent().resolve("pulse-fanout.json")
+                : Path.of(explicitPath);
+        String executable = env.getOrDefault("PULSE_BYTEDCLI_PATH", "bytedcli");
+        String identity = env.getOrDefault("PULSE_BYTEDCLI_LARK_AS", "user");
+        return new FanoutService(
+                configPath,
+                Clock.systemUTC(),
+                service::activeMetricEvents,
+                new FanoutService.BytedCliLarkClient(
+                        executable,
+                        identity,
+                        Duration.ofMillis(positiveLong(env, "PULSE_BYTEDCLI_TIMEOUT_MS", 30_000))),
+                true);
+    }
+
+    private static void closeQuietly(AutoCloseable resource) {
+        if (resource == null) {
             return;
         }
         try {
-            metricStorage.close();
+            resource.close();
         } catch (Exception ignored) {
         }
     }

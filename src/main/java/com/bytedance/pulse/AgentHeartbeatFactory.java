@@ -33,10 +33,14 @@ public class AgentHeartbeatFactory {
     private final AtomicLong seq = new AtomicLong();
     private final Map<Long, ProcessSample> tideSamples = new ConcurrentHashMap<>();
     private final Map<Long, TideWorkerRef> tideWorkerRefs = new ConcurrentHashMap<>();
+    private final Map<String, DiskSample> diskSamples = new ConcurrentHashMap<>();
+    private final Map<String, Long> diskSaturatedSinceMs = new ConcurrentHashMap<>();
     private final long clockTickPerSecond = clockTickPerSecond();
     private final Path procDir;
+    private final Path sysDir;
     private final long tideDiscoveryIntervalMs;
     private final long memTotalKb;
+    private final double diskIoThresholdPct;
     private volatile long nextTideDiscoveryAtMs;
 
     public AgentHeartbeatFactory(
@@ -89,8 +93,10 @@ public class AgentHeartbeatFactory {
         this.ttlMs = ttlMs;
         this.clock = clock;
         this.procDir = procDir;
+        this.sysDir = procDir.equals(Path.of("/proc")) ? Path.of("/sys") : procDir.getParent().resolve("sys");
         this.tideDiscoveryIntervalMs = Math.max(5_000, tideDiscoveryIntervalMs);
         this.memTotalKb = memTotalKb(procDir);
+        this.diskIoThresholdPct = positiveDouble(env("PULSE_DISK_IO_THRESHOLD_PCT", "95"), 95);
     }
 
     public HeartbeatRequest nextHeartbeat() {
@@ -129,6 +135,7 @@ public class AgentHeartbeatFactory {
         payload.put("zone", blankToUnknown(zone));
         payload.put("role", role);
         payload.put("load", loadAverage());
+        payload.put("disks", diskIo());
         payload.put("tide_workers", tideWorkers());
         payload.put("async_tasks", asyncTasks == null ? List.of() : asyncTasks);
         payload.put("agent_time_ms", clock.millis());
@@ -189,6 +196,64 @@ public class AgentHeartbeatFactory {
             return "-";
         }
         return String.format(java.util.Locale.ROOT, "%.2f", load);
+    }
+
+    private List<Map<String, Object>> diskIo() {
+        long now = clock.millis();
+        List<Map<String, Object>> disks = new ArrayList<>();
+        Set<String> observedDevices = new HashSet<>();
+        for (String line : readString(procDir.resolve("diskstats")).lines().toList()) {
+            String[] fields = line.trim().split("\\s+");
+            if (fields.length < 14) {
+                continue;
+            }
+            String device = fields[2];
+            if (!isPhysicalDisk(device)) {
+                continue;
+            }
+            try {
+                long ioTimeMs = Long.parseLong(fields[12]);
+                observedDevices.add(device);
+                DiskSample previous = diskSamples.put(device, new DiskSample(ioTimeMs, now));
+                if (previous == null || now <= previous.observedAtMs() || ioTimeMs < previous.ioTimeMs()) {
+                    continue;
+                }
+                long intervalMs = now - previous.observedAtMs();
+                long busyMs = Math.min(intervalMs, ioTimeMs - previous.ioTimeMs());
+                double utilizationPct = Math.max(0, busyMs * 100.0 / intervalMs);
+                long saturatedForMs = 0;
+                if (utilizationPct > diskIoThresholdPct) {
+                    long saturatedSince = diskSaturatedSinceMs.computeIfAbsent(device, ignored -> previous.observedAtMs());
+                    saturatedForMs = Math.max(0, now - saturatedSince);
+                } else {
+                    diskSaturatedSinceMs.remove(device);
+                }
+                Map<String, Object> disk = new LinkedHashMap<>();
+                disk.put("device", device);
+                disk.put("io_util_pct", Double.parseDouble(formatPercent(utilizationPct)));
+                disk.put("sample_interval_ms", intervalMs);
+                disk.put("busy_ms", busyMs);
+                disk.put("saturated_for_ms", saturatedForMs);
+                disks.add(disk);
+            } catch (NumberFormatException ignored) {
+                // Ignore a malformed device row without dropping other disk samples.
+            }
+        }
+        diskSamples.keySet().removeIf(device -> !observedDevices.contains(device));
+        diskSaturatedSinceMs.keySet().removeIf(device -> !observedDevices.contains(device));
+        return disks;
+    }
+
+    private boolean isPhysicalDisk(String device) {
+        if (device.isBlank()
+                || device.startsWith("loop")
+                || device.startsWith("ram")
+                || device.startsWith("zram")
+                || device.startsWith("fd")
+                || device.startsWith("sr")) {
+            return false;
+        }
+        return !Files.exists(sysDir.resolve("class/block").resolve(device).resolve("partition"));
     }
 
     private List<Map<String, Object>> tideWorkers() {
@@ -365,6 +430,15 @@ public class AgentHeartbeatFactory {
         return String.format(java.util.Locale.ROOT, "%.2f", value);
     }
 
+    private static double positiveDouble(String value, double fallback) {
+        try {
+            double parsed = Double.parseDouble(value);
+            return Double.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
     private static long clockTickPerSecond() {
         String configured = System.getenv("PULSE_CLK_TCK");
         if (configured != null && !configured.isBlank()) {
@@ -397,4 +471,6 @@ public class AgentHeartbeatFactory {
     }
 
     private record ProcessSample(ProcessTicks cpuTicks, long observedAtMs) {}
+
+    private record DiskSample(long ioTimeMs, long observedAtMs) {}
 }

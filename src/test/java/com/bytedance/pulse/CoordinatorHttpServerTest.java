@@ -40,6 +40,7 @@ class CoordinatorHttpServerTest {
     Path tempDir;
     private CoordinatorHttpServer server;
     private LocalMetricStorage metricStorage;
+    private FanoutService fanoutService;
     private String baseUrl;
 
     @BeforeEach
@@ -49,7 +50,13 @@ class CoordinatorHttpServerTest {
                 "coordinator-a",
                 Clock.fixed(Instant.ofEpochMilli(1_710_000_000_000L), ZoneOffset.UTC),
                 metricStorage);
-        server = new CoordinatorHttpServer(service, "127.0.0.1", 0);
+        fanoutService = new FanoutService(
+                tempDir.resolve("fanout.json"),
+                Clock.fixed(Instant.ofEpochMilli(1_710_000_000_000L), ZoneOffset.UTC),
+                service::activeMetricEvents,
+                new TestLarkClient(),
+                false);
+        server = new CoordinatorHttpServer(service, "127.0.0.1", 0, fanoutService);
         server.start();
         baseUrl = "http://127.0.0.1:" + server.port();
     }
@@ -57,6 +64,7 @@ class CoordinatorHttpServerTest {
     @AfterEach
     void tearDown() {
         server.stop();
+        fanoutService.close();
         if (metricStorage != null) {
             try {
                 metricStorage.close();
@@ -303,6 +311,31 @@ class CoordinatorHttpServerTest {
         assertEquals(1, body.size());
         assertEquals("heartbeat.arrival_gap_spike", body.get(0).get("event_type").asText());
         assertEquals(45_000, body.get(0).get("details").get("gap_ms").asInt());
+    }
+
+    @Test
+    void registersListsAndDeletesFanoutSource() throws Exception {
+        HttpResponse<String> created = postJson("/api/fanout/sources", """
+                {
+                  "type": "lark_chat",
+                  "target_query": "Pulse 告警群",
+                  "interval_ms": 900000
+                }
+                """);
+        assertEquals(201, created.statusCode());
+        JsonNode source = mapper.readTree(created.body());
+        assertEquals("oc_test", source.get("target_id").asText());
+        assertEquals(900_000, source.get("interval_ms").asLong());
+
+        assertEquals(1, mapper.readTree(get("/api/fanout/sources").body()).size());
+
+        HttpRequest delete = HttpRequest.newBuilder(URI.create(
+                        baseUrl + "/api/fanout/sources/" + source.get("source_id").asText()))
+                .DELETE()
+                .build();
+        HttpResponse<String> deleted = client.send(delete, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, deleted.statusCode());
+        assertEquals(0, mapper.readTree(get("/api/fanout/sources").body()).size());
     }
 
     @Test
@@ -1400,6 +1433,17 @@ class CoordinatorHttpServerTest {
         @Override
         public void forward(HeartbeatRequest request) {
             requests.add(request);
+        }
+    }
+
+    private static final class TestLarkClient implements FanoutService.LarkClient {
+        @Override
+        public LarkTarget resolveChat(String query) {
+            return new LarkTarget("oc_test", query);
+        }
+
+        @Override
+        public void send(String chatId, String message, String idempotencyKey) {
         }
     }
 }

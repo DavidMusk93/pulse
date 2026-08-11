@@ -38,7 +38,8 @@ import {
   type MetricInvalidation,
   type MetricCatalogItem,
   type MetricQueryResultView,
-  type MetricStorageHealth
+  type MetricStorageHealth,
+  type FanoutSourceView
 } from './metrics';
 import 'antd/dist/reset.css';
 import './style.css';
@@ -1481,6 +1482,10 @@ function App() {
   </ConfigProvider>;
 }
 
+function fanoutSourceId(source: FanoutSourceView) {
+  return source.source_id ?? source.sourceId ?? '';
+}
+
 const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }) {
   const [catalog, setCatalog] = useState<MetricCatalogItem[]>([]);
   const [storage, setStorage] = useState<MetricStorageHealth | null>(null);
@@ -1499,6 +1504,10 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState !== 'hidden');
   const [fixedRangeEndMs, setFixedRangeEndMs] = useState<number | null>(null);
   const [frontendMetrics, setFrontendMetrics] = useState({ queryMs: 0, renderMs: 0 });
+  const [fanoutSources, setFanoutSources] = useState<FanoutSourceView[]>([]);
+  const [fanoutTarget, setFanoutTarget] = useState('');
+  const [fanoutIntervalMs, setFanoutIntervalMs] = useState(900_000);
+  const [fanoutLoading, setFanoutLoading] = useState(false);
   const [isApplyingHostSelection, startHostSelectionTransition] = useTransition();
   const queryController = useMemo(() => new MetricQueryController(fetchJson), []);
   const renderScheduler = useMemo(() => new RenderScheduler(), []);
@@ -1592,7 +1601,39 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
       }
     }).catch(err => setError(err instanceof Error ? err.message : String(err)));
     queryController.storage().then(setStorage).catch(err => setError(err instanceof Error ? err.message : String(err)));
+    queryController.fanoutSources().then(setFanoutSources).catch(err => setError(err instanceof Error ? err.message : String(err)));
   }, []);
+
+  async function registerFanoutSource() {
+    const target = fanoutTarget.trim();
+    if (!target) return;
+    setFanoutLoading(true);
+    setError('');
+    try {
+      const source = await queryController.registerFanoutSource(target, fanoutIntervalMs);
+      setFanoutSources(current => [...current.filter(item => fanoutSourceId(item) !== fanoutSourceId(source)), source]);
+      setFanoutTarget('');
+      message.success(`已注册事件分发：${source.name || target}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFanoutLoading(false);
+    }
+  }
+
+  async function removeFanoutSource(source: FanoutSourceView) {
+    const sourceId = fanoutSourceId(source);
+    if (!sourceId) return;
+    setFanoutLoading(true);
+    try {
+      await queryController.removeFanoutSource(sourceId);
+      setFanoutSources(current => current.filter(item => fanoutSourceId(item) !== sourceId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFanoutLoading(false);
+    }
+  }
 
   useEffect(() => {
     if (fleetMode || selectedAgents.length || scopedAgentOptions.length === 0) return;
@@ -1737,6 +1778,57 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
           <div className="metrics-scope-card"><span>Retention Lag</span><b>{formatDuration(storage?.retention_lag_ms)}</b><em>lag</em></div>
         </div>
       </div>
+      <div className="metrics-fanout-card">
+        <div className="metrics-fanout-head">
+          <div>
+            <span className="metrics-field-label">事件分发</span>
+            <Typography.Text type="secondary">磁盘 IO &gt;95% 持续 10s 后生成事件；按 source 周期聚合发送。</Typography.Text>
+          </div>
+          <Tag color={fanoutSources.length ? 'blue' : 'default'}>{fanoutSources.length} sources</Tag>
+        </div>
+        <Space.Compact className="metrics-fanout-register">
+          <Input
+            value={fanoutTarget}
+            onChange={event => setFanoutTarget(event.target.value)}
+            onPressEnter={registerFanoutSource}
+            placeholder="字节群名称（由 bytedcli 定位）"
+          />
+          <Select
+            value={fanoutIntervalMs}
+            options={[
+              { label: '5 分钟', value: 300_000 },
+              { label: '15 分钟', value: 900_000 },
+              { label: '30 分钟', value: 1_800_000 },
+              { label: '60 分钟', value: 3_600_000 }
+            ]}
+            onChange={setFanoutIntervalMs}
+          />
+          <Button type="primary" loading={fanoutLoading} disabled={!fanoutTarget.trim()} onClick={registerFanoutSource}>
+            注册
+          </Button>
+        </Space.Compact>
+        <div className="metrics-fanout-sources">
+          {fanoutSources.map(source => {
+            const intervalMs = source.interval_ms ?? source.intervalMs ?? 0;
+            const lastSuccessAt = source.last_success_at_ms ?? source.lastSuccessAtMs ?? 0;
+            const lastError = source.last_error ?? source.lastError ?? '';
+            return <Tag
+              key={fanoutSourceId(source)}
+              color={lastError ? 'error' : 'processing'}
+              closable
+              onClose={event => {
+                event.preventDefault();
+                removeFanoutSource(source);
+              }}
+            >
+              {source.name || source.target_query || source.targetQuery} · {Math.round(intervalMs / 60_000)}m
+              {lastSuccessAt ? ` · success ${formatSeenTime(lastSuccessAt)}` : ''}
+              {lastError ? ` · ${lastError}` : ''}
+            </Tag>;
+          })}
+          {!fanoutSources.length && <Typography.Text type="secondary">尚未注册 fanout source</Typography.Text>}
+        </div>
+      </div>
       <div className="metrics-control-grid">
         <div className="metrics-control-card metrics-preset-card">
           <span className="metrics-field-label">健康视角</span>
@@ -1747,6 +1839,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
               { label: '架构', value: 'heartbeat-architecture' },
               { label: '计划', value: 'plan-convergence' },
               { label: '采集', value: 'agent-freshness' },
+              { label: '磁盘', value: 'disk-io' },
               { label: '发送', value: 'send-path' }
             ]}
             onChange={value => {
@@ -1878,6 +1971,7 @@ const metricPresets: MetricPreset[] = [
   { key: 'heartbeat-architecture', metric: 'group.status_unhealthy', rangeMinutes: 15 },
   { key: 'plan-convergence', metric: 'group.plan_mismatch', rangeMinutes: 15 },
   { key: 'agent-freshness', metric: 'heartbeat.agent_collect_ms', rangeMinutes: 15 },
+  { key: 'disk-io', metric: 'disk.io_util_pct', rangeMinutes: 15 },
   { key: 'send-path', metric: 'heartbeat.agent_send_ms', rangeMinutes: 15 }
 ];
 
@@ -1917,6 +2011,9 @@ function metricAssessment(metric: string, result: MetricQueryResultView | null, 
   }
   if (metric === 'heartbeat.agent_collect_ms') {
     return max > 100 ? { label: '采集偏慢', tone: 'warning' as const } : { label: '采集新鲜', tone: 'success' as const };
+  }
+  if (metric === 'disk.io_util_pct') {
+    return max > 95 ? { label: '磁盘 IO 饱和', tone: 'error' as const } : { label: '磁盘 IO 正常', tone: 'success' as const };
   }
   if (metric === 'heartbeat.agent_encode_ms' || metric === 'heartbeat.agent_send_ms' || metric === 'group.group_latency_ms') {
     return max > 100 ? { label: '链路偏慢', tone: 'warning' as const } : { label: '链路轻量', tone: 'success' as const };
@@ -2096,6 +2193,7 @@ function metricChartOption(metric: string, result: MetricQueryResultView | null,
 
 function metricSeriesName(labels: Record<string, string>) {
   if (labels.series_role === 'aggregate') return '整体平均';
+  if (labels.agent_id && labels.device) return `${labels.agent_id} / ${labels.device}`;
   return labels.agent_id || labels.group_id || labels.pid || labels.cluster || Object.values(labels).filter(Boolean).slice(0, 2).join(' / ') || 'series';
 }
 
@@ -2108,6 +2206,9 @@ function metricThreshold(metric: string): MetricThreshold | null {
   }
   if (metric === 'heartbeat.arrival_gap_ms') {
     return { value: 10_000, label: '到达抖动', severity: 'warning' };
+  }
+  if (metric === 'disk.io_util_pct') {
+    return { value: 95, label: 'IO 饱和', severity: 'error' };
   }
   if (metric === 'group.arrival_gap_ms') {
     return { value: 20_000, label: '本地间隔过大', severity: 'warning' };

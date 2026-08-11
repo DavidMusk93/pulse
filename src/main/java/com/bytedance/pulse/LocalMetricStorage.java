@@ -22,6 +22,8 @@ interface MetricStorage extends AutoCloseable {
 
     void writeGroupLeader(GroupLeaderMetricSample sample) throws Exception;
 
+    void writeHostEvent(HostEvent event) throws Exception;
+
     MetricQueryResult queryRange(MetricQuery query) throws Exception;
 
     List<HostEvent> queryEvents(MetricEventQuery query) throws Exception;
@@ -102,6 +104,22 @@ final class LocalMetricStorage implements MetricStorage {
             createFederatedView(connection, aliases, "heartbeat_sample");
             createFederatedView(connection, aliases, "host_dimension");
             createFederatedView(connection, aliases, "tide_worker_sample");
+            createFederatedOptionalView(
+                    connection,
+                    aliases,
+                    "disk_sample",
+                    """
+                    SELECT
+                        CAST(NULL AS INTEGER) AS observed_at_ms,
+                        CAST(NULL AS TEXT) AS agent_id,
+                        CAST(NULL AS TEXT) AS device,
+                        CAST(NULL AS REAL) AS io_util_pct,
+                        CAST(NULL AS INTEGER) AS saturated_for_ms,
+                        CAST(NULL AS INTEGER) AS sample_interval_ms,
+                        CAST(NULL AS INTEGER) AS busy_ms,
+                        CAST(NULL AS INTEGER) AS stored_at_ms
+                    WHERE 0
+                    """);
             createFederatedGroupView(connection, aliases);
             createFederatedView(connection, aliases, "host_event");
             return new LocalMetricStorage(connection, false);
@@ -118,6 +136,33 @@ final class LocalMetricStorage implements MetricStorage {
                 .orElseThrow();
         try (Statement statement = connection.createStatement()) {
             statement.execute("CREATE TEMP VIEW " + table + " AS " + union);
+        }
+    }
+
+    private static void createFederatedOptionalView(
+            Connection connection,
+            List<String> aliases,
+            String table,
+            String emptySelect) throws SQLException {
+        List<String> selects = aliases.stream()
+                .filter(alias -> hasTable(connection, alias, table))
+                .map(alias -> "SELECT * FROM " + alias + "." + table)
+                .toList();
+        String union = selects.isEmpty() ? emptySelect : String.join(" UNION ALL ", selects);
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("CREATE TEMP VIEW " + table + " AS " + union);
+        }
+    }
+
+    private static boolean hasTable(Connection connection, String alias, String table) {
+        try (PreparedStatement statement =
+                        connection.prepareStatement("SELECT 1 FROM " + alias + ".sqlite_master WHERE type='table' AND name=?")) {
+            statement.setString(1, table);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next();
+            }
+        } catch (SQLException ignored) {
+            return false;
         }
     }
 
@@ -173,6 +218,8 @@ final class LocalMetricStorage implements MetricStorage {
                 new MetricCatalogItem("heartbeat.agent_send_ms", "Agent send time", "ms"),
                 new MetricCatalogItem("agent.thread_count", "Agent thread count", "threads"),
                 new MetricCatalogItem("agent.rss_kb", "Agent RSS", "KiB"),
+                new MetricCatalogItem("disk.io_util_pct", "Disk IO utilization", "%"),
+                new MetricCatalogItem("disk.saturated_for_ms", "Disk IO saturation duration", "ms"),
                 new MetricCatalogItem("tide_worker.cpu_pct", "Tide worker CPU", "%"),
                 new MetricCatalogItem("tide_worker.rss_kb", "Tide worker RSS", "KiB"),
                 new MetricCatalogItem("tide_worker.thread_count", "Tide worker threads", "threads"),
@@ -229,6 +276,7 @@ final class LocalMetricStorage implements MetricStorage {
         }
         upsertHostDimension(sample);
         writeTideWorkers(sample);
+        writeDisks(sample);
     }
 
     @Override
@@ -282,6 +330,7 @@ final class LocalMetricStorage implements MetricStorage {
         }
     }
 
+    @Override
     public void writeHostEvent(HostEvent event) throws Exception {
         String sql = """
                 INSERT OR REPLACE INTO host_event (
@@ -305,6 +354,7 @@ final class LocalMetricStorage implements MetricStorage {
         int boundedLimit = Math.max(1, limit);
         return deleteExpired("heartbeat_sample", cutoffMs, boundedLimit)
                 + deleteExpired("tide_worker_sample", cutoffMs, boundedLimit)
+                + deleteExpired("disk_sample", cutoffMs, boundedLimit)
                 + deleteExpired("group_leader_sample", cutoffMs, boundedLimit)
                 + deleteExpired("host_event", cutoffMs, boundedLimit);
     }
@@ -324,6 +374,7 @@ final class LocalMetricStorage implements MetricStorage {
     void initializeSegmentIndexes() throws SQLException {
         try (Statement statement = connection.createStatement()) {
             statement.execute("CREATE INDEX IF NOT EXISTS idx_tide_worker_observed_at ON tide_worker_sample(observed_at_ms)");
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_disk_observed_at ON disk_sample(observed_at_ms)");
             statement.execute("CREATE INDEX IF NOT EXISTS idx_group_leader_observed_at ON group_leader_sample(observed_at_ms)");
             statement.execute("CREATE INDEX IF NOT EXISTS idx_host_event_observed_at ON host_event(observed_at_ms)");
         }
@@ -365,6 +416,9 @@ final class LocalMetricStorage implements MetricStorage {
         MetricColumn metric = MetricColumn.fromName(query.metric());
         if (metric.source == MetricSource.TIDE_WORKER) {
             return queryTideWorkerRange(query, metric);
+        }
+        if (metric.source == MetricSource.DISK) {
+            return queryDiskRange(query, metric);
         }
         if (metric.source == MetricSource.GROUP_LEADER) {
             return queryGroupLeaderRange(query, metric);
@@ -548,6 +602,90 @@ final class LocalMetricStorage implements MetricStorage {
                 seriesLimit,
                 pointLimit,
                 series);
+    }
+
+    private MetricQueryResult queryDiskRange(MetricQuery query, MetricColumn metric) throws Exception {
+        int pointLimit = effectivePointLimit(query);
+        int seriesLimit = effectiveSeriesLimit(query);
+        long stepMs = effectiveStepMs(query);
+        List<String> agentIds = limitedAgentIds(query, seriesLimit);
+        StringBuilder sql = new StringBuilder("""
+                SELECT
+                    (observed_at_ms / ?) * ? AS observed_at_ms,
+                    agent_id,
+                    device,
+                    AVG(%s) AS metric_value
+                FROM disk_sample
+                WHERE observed_at_ms >= ? AND observed_at_ms <= ?
+                """.formatted(metric.column()));
+        if (!agentIds.isEmpty()) {
+            sql.append(" AND agent_id IN (");
+            sql.append("?,".repeat(agentIds.size()));
+            sql.setLength(sql.length() - 1);
+            sql.append(")");
+        }
+        if (!query.cluster().isBlank()) {
+            sql.append(" AND agent_id IN (SELECT agent_id FROM host_dimension WHERE cluster = ?)");
+        }
+        sql.append("""
+                 GROUP BY agent_id, device, (observed_at_ms / ?)
+                 ORDER BY agent_id ASC, device ASC, observed_at_ms ASC LIMIT ?
+                """);
+
+        Map<String, List<MetricPoint>> pointsBySeries = new LinkedHashMap<>();
+        Map<String, Map<String, String>> labelsBySeries = new LinkedHashMap<>();
+        boolean truncated;
+        try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+            int index = 1;
+            statement.setLong(index++, stepMs);
+            statement.setLong(index++, stepMs);
+            statement.setLong(index++, query.startMs());
+            statement.setLong(index++, query.endMs());
+            for (String agentId : agentIds) {
+                statement.setString(index++, agentId);
+            }
+            if (!query.cluster().isBlank()) {
+                statement.setString(index++, query.cluster());
+            }
+            statement.setLong(index++, stepMs);
+            statement.setInt(index, pointLimit + 1);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                int rows = 0;
+                while (resultSet.next()) {
+                    rows++;
+                    if (rows > pointLimit) {
+                        break;
+                    }
+                    String agentId = resultSet.getString("agent_id");
+                    String device = resultSet.getString("device");
+                    String seriesId = agentId + ":" + device;
+                    labelsBySeries.putIfAbsent(seriesId, Map.of("agent_id", agentId, "device", device));
+                    pointsBySeries.computeIfAbsent(seriesId, ignored -> new ArrayList<>())
+                            .add(new MetricPoint(
+                                    resultSet.getLong("observed_at_ms"),
+                                    resultSet.getDouble("metric_value"),
+                                    Map.of()));
+                }
+                truncated = rows > pointLimit;
+            }
+        }
+        List<MetricSeries> series = pointsBySeries.entrySet().stream()
+                .map(entry -> new MetricSeries(labelsBySeries.get(entry.getKey()), List.copyOf(entry.getValue())))
+                .toList();
+        SeriesBudgetResult budgeted = applySeriesBudget(series, query, seriesLimit);
+        boolean seriesTruncated = query.agentIds().size() > seriesLimit || budgeted.truncated();
+        return new MetricQueryResult(
+                queryId(query),
+                query.metric(),
+                query.startMs(),
+                query.endMs(),
+                metric.unit(),
+                "avg",
+                truncated || seriesTruncated,
+                suggestedStepMs(query, pointLimit, seriesLimit, truncated || seriesTruncated, stepMs),
+                seriesLimit,
+                pointLimit,
+                budgeted.series());
     }
 
     private MetricQueryResult queryGroupLeaderRange(MetricQuery query, MetricColumn metric) throws Exception {
@@ -748,6 +886,21 @@ final class LocalMetricStorage implements MetricStorage {
             statement.execute("CREATE INDEX IF NOT EXISTS idx_tide_worker_agent_time ON tide_worker_sample(agent_id, observed_at_ms)");
             statement.execute("CREATE INDEX IF NOT EXISTS idx_tide_worker_role_time ON tide_worker_sample(role, observed_at_ms)");
             statement.execute("""
+                    CREATE TABLE IF NOT EXISTS disk_sample (
+                        observed_at_ms INTEGER NOT NULL,
+                        agent_id TEXT NOT NULL,
+                        device TEXT NOT NULL,
+                        io_util_pct REAL NOT NULL,
+                        saturated_for_ms INTEGER NOT NULL,
+                        sample_interval_ms INTEGER NOT NULL,
+                        busy_ms INTEGER NOT NULL,
+                        stored_at_ms INTEGER NOT NULL,
+                        PRIMARY KEY (agent_id, observed_at_ms, device)
+                    )
+                    """);
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_disk_agent_time ON disk_sample(agent_id, observed_at_ms)");
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_disk_time ON disk_sample(observed_at_ms)");
+            statement.execute("""
                     CREATE TABLE IF NOT EXISTS group_leader_sample (
                         bucket_ms INTEGER NOT NULL,
                         observed_at_ms INTEGER NOT NULL,
@@ -897,6 +1050,38 @@ final class LocalMetricStorage implements MetricStorage {
                 statement.setLong(index++, longValue(worker.get("size_total")));
                 statement.setString(index++, "{}");
                 statement.setLong(index, System.currentTimeMillis());
+                statement.addBatch();
+            }
+            statement.executeBatch();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void writeDisks(HeartbeatMetricSample sample) throws Exception {
+        Object disksValue = sample.state().get("disks");
+        if (!(disksValue instanceof List<?> disks) || disks.isEmpty()) {
+            return;
+        }
+        String sql = """
+                INSERT OR REPLACE INTO disk_sample (
+                    observed_at_ms, agent_id, device, io_util_pct, saturated_for_ms,
+                    sample_interval_ms, busy_ms, stored_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """;
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            for (Object diskValue : disks) {
+                if (!(diskValue instanceof Map<?, ?> rawDisk)) {
+                    continue;
+                }
+                Map<String, Object> disk = (Map<String, Object>) rawDisk;
+                statement.setLong(1, sample.observedAtMs());
+                statement.setString(2, sample.agentId());
+                statement.setString(3, stringValue(disk.get("device"), ""));
+                statement.setDouble(4, doubleValue(disk.get("io_util_pct")));
+                statement.setLong(5, longValue(disk.get("saturated_for_ms")));
+                statement.setLong(6, longValue(disk.get("sample_interval_ms")));
+                statement.setLong(7, longValue(disk.get("busy_ms")));
+                statement.setLong(8, System.currentTimeMillis());
                 statement.addBatch();
             }
             statement.executeBatch();
@@ -1069,6 +1254,8 @@ final class LocalMetricStorage implements MetricStorage {
         AGENT_SEND("heartbeat.agent_send_ms", "agent_send_ms", "ms", MetricSource.HEARTBEAT),
         AGENT_THREADS("agent.thread_count", "agent_thread_count", "threads", MetricSource.HEARTBEAT),
         AGENT_RSS("agent.rss_kb", "agent_rss_kb", "KiB", MetricSource.HEARTBEAT),
+        DISK_IO_UTIL("disk.io_util_pct", "io_util_pct", "%", MetricSource.DISK),
+        DISK_SATURATED_FOR("disk.saturated_for_ms", "saturated_for_ms", "ms", MetricSource.DISK),
         TIDE_CPU("tide_worker.cpu_pct", "cpu_pct", "%", MetricSource.TIDE_WORKER),
         TIDE_RSS("tide_worker.rss_kb", "rss_kb", "KiB", MetricSource.TIDE_WORKER),
         TIDE_THREADS("tide_worker.thread_count", "thread_count", "threads", MetricSource.TIDE_WORKER),
@@ -1128,6 +1315,7 @@ final class LocalMetricStorage implements MetricStorage {
 
     private enum MetricSource {
         HEARTBEAT,
+        DISK,
         TIDE_WORKER,
         GROUP_LEADER
     }

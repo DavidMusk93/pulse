@@ -79,6 +79,28 @@ export type MetricInvalidation = {
   metrics: string[];
 };
 
+export type FanoutSourceView = {
+  source_id?: string;
+  sourceId?: string;
+  type?: string;
+  name?: string;
+  target_query?: string;
+  targetQuery?: string;
+  target_id?: string;
+  targetId?: string;
+  interval_ms?: number;
+  intervalMs?: number;
+  enabled?: boolean;
+  last_attempt_at_ms?: number;
+  lastAttemptAtMs?: number;
+  last_success_at_ms?: number;
+  lastSuccessAtMs?: number;
+  last_error?: string;
+  lastError?: string;
+  last_active_count?: number;
+  lastActiveCount?: number;
+};
+
 type FetchJson = <T>(url: string, init?: RequestInit) => Promise<T>;
 
 export function metricPointTimestamp(point: MetricPointView) {
@@ -101,6 +123,24 @@ export class MetricQueryController {
 
   storage() {
     return this.fetchJson<MetricStorageHealth>('/api/metrics/storage');
+  }
+
+  fanoutSources() {
+    return this.fetchJson<FanoutSourceView[]>('/api/fanout/sources');
+  }
+
+  registerFanoutSource(targetQuery: string, intervalMs: number) {
+    return this.fetchJson<FanoutSourceView>('/api/fanout/sources', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'lark_chat', target_query: targetQuery, interval_ms: intervalMs })
+    });
+  }
+
+  removeFanoutSource(sourceId: string) {
+    return this.fetchJson<{ removed: boolean }>(`/api/fanout/sources/${encodeURIComponent(sourceId)}`, {
+      method: 'DELETE'
+    });
   }
 
   queryRange(request: MetricQueryRequest) {

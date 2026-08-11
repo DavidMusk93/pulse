@@ -38,6 +38,7 @@ public class CoordinatorHttpServer {
     private final HttpClient routeClient = HttpClient.newHttpClient();
     private final BiFunction<String, URI, URI> taskRouteResolver;
     private final List<String> metricPeerUrls;
+    private final FanoutService fanoutService;
     private final ArrayDeque<SseEvent> metricEventCache = new ArrayDeque<>();
     private final AtomicLong metricEventSequence = new AtomicLong();
     private final int metricEventCacheLimit;
@@ -49,6 +50,21 @@ public class CoordinatorHttpServer {
 
     public CoordinatorHttpServer(CoordinatorService service, String bindHost, int port) throws IOException {
         this(service, bindHost, port, PeerForwarder.fromEnvironment(service.coordinatorId()));
+    }
+
+    public CoordinatorHttpServer(
+            CoordinatorService service,
+            String bindHost,
+            int port,
+            FanoutService fanoutService) throws IOException {
+        this(
+                service,
+                bindHost,
+                port,
+                PeerForwarder.fromEnvironment(service.coordinatorId()),
+                CoordinatorHttpServer::defaultTaskRouteUri,
+                peerUrlsFromEnvironment(),
+                fanoutService);
     }
 
     CoordinatorHttpServer(CoordinatorService service, String bindHost, int port, PeerForwarder peerForwarder) throws IOException {
@@ -71,10 +87,22 @@ public class CoordinatorHttpServer {
             PeerForwarder peerForwarder,
             BiFunction<String, URI, URI> taskRouteResolver,
             List<String> metricPeerUrls) throws IOException {
+        this(service, bindHost, port, peerForwarder, taskRouteResolver, metricPeerUrls, null);
+    }
+
+    CoordinatorHttpServer(
+            CoordinatorService service,
+            String bindHost,
+            int port,
+            PeerForwarder peerForwarder,
+            BiFunction<String, URI, URI> taskRouteResolver,
+            List<String> metricPeerUrls,
+            FanoutService fanoutService) throws IOException {
         this.service = service;
         this.peerForwarder = peerForwarder;
         this.taskRouteResolver = taskRouteResolver;
         this.metricPeerUrls = metricPeerUrls == null ? List.of() : List.copyOf(metricPeerUrls);
+        this.fanoutService = fanoutService;
         this.metricEventCacheLimit = positiveInt("PULSE_METRIC_SSE_CACHE_EVENTS", 256);
         this.taskOutputPreviewChars = positiveInt("PULSE_TASK_OUTPUT_PREVIEW_CHARS", 8 * 1024);
         this.server = HttpServer.create(new InetSocketAddress(bindHost, port), httpBacklog());
@@ -135,6 +163,30 @@ public class CoordinatorHttpServer {
             }
             if ("GET".equals(method) && "/api/metrics/storage".equals(path)) {
                 writeJson(exchange, 200, service.metricStorageHealth());
+                return;
+            }
+            if ("GET".equals(method) && "/api/fanout/sources".equals(path)) {
+                writeJson(exchange, 200, fanoutService == null ? List.of() : fanoutService.sources());
+                return;
+            }
+            if ("POST".equals(method) && "/api/fanout/sources".equals(path)) {
+                if (fanoutService == null) {
+                    throw new IllegalArgumentException("fanout is disabled");
+                }
+                FanoutRegistration registration = mapper.readValue(readBody(exchange), FanoutRegistration.class);
+                writeJson(exchange, 201, fanoutService.register(registration));
+                return;
+            }
+            if ("DELETE".equals(method) && path.startsWith("/api/fanout/sources/")) {
+                if (fanoutService == null) {
+                    throw new IllegalArgumentException("fanout is disabled");
+                }
+                String sourceId = path.substring("/api/fanout/sources/".length());
+                if (sourceId.isBlank()) {
+                    throw new IllegalArgumentException("source_id is required");
+                }
+                boolean removed = fanoutService.remove(sourceId);
+                writeJson(exchange, removed ? 200 : 404, Map.of("removed", removed));
                 return;
             }
             if ("GET".equals(method) && "/api/metrics/stream".equals(path)) {
@@ -439,7 +491,12 @@ public class CoordinatorHttpServer {
             writeCachedMetricEvent(output, "metric.invalidate", mapper.writeValueAsString(Map.of(
                     "from", compensateFromMs,
                     "to", now,
-                    "metrics", List.of("heartbeat.arrival_gap_ms", "agent.thread_count", "group.submitted_agent_count"))));
+                    "metrics", List.of(
+                            "heartbeat.arrival_gap_ms",
+                            "agent.thread_count",
+                            "disk.io_util_pct",
+                            "disk.saturated_for_ms",
+                            "group.submitted_agent_count"))));
             if (!once) {
                 long deadline = System.currentTimeMillis() + maxStreamMs;
                 while (!Thread.currentThread().isInterrupted() && System.currentTimeMillis() < deadline) {
@@ -451,7 +508,12 @@ public class CoordinatorHttpServer {
                     writeCachedMetricEvent(output, "metric.invalidate", mapper.writeValueAsString(Map.of(
                             "from", tick - Math.max(intervalMs, 30_000),
                             "to", tick,
-                            "metrics", List.of("heartbeat.arrival_gap_ms", "agent.thread_count", "group.submitted_agent_count"))));
+                            "metrics", List.of(
+                                    "heartbeat.arrival_gap_ms",
+                                    "agent.thread_count",
+                                    "disk.io_util_pct",
+                                    "disk.saturated_for_ms",
+                                    "group.submitted_agent_count"))));
                     writeCachedMetricEvent(output, "ping", mapper.writeValueAsString(Map.of("server_time_ms", tick)));
                 }
             }

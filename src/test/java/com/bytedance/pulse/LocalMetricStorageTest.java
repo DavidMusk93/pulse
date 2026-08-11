@@ -132,14 +132,22 @@ class LocalMetricStorageTest {
                     5,
                     19,
                     72_000,
-                    Map.of("ip", "fd00::1", "tide_workers", List.of(Map.of(
-                            "pid", 1234,
-                            "component_version", "1.2.3",
-                            "cpu_percent", "1.50",
-                            "rss_kb", 64000,
-                            "threads", 8,
-                            "port1", "6511",
-                            "role", "leader")))));
+                    Map.of(
+                            "ip", "fd00::1",
+                            "tide_workers", List.of(Map.of(
+                                    "pid", 1234,
+                                    "component_version", "1.2.3",
+                                    "cpu_percent", "1.50",
+                                    "rss_kb", 64000,
+                                    "threads", 8,
+                                    "port1", "6511",
+                                    "role", "leader")),
+                            "disks", List.of(Map.of(
+                                    "device", "nvme0n1",
+                                    "io_util_pct", 97.5,
+                                    "saturated_for_ms", 10_000,
+                                    "sample_interval_ms", 5_000,
+                                    "busy_ms", 4_875)))));
 
             MetricQueryResult result = storage.queryRange(new MetricQuery(
                     "tide_worker.rss_kb",
@@ -152,12 +160,23 @@ class LocalMetricStorageTest {
             assertEquals(1, result.series().size());
             assertEquals("1234", result.series().get(0).labels().get("pid"));
             assertEquals(64_000.0, result.series().get(0).points().get(0).value());
+
+            MetricQueryResult disk = storage.queryRange(new MetricQuery(
+                    "disk.io_util_pct",
+                    List.of("agent-1"),
+                    1_710_000_000_000L,
+                    1_710_000_000_000L,
+                    1_000,
+                    10));
+            assertEquals("nvme0n1", disk.series().get(0).labels().get("device"));
+            assertEquals(97.5, disk.series().get(0).points().get(0).value());
         }
 
         try (var connection = DriverManager.getConnection("jdbc:sqlite:" + db.toAbsolutePath());
                 var statement = connection.createStatement()) {
             assertEquals(1, count(statement, "host_dimension"));
             assertEquals(1, count(statement, "tide_worker_sample"));
+            assertEquals(1, count(statement, "disk_sample"));
             assertEquals(0, count(statement, "group_leader_sample"));
             assertEquals(0, count(statement, "host_event"));
             try (var result = statement.executeQuery("""
