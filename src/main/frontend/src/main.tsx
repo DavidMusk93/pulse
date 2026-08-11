@@ -1643,14 +1643,12 @@ function EventBusPanel({
           <Typography.Text type="secondary">复用 heartbeat message 通道，周期门禁后 fanout</Typography.Text>
         </div>
       </div>
-      <div className="eventbus-flow" aria-label="事件传递链路">
-        <span><ApiOutlined /><b>Source</b><em>{view?.config.sources.length || 0}</em></span>
-        <ArrowRightOutlined className="eventbus-flow-arrow" />
-        <span><ThunderboltOutlined /><b>Heartbeat</b><em>event.publish</em></span>
-        <ArrowRightOutlined className="eventbus-flow-arrow" />
-        <span><SettingOutlined /><b>Gate</b><em>{view?.config.routes.length || 0} routes</em></span>
-        <ArrowRightOutlined className="eventbus-flow-arrow" />
-        <span><SendOutlined /><b>Sink</b><em>{view?.config.sinks.length || 0}</em></span>
+      <div className="eventbus-flow" aria-label="事件 Pipeline">
+        <span><ApiOutlined /><b>Source</b><em>{view?.config.sources.length || 0} producers</em></span>
+        <span className="eventbus-flow-link"><ArrowRightOutlined /><small>PulseMessage</small></span>
+        <span><ThunderboltOutlined /><b>Pipeline</b><em>{view?.config.routes.length || 0} routes · {view?.config.event_types.length || 0} contracts</em></span>
+        <span className="eventbus-flow-link"><ArrowRightOutlined /><small>Delivery</small></span>
+        <span><SendOutlined /><b>Sink</b><em>{view?.config.sinks.length || 0} targets</em></span>
       </div>
       <div className="eventbus-summary-actions">
         <div className="eventbus-live-count">
@@ -1683,16 +1681,16 @@ function EventBusPanel({
           value={section}
           onChange={value => setSection(value as typeof section)}
           options={[
-            { value: 'types', label: `事件类型 ${draft.event_types.length}` },
+            { value: 'types', label: `事件契约 ${draft.event_types.length}` },
             { value: 'sources', label: `Sources ${draft.sources.length}` },
-            { value: 'routes', label: `Routes ${draft.routes.length}` },
+            { value: 'routes', label: `Pipelines ${draft.routes.length}` },
             { value: 'sinks', label: `Sinks ${draft.sinks.length}` }
           ]}
         />
 
         {section === 'types' && <section className="eventbus-stage" key="types">
           <div className="eventbus-section-head">
-            <div><b>事件类型</b><span>先定义稳定语义，再由 Source 发布</span></div>
+            <div><b>事件契约</b><span>定义稳定语义，再由 Source 通过 event.publish 发布</span></div>
             <Button icon={<PlusOutlined />} onClick={() => append('event_types', {
               id: `event.type.${Date.now()}`,
               name: '新事件类型',
@@ -1700,6 +1698,10 @@ function EventBusPanel({
               severity: 'warn',
               enabled: true
             })}>新增</Button>
+          </div>
+          <div className="eventbus-contract-note">
+            <b>协议字段与业务属性分离</b>
+            <span><code>event_id / incident_id / status / observed_at</code> 属于固定信封；类型 ID、名称和默认级别由这里定义，业务 <code>attributes</code> 由 Source 动态发布。</span>
           </div>
           <div className="eventbus-items">
             {draft.event_types.map((eventType, index) => <div className="eventbus-item" key={`${eventType.id}-${index}`}>
@@ -1754,12 +1756,12 @@ function EventBusPanel({
 
         {section === 'routes' && <section className="eventbus-stage" key="routes">
           <div className="eventbus-section-head">
-            <div><b>Routes & Gates</b><span>筛选事件、控制发布节奏，再 fanout 到目标</span></div>
+            <div><b>Pipelines</b><span>每条 Pipeline 独立完成输入匹配、发布门禁和目标投递</span></div>
             <Button icon={<PlusOutlined />} disabled={!byKind('gate').length || !draft.sinks.length} onClick={() => {
               const plugin = byKind('gate')[0];
               append('routes', {
                 id: `route-${Date.now()}`,
-                name: '新 Route',
+                name: '新 Pipeline',
                 enabled: true,
                 source_ids: draft.sources[0] ? [draft.sources[0].id] : [],
                 event_types: draft.event_types[0] ? [draft.event_types[0].id] : [],
@@ -1772,11 +1774,27 @@ function EventBusPanel({
           <div className="eventbus-items">
             {draft.routes.map((route, index) => <div className="eventbus-item" key={`${route.id}-${index}`}>
               <div className="eventbus-item-head">
-                <div><span className="eventbus-item-icon"><ThunderboltOutlined /></span><b>{route.name || '未命名 Route'}</b><code>{route.id}</code><Tag bordered={false}>{route.gate_type}</Tag></div>
+                <div><span className="eventbus-item-icon"><ThunderboltOutlined /></span><b>{route.name || '未命名 Pipeline'}</b><code>{route.id}</code><Tag bordered={false}>{route.gate_type}</Tag></div>
                 <Space size={8}><Switch size="small" checked={route.enabled} onChange={enabled => updateList('routes', index, { ...route, enabled })} />{deleteButton(() => updateList('routes', index, null), '删除 Route')}</Space>
               </div>
+              <div className="eventbus-pipeline-map" aria-label={`${route.name || route.id} Pipeline`}>
+                <div className="eventbus-pipeline-node">
+                  <ApiOutlined />
+                  <span><small>INPUT</small><b>{route.source_ids.length || 0} Sources</b></span>
+                </div>
+                <ArrowRightOutlined className="eventbus-pipeline-arrow" />
+                <div className="eventbus-pipeline-node is-gate">
+                  <ThunderboltOutlined />
+                  <span><small>CONTRACT + GATE</small><b>{route.event_types.length || 0} Types · {route.gate_type}</b></span>
+                </div>
+                <ArrowRightOutlined className="eventbus-pipeline-arrow" />
+                <div className="eventbus-pipeline-node">
+                  <SendOutlined />
+                  <span><small>OUTPUT</small><b>{route.sink_ids.length || 0} Sinks</b></span>
+                </div>
+              </div>
               <div className="eventbus-form-grid">
-                <label className="eventbus-field"><span>Route ID</span><Input value={route.id} onChange={event => updateList('routes', index, { ...route, id: event.target.value })} /></label>
+                <label className="eventbus-field"><span>Pipeline ID</span><Input value={route.id} onChange={event => updateList('routes', index, { ...route, id: event.target.value })} /></label>
                 <label className="eventbus-field"><span>显示名称</span><Input value={route.name} onChange={event => updateList('routes', index, { ...route, name: event.target.value })} /></label>
                 <label className="eventbus-field"><span>发布门禁</span><Select value={route.gate_type} options={byKind('gate').map(plugin => ({ value: plugin.type, label: plugin.name }))} onChange={gateType => {
                   const plugin = descriptor('gate', gateType);
@@ -1784,9 +1802,9 @@ function EventBusPanel({
                 }} /></label>
               </div>
               <div className="eventbus-route-selectors">
-                <label className="eventbus-field"><span>接收 Sources</span><Select mode="multiple" value={route.source_ids} options={draft.sources.map(item => ({ value: item.id, label: item.name }))} placeholder="选择 Source" onChange={sourceIds => updateList('routes', index, { ...route, source_ids: sourceIds })} /></label>
-                <label className="eventbus-field"><span>匹配事件类型</span><Select mode="multiple" value={route.event_types} options={draft.event_types.map(item => ({ value: item.id, label: item.name }))} placeholder="选择事件类型" onChange={eventTypes => updateList('routes', index, { ...route, event_types: eventTypes })} /></label>
-                <label className="eventbus-field"><span>Fanout Sinks</span><Select mode="multiple" value={route.sink_ids} options={draft.sinks.map(item => ({ value: item.id, label: item.name }))} placeholder="选择 Sink" onChange={sinkIds => updateList('routes', index, { ...route, sink_ids: sinkIds })} /></label>
+                <label className="eventbus-field"><span>输入 Sources</span><Select mode="multiple" value={route.source_ids} options={draft.sources.map(item => ({ value: item.id, label: item.name }))} placeholder="选择 Source" onChange={sourceIds => updateList('routes', index, { ...route, source_ids: sourceIds })} /></label>
+                <label className="eventbus-field"><span>事件契约</span><Select mode="multiple" value={route.event_types} options={draft.event_types.map(item => ({ value: item.id, label: item.name }))} placeholder="选择事件类型" onChange={eventTypes => updateList('routes', index, { ...route, event_types: eventTypes })} /></label>
+                <label className="eventbus-field"><span>输出 Sinks</span><Select mode="multiple" value={route.sink_ids} options={draft.sinks.map(item => ({ value: item.id, label: item.name }))} placeholder="选择 Sink" onChange={sinkIds => updateList('routes', index, { ...route, sink_ids: sinkIds })} /></label>
               </div>
               <EventPluginFields plugin={descriptor('gate', route.gate_type)} config={route.gate_config} onChange={gateConfig => updateList('routes', index, { ...route, gate_config: gateConfig })} />
             </div>)}
