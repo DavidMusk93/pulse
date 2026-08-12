@@ -35,18 +35,43 @@ class LarkWebhookSinkPluginTest {
         assertEquals(1, transport.bodies.size());
         JsonNode payload = JsonSupport.objectMapper().readTree(transport.bodies.get(0));
         assertEquals("interactive", payload.get("msg_type").asText());
+        assertEquals("2.0", payload.at("/card/schema").asText());
+        assertTrue(payload.get("card").get("elements") == null);
         assertEquals("red", payload.at("/card/header/template").asText());
         assertEquals(
                 LarkWebhookSinkPlugin.sign(now / 1_000, "private-secret"),
                 payload.get("sign").asText());
+        assertEquals("table", payload.at("/card/body/elements/1/tag").asText());
+        assertEquals("cdn_new", payload.at("/card/body/elements/1/rows/0/cluster").asText());
         assertTrue(payload.toString().contains("nvme0n1"));
-        assertTrue(payload.toString().contains("98.20%"));
-        assertTrue(payload.toString().contains("95.00%"));
+        assertEquals(98.2, payload.at("/card/body/elements/1/rows/0/util").asDouble());
+        assertEquals(95.0, payload.at("/card/body/elements/1/rows/0/threshold").asDouble());
         assertTrue(payload.toString().contains("20.0s"));
-        assertTrue(payload.at("/card/elements/0/fields").isArray());
-        assertTrue(!payload.toString().contains("cdn_new"));
+        assertTrue(!payload.toString().contains("north"));
         assertTrue(!payload.toString().contains("route-a"));
         assertTrue(!payload.toString().contains("delivery-a"));
+    }
+
+    @Test
+    void sortsAllTableRowsBySaturationDurationDescending() throws Exception {
+        LarkWebhookSinkPlugin plugin = new LarkWebhookSinkPlugin(new RecordingTransport());
+        List<EventPlugin.Event> events = new ArrayList<>();
+        for (int index = 0; index < 12; index++) {
+            events.add(event("disk-" + index, (index + 1L) * 1_000, "cluster-" + index % 2));
+        }
+
+        JsonNode payload = JsonSupport.objectMapper().readTree(plugin.render(
+                Map.of("title", "Pulse"),
+                new EventPlugin.Delivery(
+                        "route", "sink", "delivery", 1_710_000_000_000L, false, events)));
+        JsonNode table = payload.at("/card/body/elements/1");
+
+        assertEquals(12, table.get("rows").size());
+        assertEquals("disk-11", table.at("/rows/0/device").asText());
+        assertEquals("12.0s", table.at("/rows/0/duration").asText());
+        assertEquals("disk-0", table.at("/rows/11/device").asText());
+        assertEquals(10, table.get("page_size").asInt());
+        assertTrue(table.get("freeze_first_column").asBoolean());
     }
 
     @Test
@@ -61,7 +86,9 @@ class LarkWebhookSinkPluginTest {
                 new EventPlugin.Delivery("route", "sink", "delivery", 1_710_000_000_000L, false, events));
 
         assertTrue(body.length <= LarkWebhookSinkPlugin.MAX_BODY_BYTES);
-        assertTrue(new String(body, java.nio.charset.StandardCharsets.UTF_8).contains("已折叠"));
+        JsonNode payload = JsonSupport.objectMapper().readTree(body);
+        assertTrue(payload.at("/card/body/elements/1/rows").size() < events.size());
+        assertTrue(new String(body, java.nio.charset.StandardCharsets.UTF_8).contains("20 KB"));
     }
 
     @Test
@@ -77,6 +104,10 @@ class LarkWebhookSinkPluginTest {
     }
 
     private static EventPlugin.Event event(String subject) {
+        return event(subject, 20_000, "cdn_new");
+    }
+
+    private static EventPlugin.Event event(String subject, long durationMs, String cluster) {
         return new EventPlugin.Event(
                 "event-" + subject,
                 "incident-" + subject,
@@ -92,8 +123,8 @@ class LarkWebhookSinkPluginTest {
                         "ip", "10.0.0.1",
                         "io_util_pct", 98.2,
                         "threshold", 95,
-                        "saturated_for_ms", 20_000,
-                        "cluster", "cdn_new",
+                        "saturated_for_ms", durationMs,
+                        "cluster", cluster,
                         "area", "north"));
     }
 

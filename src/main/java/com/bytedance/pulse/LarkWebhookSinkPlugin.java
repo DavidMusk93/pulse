@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -74,140 +75,269 @@ final class LarkWebhookSinkPlugin implements EventPlugin.Sink {
     }
 
     byte[] render(Map<String, Object> config, Delivery delivery) throws Exception {
-        int visibleEvents = Math.min(10, delivery.events().size());
-        byte[] body;
-        do {
-            Map<String, Object> payload = card(config, delivery, visibleEvents);
-            String secret = text(config, "signing_secret", "");
-            if (!secret.isBlank()) {
-                long timestamp = delivery.createdAtMs() / 1_000;
-                payload.put("timestamp", String.valueOf(timestamp));
-                payload.put("sign", sign(timestamp, secret));
+        List<Event> events = delivery.events().stream()
+                .sorted(Comparator
+                        .comparingLong(LarkWebhookSinkPlugin::durationMs)
+                        .reversed()
+                        .thenComparing(Comparator.comparingLong(Event::observedAtMs).reversed()))
+                .toList();
+        int low = 0;
+        int high = events.size();
+        byte[] best = null;
+        while (low <= high) {
+            int visibleEvents = low + (high - low) / 2;
+            byte[] candidate = serialize(config, delivery, events, visibleEvents);
+            if (candidate.length <= MAX_BODY_BYTES) {
+                best = candidate;
+                low = visibleEvents + 1;
+            } else {
+                high = visibleEvents - 1;
             }
-            body = MAPPER.writeValueAsBytes(payload);
-            visibleEvents--;
-        } while (body.length > MAX_BODY_BYTES && visibleEvents >= 0);
-        if (body.length > MAX_BODY_BYTES) {
+        }
+        if (best == null) {
             throw new IllegalArgumentException("Lark card exceeds 20 KB");
         }
-        return body;
+        return best;
+    }
+
+    private static byte[] serialize(
+            Map<String, Object> config,
+            Delivery delivery,
+            List<Event> events,
+            int visibleEvents) throws Exception {
+        Map<String, Object> payload = card(config, delivery, events, visibleEvents);
+        String secret = text(config, "signing_secret", "");
+        if (!secret.isBlank()) {
+            long timestamp = delivery.createdAtMs() / 1_000;
+            payload.put("timestamp", String.valueOf(timestamp));
+            payload.put("sign", sign(timestamp, secret));
+        }
+        return MAPPER.writeValueAsBytes(payload);
     }
 
     private static Map<String, Object> card(
             Map<String, Object> config,
             Delivery delivery,
+            List<Event> events,
             int visibleEvents) {
         boolean recovery = delivery.recovery();
         String title = text(config, "title", "Pulse 事件中心");
         List<Map<String, Object>> elements = new ArrayList<>();
-        elements.add(facts(List.of(
-                "**状态**\n" + (recovery ? "已恢复" : "需要关注"),
-                "**本次事件**\n" + delivery.events().size(),
-                "**最高级别**\n" + severityLabel(highestSeverity(delivery.events())),
-                "**推送时间**\n" + formatTime(delivery.createdAtMs()))));
-        elements.add(Map.of("tag", "hr"));
-        for (Event event : delivery.events().stream().limit(Math.max(0, visibleEvents)).toList()) {
-            String host = attribute(event, "ip", attribute(event, "host", event.agentId()));
-            String value = attribute(
-                    event,
-                    "io_util_pct",
-                    attribute(event, "value", "-"));
-            String threshold = attribute(event, "threshold", "-");
-            String duration = attribute(
-                    event,
-                    "saturated_for_ms",
-                    attribute(event, "sustained_for_ms", "0"));
-            elements.add(markdown(
-                    "**" + escape(host) + "  ·  " + escape(event.subject()) + "**"
-                            + "\n" + escape(event.summary())));
-            elements.add(facts(List.of(
-                    "**IO 利用率**\n" + formatPercent(value),
-                    "**触发门槛**\n" + formatPercent(threshold),
-                    "**连续时长**\n" + formatDuration(duration),
-                    "**事件时间**\n" + formatTime(event.observedAtMs()))));
-        }
-        int folded = delivery.events().size() - Math.max(0, visibleEvents);
+        elements.add(summary(events));
+        elements.add(eventTable(events.subList(0, Math.min(visibleEvents, events.size())), recovery));
+        int folded = events.size() - Math.max(0, visibleEvents);
         if (folded > 0) {
-            elements.add(markdown("其余 **" + folded + "** 个活动事件已折叠。"));
+            elements.add(markdown(
+                    "已按持续时间降序展示 **" + visibleEvents + " / " + events.size()
+                            + "** 条；其余 **" + folded + "** 条受 20 KB 消息上限折叠。",
+                    "notation"));
         }
         if (booleanValue(config.get("mention_all"), false) && !recovery) {
-            elements.add(markdown("<at id=all></at> 请关注以上事件。"));
+            elements.add(markdown("<at id=all></at> 请关注以上事件。", "normal"));
         }
         String dashboardUrl = text(config, "dashboard_url", "");
         if (!dashboardUrl.isBlank()) {
             elements.add(Map.of(
-                    "tag", "action",
-                    "actions", List.of(Map.of(
-                            "tag", "button",
-                            "text", Map.of("tag", "plain_text", "content", "查看事件详情"),
-                            "type", "primary",
-                            "url", dashboardUrl))));
+                    "tag", "button",
+                    "text", Map.of("tag", "plain_text", "content", "查看监控详情"),
+                    "type", "primary",
+                    "size", "small",
+                    "behaviors", List.of(Map.of(
+                            "type", "open_url",
+                            "default_url", dashboardUrl))));
         }
-        elements.add(Map.of(
-                "tag", "note",
-                "elements", List.of(Map.of(
-                        "tag", "plain_text",
-                        "content", "Pulse EventBus · 送达后自动清理待推送事件"))));
+        elements.add(markdown(
+                "Pulse EventBus · " + formatTime(delivery.createdAtMs())
+                        + " · 送达后自动清理待推送事件",
+                "notation"));
         Map<String, Object> card = new LinkedHashMap<>();
-        card.put("config", Map.of("wide_screen_mode", true, "enable_forward", true));
+        card.put("schema", "2.0");
+        card.put("config", Map.of(
+                "enable_forward", true,
+                "update_multi", true,
+                "width_mode", "fill",
+                "summary", Map.of(
+                        "content", title + " · " + events.size() + " 个磁盘 IO 事件")));
         card.put("header", Map.of(
-                "template", recovery ? "green" : severityTemplate(delivery.events()),
-                "title", Map.of("tag", "plain_text", "content", title + (recovery ? " · 已恢复" : " · 告警摘要"))));
-        card.put("elements", elements);
+                "template", recovery ? "green" : severityTemplate(events),
+                "title", Map.of(
+                        "tag", "plain_text",
+                        "content", title + (recovery ? " · 已恢复" : " · 磁盘 IO 饱和")),
+                "subtitle", Map.of(
+                        "tag", "plain_text",
+                        "content", "按持续时间降序 · " + events.size() + " 个活动事件"),
+                "padding", "10px 12px"));
+        card.put("body", Map.of(
+                "direction", "vertical",
+                "padding", "8px",
+                "vertical_spacing", "6px",
+                "elements", elements));
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("msg_type", "interactive");
         payload.put("card", card);
         return payload;
     }
 
-    private static Map<String, Object> markdown(String content) {
-        return Map.of("tag", "div", "text", Map.of("tag", "lark_md", "content", content));
-    }
-
-    private static Map<String, Object> facts(List<String> values) {
+    private static Map<String, Object> summary(List<Event> events) {
+        long maxDuration = events.stream().mapToLong(LarkWebhookSinkPlugin::durationMs).max().orElse(0);
+        double maxUtilization = events.stream().mapToDouble(LarkWebhookSinkPlugin::utilizationPct).max().orElse(0);
+        long clusters = events.stream()
+                .map(event -> attribute(event, "cluster", "unknown"))
+                .distinct()
+                .count();
         return Map.of(
-                "tag", "div",
-                "fields", values.stream()
-                        .map(value -> Map.<String, Object>of(
-                                "is_short", true,
-                                "text", Map.of("tag", "lark_md", "content", value)))
-                        .toList());
+                "tag", "column_set",
+                "flex_mode", "bisect",
+                "background_style", "grey",
+                "horizontal_spacing", "small",
+                "columns", List.of(
+                        summaryColumn("活动事件", Integer.toString(events.size())),
+                        summaryColumn("涉及集群", Long.toString(clusters)),
+                        summaryColumn("最长持续", formatDuration(maxDuration)),
+                        summaryColumn("最高 IO", formatPercent(maxUtilization))));
     }
 
-    private static String formatPercent(String value) {
-        try {
-            return String.format(
-                    java.util.Locale.ROOT,
-                    "%.2f%%",
-                    Double.parseDouble(value));
-        } catch (NumberFormatException ignored) {
-            return escape(value);
-        }
+    private static Map<String, Object> summaryColumn(String label, String value) {
+        return Map.of(
+                "tag", "column",
+                "width", "weighted",
+                "weight", 1,
+                "padding", "6px 8px",
+                "elements", List.of(Map.of(
+                        "tag", "markdown",
+                        "content", label + "\n**" + value + "**",
+                        "text_align", "center",
+                        "text_size", "normal")));
     }
 
-    private static String formatDuration(String value) {
-        try {
-            long millis = Long.parseLong(value);
-            if (millis >= 1_000) {
-                return String.format(java.util.Locale.ROOT, "%.1fs", millis / 1_000.0);
-            }
+    private static Map<String, Object> eventTable(List<Event> events, boolean recovery) {
+        List<Map<String, Object>> rows = events.stream()
+                .map(event -> eventRow(event, recovery))
+                .toList();
+        return Map.of(
+                "tag", "table",
+                "page_size", 10,
+                "row_height", "low",
+                "freeze_first_column", true,
+                "header_style", Map.of(
+                        "text_align", "left",
+                        "text_size", "normal",
+                        "background_style", "grey",
+                        "text_color", "grey",
+                        "bold", true,
+                        "lines", 1),
+                "columns", List.of(
+                        column("cluster", "集群", "text", "auto", "left"),
+                        column("host", "主机 / IP", "text", "auto", "left"),
+                        column("device", "设备", "text", "80px", "left"),
+                        numberColumn("util", "IO%", "80px", 2),
+                        numberColumn("threshold", "阈值%", "80px", 2),
+                        column("duration", "持续", "text", "80px", "right"),
+                        dateColumn(),
+                        column("status", "状态", "options", "80px", "center")),
+                "rows", rows);
+    }
+
+    private static Map<String, Object> eventRow(Event event, boolean recovery) {
+        String host = attribute(event, "host", "");
+        String ip = attribute(event, "ip", event.agentId());
+        String machine = host.isBlank() || host.equals(ip) ? ip : host + " · " + ip;
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("cluster", attribute(event, "cluster", "unknown"));
+        row.put("host", machine);
+        row.put("device", attribute(event, "device", event.subject()));
+        row.put("util", utilizationPct(event));
+        row.put("threshold", numberAttribute(event, "threshold", 0));
+        row.put("duration", formatDuration(durationMs(event)));
+        row.put("time", event.observedAtMs());
+        row.put("status", List.of(Map.of(
+                "text", recovery || "resolved".equalsIgnoreCase(event.status()) ? "已恢复" : "告警",
+                "color", recovery || "resolved".equalsIgnoreCase(event.status()) ? "green" : "red")));
+        return row;
+    }
+
+    private static Map<String, Object> column(
+            String name,
+            String displayName,
+            String dataType,
+            String width,
+            String align) {
+        return Map.of(
+                "name", name,
+                "display_name", displayName,
+                "data_type", dataType,
+                "width", width,
+                "horizontal_align", align);
+    }
+
+    private static Map<String, Object> numberColumn(
+            String name,
+            String displayName,
+            String width,
+            int precision) {
+        Map<String, Object> column = new LinkedHashMap<>(column(name, displayName, "number", width, "right"));
+        column.put("format", Map.of("precision", precision, "separator", false));
+        return column;
+    }
+
+    private static Map<String, Object> dateColumn() {
+        Map<String, Object> column = new LinkedHashMap<>(column("time", "事件时间", "date", "140px", "left"));
+        column.put("date_format", "MM-DD HH:mm:ss");
+        return column;
+    }
+
+    private static Map<String, Object> markdown(String content, String textSize) {
+        return Map.of(
+                "tag", "markdown",
+                "content", content,
+                "text_size", textSize);
+    }
+
+    private static String formatPercent(double value) {
+        return String.format(java.util.Locale.ROOT, "%.2f%%", value);
+    }
+
+    private static String formatDuration(long millis) {
+        if (millis < 1_000) {
             return millis + "ms";
-        } catch (NumberFormatException ignored) {
-            return escape(value);
         }
+        long seconds = millis / 1_000;
+        if (seconds < 60) {
+            return String.format(java.util.Locale.ROOT, "%.1fs", millis / 1_000.0);
+        }
+        long minutes = seconds / 60;
+        long remainingSeconds = seconds % 60;
+        return minutes + "m" + remainingSeconds + "s";
     }
 
     private static String formatTime(long timestampMs) {
         return Instant.ofEpochMilli(timestampMs).toString();
     }
 
-    private static String severityLabel(String severity) {
-        return switch (severity.toLowerCase(java.util.Locale.ROOT)) {
-            case "critical" -> "严重";
-            case "error" -> "错误";
-            case "warn", "warning" -> "警告";
-            default -> "信息";
-        };
+    private static long durationMs(Event event) {
+        return (long) numberAttribute(
+                event,
+                "saturated_for_ms",
+                numberAttribute(event, "sustained_for_ms", 0));
+    }
+
+    private static double utilizationPct(Event event) {
+        return numberAttribute(
+                event,
+                "io_util_pct",
+                numberAttribute(event, "value", 0));
+    }
+
+    private static double numberAttribute(Event event, String key, double fallback) {
+        Object value = event.attributes().get(key);
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        try {
+            return value == null ? fallback : Double.parseDouble(value.toString());
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
     }
 
     private static String highestSeverity(List<Event> events) {
@@ -291,10 +421,6 @@ final class LarkWebhookSinkPlugin implements EventPlugin.Sink {
         } catch (NumberFormatException ignored) {
             return fallback;
         }
-    }
-
-    private static String escape(String value) {
-        return value.replace("\\", "\\\\").replace("`", "\\`").replace("*", "\\*");
     }
 
     interface Transport {

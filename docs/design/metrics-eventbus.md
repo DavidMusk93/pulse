@@ -73,9 +73,11 @@ A sink binds a `plugin_type` and private configuration. The built-in `lark_webho
 
 - calls a Web-configured Lark custom-bot webhook directly;
 - supports optional HMAC-SHA256 signing;
-- renders an `interactive` card with severity color, `lark_md` sections, structured fact fields, folding, and an optional detail link;
-- keeps events from multiple locations in one flat message and does not render cluster, area, or zone ownership;
+- renders a Card JSON 2.0 `interactive` message with a compact KPI section, native table, dynamic folding, and an optional detail link;
+- sorts disk events by saturation duration descending and identifies each machine's cluster while omitting lower-value area and zone fields;
+- uses the native table to show cluster, host/IP, device, utilization, threshold, duration, event time, and status;
 - enforces the documented 20 KB body limit;
+- chooses the largest visible row count that fits the serialized UTF-8 body instead of applying a fixed event-count cap;
 - treats HTTP success and Lark `code == 0` as separate success conditions;
 - records delivery attempt, success, failure, format, and event count.
 
@@ -163,5 +165,7 @@ The implementation follows the Lark custom bot contract:
 - request body no larger than 20 KB;
 - optional signature: Base64(HMAC-SHA256(key=`timestamp + "\n" + secret`, data=empty));
 - rich card links are outbound URL actions only.
+- Card JSON 2.0 is a structured component tree, not arbitrary HTML/CSS; the sink uses `column_set`, `markdown`, and `table` components supported by the custom-bot `interactive` payload.
+- Schema 2.0 requires Feishu client 7.20 or later; table rendering requires client 7.4 or later.
 
 Periodic gates keep normal alert traffic far below Lark's rate limit. Additional retry/backoff gate plugins can be added without changing source or sink code.
