@@ -12,6 +12,7 @@ final class AgentDiskIoEventEmitter implements AgentEventSourcePlugin {
     static final String EVENT_TYPE = "disk.io_saturation";
     static final double DEFAULT_THRESHOLD_PCT = 95;
     static final long DEFAULT_SUSTAIN_MS = 10_000;
+    static final long DEFAULT_SUSTAIN_SECONDS = DEFAULT_SUSTAIN_MS / 1_000;
 
     private volatile boolean enabled = true;
     private volatile double thresholdPct;
@@ -41,10 +42,10 @@ final class AgentDiskIoEventEmitter implements AgentEventSourcePlugin {
                                 DEFAULT_THRESHOLD_PCT,
                                 "仅当 io_util_pct 严格大于此值时累计持续时间"),
                         field(
-                                "sustain_ms",
-                                "持续时间 (ms)",
-                                DEFAULT_SUSTAIN_MS,
-                                "连续超过门槛达到此时长后生成事件"));
+                                "sustain_seconds",
+                                "持续时间 (秒)",
+                                DEFAULT_SUSTAIN_SECONDS,
+                                "连续超过门槛达到此秒数后生成事件"));
     }
 
     @Override
@@ -52,8 +53,9 @@ final class AgentDiskIoEventEmitter implements AgentEventSourcePlugin {
         double nextThreshold = validThreshold(
                 number(config.get("threshold_pct")),
                 DEFAULT_THRESHOLD_PCT);
+        long sustainSeconds = (long) number(config.get("sustain_seconds"));
         long nextSustain = validSustain(
-                (long) number(config.get("sustain_ms")),
+                secondsToMillis(sustainSeconds),
                 DEFAULT_SUSTAIN_MS);
         if (enabled != nextEnabled
                 || Double.compare(thresholdPct, nextThreshold) != 0
@@ -230,6 +232,13 @@ final class AgentDiskIoEventEmitter implements AgentEventSourcePlugin {
 
     private static long validSustain(long value, long fallback) {
         return value >= 1_000 ? value : fallback;
+    }
+
+    private static long secondsToMillis(long seconds) {
+        if (seconds <= 0 || seconds > Long.MAX_VALUE / 1_000) {
+            return 0;
+        }
+        return seconds * 1_000;
     }
 
     private static String format(double value) {

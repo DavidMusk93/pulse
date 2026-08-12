@@ -33,9 +33,11 @@ final class EventBusService implements AutoCloseable {
     private final Map<String, EventPlugin.Gate> gatePlugins = new LinkedHashMap<>();
     private final Map<String, EventPlugin.Sink> sinkPlugins = new LinkedHashMap<>();
     private final Map<String, EventPlugin.Event> activeEvents = new LinkedHashMap<>();
+    private final Map<String, Set<String>> deliveryAcks = new LinkedHashMap<>();
     private final Map<String, EventRouteStatus> routeStatus = new LinkedHashMap<>();
     private final ScheduledExecutorService scheduler;
     private EventBusConfig config;
+    private long revision;
 
     EventBusService(
             Path statePath,
@@ -153,10 +155,13 @@ final class EventBusService implements AutoCloseable {
         }
         synchronized (this) {
             for (EventPlugin.Event event : emitted) {
+                String eventKey = activeKey(event);
                 if ("resolved".equals(event.status())) {
-                    activeEvents.remove(activeKey(event));
+                    activeEvents.remove(eventKey);
+                    deliveryAcks.remove(eventKey);
                 } else if ("firing".equals(event.status())) {
-                    activeEvents.put(activeKey(event), event);
+                    activeEvents.put(eventKey, event);
+                    deliveryAcks.remove(eventKey);
                 }
             }
             try {
@@ -187,7 +192,53 @@ final class EventBusService implements AutoCloseable {
                 Map.copyOf(routeStatus),
                 activeEvents.values().stream()
                         .sorted(Comparator.comparing(EventPlugin.Event::eventId))
-                        .toList());
+                        .toList(),
+                config.routes().stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
+                        EventRouteDefinition::id,
+                        this::pendingCount)));
+    }
+
+    private int pendingCount(EventRouteDefinition route) {
+        if (!route.enabled()) {
+            return 0;
+        }
+        Map<String, EventSinkDefinition> configuredSinks = sinks(config);
+        Set<String> targets = route.sinkIds().stream()
+                .filter(sinkId -> {
+                    EventSinkDefinition sink = configuredSinks.get(sinkId);
+                    return sink != null && sink.enabled();
+                })
+                .map(sinkId -> statusKey(route.id(), sinkId))
+                .collect(java.util.stream.Collectors.toSet());
+        if (targets.isEmpty()) {
+            return 0;
+        }
+        return (int) activeEvents.entrySet().stream()
+                .filter(entry -> route.sourceIds().isEmpty()
+                        || route.sourceIds().contains(entry.getValue().sourceId()))
+                .filter(entry -> route.eventTypes().isEmpty()
+                        || route.eventTypes().contains(entry.getValue().eventType()))
+                .filter(entry -> !deliveryAcks
+                        .getOrDefault(entry.getKey(), Set.of())
+                        .containsAll(targets))
+                .count();
+    }
+
+    synchronized long revision() {
+        return revision;
+    }
+
+    synchronized long awaitRevision(long observedRevision, long timeoutMs)
+            throws InterruptedException {
+        long deadline = System.currentTimeMillis() + Math.max(1, timeoutMs);
+        while (revision <= observedRevision) {
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining <= 0) {
+                break;
+            }
+            wait(remaining);
+        }
+        return revision;
     }
 
     synchronized EventBusView update(EventBusConfig requested) throws Exception {
@@ -196,11 +247,18 @@ final class EventBusService implements AutoCloseable {
         Set<String> changedSources = changedSources(config, merged);
         for (String sourceId : changedSources) {
             sourcePlugins.values().forEach(plugin -> plugin.reset(sourceId));
-            activeEvents.values().removeIf(event -> sourceId.equals(event.sourceId()));
+            Set<String> removed = activeEvents.entrySet().stream()
+                    .filter(entry -> sourceId.equals(entry.getValue().sourceId()))
+                    .map(Map.Entry::getKey)
+                    .collect(java.util.stream.Collectors.toSet());
+            activeEvents.keySet().removeAll(removed);
+            deliveryAcks.keySet().removeAll(removed);
         }
         config = merged;
         Set<String> validStatusKeys = statusKeys(config);
         routeStatus.keySet().removeIf(key -> !validStatusKeys.contains(key));
+        deliveryAcks.values().forEach(acks -> acks.removeIf(key -> !validStatusKeys.contains(key)));
+        pruneDeliveredEvents();
         persist();
         return view();
     }
@@ -283,20 +341,20 @@ final class EventBusService implements AutoCloseable {
                 if (gate == null) {
                     continue;
                 }
-                List<EventPlugin.Event> selected = selectActive(route);
                 for (String sinkId : route.sinkIds()) {
                     EventSinkDefinition sink = sinks(config).get(sinkId);
                     if (sink == null || !sink.enabled()) {
                         continue;
                     }
                     String statusKey = statusKey(route.id(), sinkId);
+                    List<EventPlugin.Event> selected = selectPending(route, statusKey);
                     EventRouteStatus status = routeStatus.getOrDefault(statusKey, EventRouteStatus.empty());
                     EventPlugin.GateDecision decision = gate.evaluate(
                             route.gateConfig(), status.gateState(), selected, now);
                     if (!decision.due()) {
                         continue;
                     }
-                    boolean recovery = selected.isEmpty();
+                    boolean recovery = false;
                     String deliveryId = deliveryId(route, sinkId, decision.reason(), now);
                     routeStatus.put(statusKey, new EventRouteStatus(
                             now,
@@ -330,6 +388,10 @@ final class EventBusService implements AutoCloseable {
         try {
             EventPlugin.DeliveryReceipt receipt = plugin.deliver(dispatch.sink().config(), delivery);
             synchronized (this) {
+                for (EventPlugin.Event event : dispatch.events()) {
+                    deliveryAcks.computeIfAbsent(activeKey(event), ignored -> new HashSet<>())
+                            .add(dispatch.statusKey());
+                }
                 routeStatus.put(dispatch.statusKey(), new EventRouteStatus(
                         now,
                         now,
@@ -338,6 +400,7 @@ final class EventBusService implements AutoCloseable {
                         "",
                         dispatch.deliveryId(),
                         receipt.deliveredEvents()));
+                pruneDeliveredEvents();
                 persist();
             }
             recordDeliveryEvent(dispatch, now, "succeeded", receipt.format(), "");
@@ -408,12 +471,49 @@ final class EventBusService implements AutoCloseable {
         }
     }
 
-    private synchronized List<EventPlugin.Event> selectActive(EventRouteDefinition route) {
+    private synchronized List<EventPlugin.Event> selectPending(
+            EventRouteDefinition route,
+            String statusKey) {
         return activeEvents.values().stream()
                 .filter(event -> route.sourceIds().isEmpty() || route.sourceIds().contains(event.sourceId()))
                 .filter(event -> route.eventTypes().isEmpty() || route.eventTypes().contains(event.eventType()))
+                .filter(event -> !deliveryAcks
+                        .getOrDefault(activeKey(event), Set.of())
+                        .contains(statusKey))
                 .sorted(Comparator.comparing(EventPlugin.Event::eventId))
                 .toList();
+    }
+
+    private void pruneDeliveredEvents() {
+        Set<String> completed = activeEvents.entrySet().stream()
+                .filter(entry -> {
+                    Set<String> targets = deliveryTargets(entry.getValue());
+                    return !targets.isEmpty()
+                            && deliveryAcks.getOrDefault(entry.getKey(), Set.of()).containsAll(targets);
+                })
+                .map(Map.Entry::getKey)
+                .collect(java.util.stream.Collectors.toSet());
+        activeEvents.keySet().removeAll(completed);
+        deliveryAcks.keySet().removeAll(completed);
+    }
+
+    private Set<String> deliveryTargets(EventPlugin.Event event) {
+        Set<String> targets = new HashSet<>();
+        Map<String, EventSinkDefinition> configuredSinks = sinks(config);
+        for (EventRouteDefinition route : config.routes()) {
+            if (!route.enabled()
+                    || (!route.sourceIds().isEmpty() && !route.sourceIds().contains(event.sourceId()))
+                    || (!route.eventTypes().isEmpty() && !route.eventTypes().contains(event.eventType()))) {
+                continue;
+            }
+            for (String sinkId : route.sinkIds()) {
+                EventSinkDefinition sink = configuredSinks.get(sinkId);
+                if (sink != null && sink.enabled()) {
+                    targets.add(statusKey(route.id(), sinkId));
+                }
+            }
+        }
+        return targets;
     }
 
     private void dispatchQuietly() {
@@ -462,6 +562,9 @@ final class EventBusService implements AutoCloseable {
         state.activeEvents().stream()
                 .filter(event -> "firing".equals(event.status()))
                 .forEach(event -> activeEvents.put(activeKey(event), event));
+        deliveryAcks.clear();
+        state.deliveryAcks().forEach(
+                (eventKey, acks) -> deliveryAcks.put(eventKey, new HashSet<>(acks)));
     }
 
     private synchronized void persist() throws Exception {
@@ -473,7 +576,8 @@ final class EventBusService implements AutoCloseable {
         Files.writeString(temporary, MAPPER.writeValueAsString(new EventBusState(
                 config,
                 routeStatus,
-                List.copyOf(activeEvents.values()))));
+                List.copyOf(activeEvents.values()),
+                deliveryAcks)));
         try {
             Files.setPosixFilePermissions(temporary, PosixFilePermissions.fromString("rw-------"));
         } catch (UnsupportedOperationException ignored) {
@@ -483,6 +587,8 @@ final class EventBusService implements AutoCloseable {
         } catch (AtomicMoveNotSupportedException ignored) {
             Files.move(temporary, statePath, StandardCopyOption.REPLACE_EXISTING);
         }
+        revision++;
+        notifyAll();
     }
 
     private void validate(EventBusConfig candidate) {
@@ -512,14 +618,14 @@ final class EventBusService implements AutoCloseable {
                                     + " and event_type=disk.io_saturation");
                 }
                 double thresholdPct = doubleValue(source.config().get("threshold_pct"), -1);
-                long sustainMs = longValue(source.config().get("sustain_ms"), -1);
+                long sustainSeconds = longValue(source.config().get("sustain_seconds"), -1);
                 if (thresholdPct <= 0 || thresholdPct > 100) {
                     throw new IllegalArgumentException(
                             source.id() + " threshold_pct must be in (0, 100]");
                 }
-                if (sustainMs < 1_000) {
+                if (sustainSeconds < 1) {
                     throw new IllegalArgumentException(
-                            source.id() + " sustain_ms must be at least 1000");
+                            source.id() + " sustain_seconds must be at least 1");
                 }
             }
         }
@@ -528,6 +634,13 @@ final class EventBusService implements AutoCloseable {
                 throw new IllegalArgumentException("unknown sink plugin: " + sink.pluginType());
             }
             requiredConfig(sinkPlugins.get(sink.pluginType()).descriptor(), sink.config(), sink.id());
+            if (LarkWebhookSinkPlugin.TYPE.equals(sink.pluginType())) {
+                long timeoutSeconds = longValue(sink.config().get("timeout_seconds"), -1);
+                if (timeoutSeconds < 1 || timeoutSeconds > 60) {
+                    throw new IllegalArgumentException(
+                            sink.id() + " timeout_seconds must be in [1, 60]");
+                }
+            }
         }
         for (EventRouteDefinition route : candidate.routes()) {
             if (!gatePlugins.containsKey(route.gateType())) {
@@ -543,6 +656,13 @@ final class EventBusService implements AutoCloseable {
                 throw new IllegalArgumentException("route must reference existing sinks: " + route.id());
             }
             requiredConfig(gatePlugins.get(route.gateType()).descriptor(), route.gateConfig(), route.id());
+            if (PeriodicDigestGatePlugin.TYPE.equals(route.gateType())
+                    && longValue(route.gateConfig().get("interval_seconds"), -1)
+                            < PeriodicDigestGatePlugin.MIN_INTERVAL_SECONDS) {
+                throw new IllegalArgumentException(
+                        route.id() + " interval_seconds must be at least "
+                                + PeriodicDigestGatePlugin.MIN_INTERVAL_SECONDS);
+            }
         }
     }
 
@@ -597,8 +717,36 @@ final class EventBusService implements AutoCloseable {
         }
         List<EventSourceDefinition> sourcesWithDefaults = value.sources().stream()
                 .map(source -> {
-                    EventSourceDefinition migrated = migrateLegacyAgentSource(source);
+                    EventSourceDefinition migrated = migrateSourceConfig(
+                            migrateLegacyAgentSource(source));
                     EventPlugin.Source plugin = sourcePlugins.get(migrated.pluginType());
+                    return plugin == null
+                            ? migrated
+                            : migrated.withConfig(withDefaults(plugin.descriptor(), migrated.config()));
+                })
+                .toList();
+        List<EventRouteDefinition> routesWithDefaults = value.routes().stream()
+                .map(route -> {
+                    Map<String, Object> migrated = migrateGateConfig(route);
+                    EventPlugin.Gate plugin = gatePlugins.get(route.gateType());
+                    Map<String, Object> configWithDefaults = plugin == null
+                            ? migrated
+                            : withDefaults(plugin.descriptor(), migrated);
+                    return new EventRouteDefinition(
+                            route.id(),
+                            route.name(),
+                            route.enabled(),
+                            route.sourceIds(),
+                            route.eventTypes(),
+                            route.sinkIds(),
+                            route.gateType(),
+                            configWithDefaults);
+                })
+                .toList();
+        List<EventSinkDefinition> sinksWithDefaults = value.sinks().stream()
+                .map(sink -> {
+                    EventSinkDefinition migrated = migrateSinkConfig(sink);
+                    EventPlugin.Sink plugin = sinkPlugins.get(migrated.pluginType());
                     return plugin == null
                             ? migrated
                             : migrated.withConfig(withDefaults(plugin.descriptor(), migrated.config()));
@@ -608,8 +756,50 @@ final class EventBusService implements AutoCloseable {
                 value.version(),
                 value.eventTypes(),
                 sourcesWithDefaults,
-                value.sinks(),
-                value.routes());
+                sinksWithDefaults,
+                routesWithDefaults);
+    }
+
+    private static EventSourceDefinition migrateSourceConfig(EventSourceDefinition source) {
+        if (!AgentDiskIoEventSourcePlugin.TYPE.equals(source.pluginType())) {
+            return source;
+        }
+        Map<String, Object> config = new LinkedHashMap<>(source.config());
+        if (!config.containsKey("sustain_seconds") && config.containsKey("sustain_ms")) {
+            config.put(
+                    "sustain_seconds",
+                    millisecondsToSeconds(longValue(config.get("sustain_ms"), 0)));
+        }
+        config.remove("sustain_ms");
+        return source.withConfig(config);
+    }
+
+    private static Map<String, Object> migrateGateConfig(EventRouteDefinition route) {
+        Map<String, Object> config = new LinkedHashMap<>(route.gateConfig());
+        if (PeriodicDigestGatePlugin.TYPE.equals(route.gateType())) {
+            if (!config.containsKey("interval_seconds") && config.containsKey("interval_ms")) {
+                config.put(
+                        "interval_seconds",
+                        millisecondsToSeconds(longValue(config.get("interval_ms"), 0)));
+            }
+            config.remove("interval_ms");
+            config.remove("publish_recovery");
+        }
+        return config;
+    }
+
+    private static EventSinkDefinition migrateSinkConfig(EventSinkDefinition sink) {
+        if (!LarkWebhookSinkPlugin.TYPE.equals(sink.pluginType())) {
+            return sink;
+        }
+        Map<String, Object> config = new LinkedHashMap<>(sink.config());
+        if (!config.containsKey("timeout_seconds") && config.containsKey("timeout_ms")) {
+            config.put(
+                    "timeout_seconds",
+                    millisecondsToSeconds(longValue(config.get("timeout_ms"), 0)));
+        }
+        config.remove("timeout_ms");
+        return sink.withConfig(config);
     }
 
     private static EventSourceDefinition migrateLegacyAgentSource(EventSourceDefinition source) {
@@ -724,7 +914,9 @@ final class EventBusService implements AutoCloseable {
             long now) {
         long interval = Math.max(
                 PeriodicDigestGatePlugin.MIN_INTERVAL_MS,
-                longValue(route.gateConfig().get("interval_ms"), PeriodicDigestGatePlugin.DEFAULT_INTERVAL_MS));
+                longValue(
+                        route.gateConfig().get("interval_seconds"),
+                        PeriodicDigestGatePlugin.DEFAULT_INTERVAL_SECONDS) * 1_000);
         long bucket = now / interval;
         return "delivery-" + TaskOutputCodec.sha256(
                 route.id() + "\n" + sinkId + "\n" + reason + "\n" + bucket).substring(0, 24);
@@ -755,7 +947,7 @@ final class EventBusService implements AutoCloseable {
                         true,
                         Map.of(
                                 "threshold_pct", AgentDiskIoEventEmitter.DEFAULT_THRESHOLD_PCT,
-                                "sustain_ms", AgentDiskIoEventEmitter.DEFAULT_SUSTAIN_MS))),
+                                "sustain_seconds", AgentDiskIoEventEmitter.DEFAULT_SUSTAIN_SECONDS))),
                 List.of(),
                 List.of());
     }
@@ -823,6 +1015,10 @@ final class EventBusService implements AutoCloseable {
         } catch (NumberFormatException ignored) {
             return fallback;
         }
+    }
+
+    private static long millisecondsToSeconds(long milliseconds) {
+        return milliseconds <= 0 ? 0 : Math.max(1, (milliseconds + 999) / 1_000);
     }
 
     private static String errorMessage(Exception exception) {

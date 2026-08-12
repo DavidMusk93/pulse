@@ -29,14 +29,14 @@ A source binds a transport adapter, a stable source ID, and an event type. Built
 - `pulse_message`: consumes `event.publish` messages transported by the existing heartbeat path.
 - `webhook_event`: accepts external `firing` and `resolved` event payloads through the source ingress API.
 
-Agent-side producers implement `AgentEventSourcePlugin` and are loaded through `ServiceLoader`. The default disk producer evaluates the locally collected `disks[]`, emits after `io_util_pct > threshold_pct` continuously for `sustain_ms`, and emits one resolved message after recovery. Its default Source configuration is:
+Agent-side producers implement `AgentEventSourcePlugin` and are loaded through `ServiceLoader`. The default disk producer evaluates the locally collected `disks[]`, emits after `io_util_pct > threshold_pct` continuously for `sustain_seconds`, and emits one resolved message after recovery. Its default Source configuration is:
 
 ```text
-threshold_pct = 95
-sustain_ms    = 10000
+threshold_pct    = 95
+sustain_seconds  = 10
 ```
 
-These are Source fields in the Web UI, not hidden deployment parameters. The Coordinator derives a stable generation from the active EventBus Source configuration and sends `cmd.event_source_config` in every heartbeat response. Agents apply only a changed generation and update the metric sampler and event state machine from one configuration snapshot. Disabling the Source or changing either field clears prior continuous-duration and incident state, so samples accumulated under an old policy cannot trigger under a new policy.
+These are Source fields in the Web UI, not hidden deployment parameters. Control-plane durations are expressed in seconds; Agent sampling converts them to milliseconds only at the execution boundary. The Coordinator derives a stable generation from the active EventBus Source configuration and sends `cmd.event_source_config` in every heartbeat response. Agents apply only a changed generation and update the metric sampler and event state machine from one configuration snapshot. Disabling the Source or changing either field clears prior continuous-duration and incident state, so samples accumulated under an old policy cannot trigger under a new policy.
 
 The numeric samples remain in `state.heartbeat` for time-series storage; only event transitions use `event.publish`.
 
@@ -52,7 +52,7 @@ Every generated event contains:
 - `severity`, `status`, `observed_at_ms`, `summary`;
 - structured attributes.
 
-Firing events enter the active incident map. Resolved events remove the same incident. Every transition is also written to `host_event`.
+Firing events enter the pending-delivery map. Each matching `route_id::sink_id` acknowledges the event independently. The event is removed immediately after every enabled matching target succeeds; a failed target remains pending and retries without redelivering to targets that already acknowledged it. Resolved events remove an event that has not yet been delivered. Every transition is also written to `host_event`.
 
 ### Route and gate
 
@@ -62,8 +62,9 @@ The built-in `periodic_digest` gate:
 
 - has a hard minimum interval of 5 minutes;
 - defaults to 15 minutes;
-- publishes active incidents once per interval;
-- publishes one recovery digest after the final active incident resolves;
+- exposes `interval_seconds` in the control plane;
+- publishes each pending event once to each target;
+- retries only targets that have not acknowledged the event;
 - advances attempt state only when a delivery is actually attempted.
 
 ### Sink
@@ -73,6 +74,7 @@ A sink binds a `plugin_type` and private configuration. The built-in `lark_webho
 - calls a Web-configured Lark custom-bot webhook directly;
 - supports optional HMAC-SHA256 signing;
 - renders an `interactive` card with severity color, `lark_md` sections, structured fact fields, folding, and an optional detail link;
+- keeps events from multiple locations in one flat message and does not render cluster, area, or zone ownership;
 - enforces the documented 20 KB body limit;
 - treats HTTP success and Lark `code == 0` as separate success conditions;
 - records delivery attempt, success, failure, format, and event count.
@@ -99,6 +101,7 @@ Extension JARs register implementations through Java `ServiceLoader`. `AgentEven
 
 ```text
 GET  /api/eventbus
+GET  /api/eventbus/stream
 PUT  /api/eventbus/config
 POST /api/eventbus/sources/{source_id}/events
 POST /api/eventbus/sinks/{sink_id}/test
@@ -111,6 +114,8 @@ x-pulse-event-token: <source ingest_token>
 ```
 
 The sink test endpoint is strict: it tests the configured sink itself and returns upstream delivery failure as HTTP 502. It does not silently fall back to another sink.
+
+`/api/eventbus/stream` is the only live-update path for the EventBus UI. It sends `eventbus.snapshot` SSE events when the persisted EventBus revision changes. The frontend updates only the EventBus component state; it does not poll or refresh the full page.
 
 ## Persistence and Security
 

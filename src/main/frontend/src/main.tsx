@@ -55,6 +55,7 @@ import {
   type MetricStorageHealth,
   type EventBusConfig,
   type EventBusView,
+  type EventRouteStatus,
   type EventPluginDescriptor
 } from './metrics';
 import 'antd/dist/reset.css';
@@ -1145,10 +1146,28 @@ function App() {
   }
 
   useEffect(() => {
-    refreshHosts();
-    const timer = window.setInterval(refreshHosts, 5000);
+    if (!('EventSource' in window)) {
+      refreshHosts();
+      return () => closeOutputStream();
+    }
+    const events = new EventSource('/api/hosts/stream');
+    events.addEventListener('hosts.snapshot', (event: MessageEvent<string>) => {
+      try {
+        const data = JSON.parse(event.data) as HostView[];
+        if (scrollingRef.current) {
+          pendingHostsRef.current = data;
+        } else {
+          applyHosts(data);
+        }
+        setError('');
+        setLoading(false);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    });
+    events.onerror = () => setError('Host SSE 正在重连');
     return () => {
-      window.clearInterval(timer);
+      events.close();
       closeOutputStream();
     };
   }, []);
@@ -1181,8 +1200,7 @@ function App() {
     if (!activeTargetHost || activeCluster) return;
     if (!('EventSource' in window)) {
       refreshSnapshot(activeTargetHost).catch(err => setOutput(String(err)));
-      const timer = window.setInterval(() => refreshSnapshot(activeTargetHost).catch(err => setOutput(String(err))), 2000);
-      return () => window.clearInterval(timer);
+      return;
     }
 
     const id = encodeURIComponent(agentId(activeTargetHost));
@@ -1225,10 +1243,8 @@ function App() {
     }
     if (!('EventSource' in window)) {
       refreshClusterSnapshots().catch(err => setOutput(String(err)));
-      const timer = window.setInterval(() => refreshClusterSnapshots().catch(err => setOutput(String(err))), 3000);
       return () => {
         disposed = true;
-        window.clearInterval(timer);
       };
     }
 
@@ -1347,7 +1363,7 @@ function App() {
           <Card><Statistic title="主机" value={hosts.length} suffix="台" loading={loading}/></Card>
           <Card><Statistic title="在线率" value={hosts.length ? Math.round(alive * 100 / hosts.length) : 0} suffix="%"/></Card>
           <Card><Statistic title="5min AVG" value={formatLoad(avgLoad)}/></Card>
-          <Card><Statistic title="刷新" value="5s"/></Card>
+          <Card><Statistic title="更新" value="SSE"/></Card>
         </div>
       </section>
 
@@ -1561,13 +1577,30 @@ function EventBusPanel({
   const [saving, setSaving] = useState(false);
   const [testingSink, setTestingSink] = useState('');
   const [section, setSection] = useState<'types' | 'sources' | 'routes' | 'sinks'>('types');
+  const [streamState, setStreamState] = useState<'connecting' | 'connected' | 'reconnecting' | 'unsupported'>('connecting');
 
   const load = useCallback(() => controller.eventBus()
     .then(setView)
     .catch(error => onError(error instanceof Error ? error.message : String(error))), [controller, onError]);
 
   useEffect(() => {
-    load();
+    if (!('EventSource' in window)) {
+      setStreamState('unsupported');
+      load();
+      return;
+    }
+    const events = new EventSource('/api/eventbus/stream');
+    events.onopen = () => setStreamState('connected');
+    events.addEventListener('eventbus.snapshot', (event: MessageEvent<string>) => {
+      try {
+        setView(JSON.parse(event.data) as EventBusView);
+        setStreamState('connected');
+      } catch {
+        setStreamState('reconnecting');
+      }
+    });
+    events.onerror = () => setStreamState('reconnecting');
+    return () => events.close();
   }, [load]);
 
   const plugins = view?.plugins || [];
@@ -1624,6 +1657,17 @@ function EventBusPanel({
   const statusErrors = statusEntries.filter(([, status]) => status.last_error);
   const activeCount = view?.active_events?.length || 0;
   const healthy = statusErrors.length === 0;
+  const pipelineViews = (view?.config.routes || []).map(route => {
+    const statuses = route.sink_ids
+      .map(sinkId => view?.route_status?.[`${route.id}::${sinkId}`])
+      .filter((status): status is EventRouteStatus => Boolean(status));
+    const pending = view?.pending_by_route?.[route.id] || 0;
+    const lastSuccessAt = Math.max(0, ...statuses.map(status => status.last_success_at_ms || 0));
+    const lastDelivered = Math.max(0, ...statuses.map(status => status.last_delivered_events || 0));
+    const error = statuses.find(status => status.last_error)?.last_error || '';
+    const state = error ? 'failed' : pending ? 'pending' : lastSuccessAt ? 'delivered' : 'idle';
+    return { route, pending, lastSuccessAt, lastDelivered, error, state };
+  });
   const openEditor = () => {
     if (view) setDraft(structuredClone(view.config));
     setSection('types');
@@ -1642,6 +1686,9 @@ function EventBusPanel({
           <strong>事件采集与分发</strong>
           <Typography.Text type="secondary">复用 heartbeat message 通道，周期门禁后 fanout</Typography.Text>
         </div>
+        <Tag bordered={false} color={streamState === 'connected' ? 'success' : 'processing'}>
+          {streamState === 'connected' ? 'SSE 已连接' : streamState === 'unsupported' ? '静态快照' : 'SSE 重连中'}
+        </Tag>
       </div>
       <div className="eventbus-flow" aria-label="事件 Pipeline">
         <span><ApiOutlined /><b>Source</b><em>{view?.config.sources.length || 0} producers</em></span>
@@ -1650,10 +1697,23 @@ function EventBusPanel({
         <span className="eventbus-flow-link"><ArrowRightOutlined /><small>Delivery</small></span>
         <span><SendOutlined /><b>Sink</b><em>{view?.config.sinks.length || 0} targets</em></span>
       </div>
+      {pipelineViews.length > 0 && <div className="eventbus-pipeline-statuses" aria-live="polite">
+        {pipelineViews.map(({ route, pending, lastSuccessAt, lastDelivered, error, state }) =>
+          <div className={`eventbus-pipeline-status is-${state}`} key={route.id}>
+            <span className="eventbus-pipeline-status-dot" aria-hidden="true" />
+            <div>
+              <b>{route.name || route.id}</b>
+              <small>{error || (state === 'pending' ? '等待发布门禁' : state === 'delivered' ? '最近一次推送成功' : '等待事件')}</small>
+            </div>
+            <span><strong>{pending}</strong><small>待推送</small></span>
+            <span><strong>{lastDelivered}</strong><small>最近推送</small></span>
+            <time>{lastSuccessAt ? new Date(lastSuccessAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}</time>
+          </div>)}
+      </div>}
       <div className="eventbus-summary-actions">
         <div className="eventbus-live-count">
           <span className={activeCount ? 'is-active' : ''}>{activeCount}</span>
-          <small>活动事件</small>
+          <small>待推送事件</small>
         </div>
         <Button type="primary" icon={<SettingOutlined />} onClick={openEditor}>管理事件流</Button>
       </div>

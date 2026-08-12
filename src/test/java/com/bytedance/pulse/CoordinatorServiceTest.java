@@ -66,7 +66,7 @@ class CoordinatorServiceTest {
                     .filter(message -> "cmd.event_source_config".equals(message.type()))
                     .findFirst()
                     .orElseThrow();
-            assertTrue(command.payload().toString().contains("sustain_ms=10000"));
+            assertTrue(command.payload().toString().contains("sustain_seconds=10"));
             assertTrue(command.payload().toString().contains("threshold_pct=95.0"));
         }
     }

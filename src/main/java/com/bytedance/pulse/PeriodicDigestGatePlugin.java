@@ -5,8 +5,10 @@ import java.util.Map;
 
 final class PeriodicDigestGatePlugin implements EventPlugin.Gate {
     static final String TYPE = "periodic_digest";
-    static final long MIN_INTERVAL_MS = 5 * 60_000L;
-    static final long DEFAULT_INTERVAL_MS = 15 * 60_000L;
+    static final long MIN_INTERVAL_SECONDS = 5 * 60L;
+    static final long DEFAULT_INTERVAL_SECONDS = 15 * 60L;
+    static final long MIN_INTERVAL_MS = MIN_INTERVAL_SECONDS * 1_000;
+    static final long DEFAULT_INTERVAL_MS = DEFAULT_INTERVAL_SECONDS * 1_000;
 
     @Override
     public PluginDescriptor descriptor() {
@@ -17,23 +19,14 @@ final class PeriodicDigestGatePlugin implements EventPlugin.Gate {
                 "Publishes active incidents at a bounded interval and one recovery digest.",
                 List.of(
                         new ConfigField(
-                                "interval_ms",
-                                "发布周期 (ms)",
+                                "interval_seconds",
+                                "发布周期 (秒)",
                                 "number",
                                 true,
                                 false,
-                                DEFAULT_INTERVAL_MS,
+                                DEFAULT_INTERVAL_SECONDS,
                                 List.of(),
-                                "最短 5 分钟，持续事件按该周期重新发布"),
-                        new ConfigField(
-                                "publish_recovery",
-                                "发布恢复摘要",
-                                "boolean",
-                                false,
-                                false,
-                                true,
-                                List.of(),
-                                "最后一个活动事件恢复后发布一次恢复摘要")));
+                                "最短 300 秒；失败批次在下一周期重试")));
     }
 
     @Override
@@ -42,16 +35,15 @@ final class PeriodicDigestGatePlugin implements EventPlugin.Gate {
             GateState state,
             List<Event> activeEvents,
             long nowMs) {
-        long intervalMs = Math.max(MIN_INTERVAL_MS, longValue(config.get("interval_ms"), DEFAULT_INTERVAL_MS));
+        long intervalSeconds = Math.max(
+                MIN_INTERVAL_SECONDS,
+                longValue(config.get("interval_seconds"), DEFAULT_INTERVAL_SECONDS));
+        long intervalMs = intervalSeconds * 1_000;
         if (state.lastAttemptAtMs() > 0 && nowMs - state.lastAttemptAtMs() < intervalMs) {
             return GateDecision.skip("interval");
         }
         if (!activeEvents.isEmpty()) {
-            return GateDecision.dispatch(state.lastSuccessAtMs() == 0 ? "initial" : "reminder");
-        }
-        boolean publishRecovery = booleanValue(config.get("publish_recovery"), true);
-        if (publishRecovery && (state.recoveryPending() || state.lastActiveCount() > 0)) {
-            return GateDecision.dispatch("recovery");
+            return GateDecision.dispatch(state.lastSuccessAtMs() == 0 ? "initial" : "retry");
         }
         return GateDecision.skip("idle");
     }
@@ -65,9 +57,5 @@ final class PeriodicDigestGatePlugin implements EventPlugin.Gate {
         } catch (NumberFormatException ignored) {
             return fallback;
         }
-    }
-
-    private static boolean booleanValue(Object value, boolean fallback) {
-        return value == null ? fallback : Boolean.parseBoolean(value.toString());
     }
 }

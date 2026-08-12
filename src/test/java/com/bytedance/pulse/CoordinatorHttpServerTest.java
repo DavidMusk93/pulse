@@ -112,6 +112,12 @@ class CoordinatorHttpServerTest {
         assertTrue(hosts.body().contains("group_mode"));
         assertTrue(hosts.body().contains("leader_agent_id"));
         assertTrue(hosts.body().contains("group_size_limit"));
+
+        HttpResponse<String> stream = get("/api/hosts/stream?once=true");
+        assertEquals(200, stream.statusCode());
+        assertTrue(stream.headers().firstValue("content-type").orElse("").contains("text/event-stream"));
+        assertTrue(stream.body().contains("event: hosts.snapshot"));
+        assertTrue(stream.body().contains("10.0.0.1"));
     }
 
     @Test
@@ -320,6 +326,10 @@ class CoordinatorHttpServerTest {
         assertEquals(200, initial.statusCode());
         assertTrue(initial.body().contains("pulse_message"));
         assertTrue(initial.body().contains("lark_webhook"));
+        HttpResponse<String> stream = get("/api/eventbus/stream?once=true");
+        assertEquals(200, stream.statusCode());
+        assertTrue(stream.headers().firstValue("content-type").orElse("").contains("text/event-stream"));
+        assertTrue(stream.body().contains("event: eventbus.snapshot"));
 
         HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/api/eventbus/config"))
                 .header("content-type", "application/json")
@@ -360,7 +370,7 @@ class CoordinatorHttpServerTest {
                     "event_types": ["disk.io_saturation"],
                     "sink_ids": ["lark-sink"],
                     "gate_type": "periodic_digest",
-                    "gate_config": {"interval_ms": 900000, "publish_recovery": true}
+                    "gate_config": {"interval_seconds": 900}
                   }]
                 }
                 """))

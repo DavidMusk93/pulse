@@ -44,7 +44,8 @@ final class LarkWebhookSinkPlugin implements EventPlugin.Sink {
                         field("signing_secret", "签名密钥", "password", false, true, null, "机器人启用签名校验时填写"),
                         field("title", "卡片标题", "text", false, false, "Pulse 事件中心", "显示在卡片顶部"),
                         field("mention_all", "@所有人", "boolean", false, false, false, "仅建议用于高优先级路由"),
-                        field("dashboard_url", "详情页 URL", "text", false, false, "", "可选的事件详情入口")));
+                        field("dashboard_url", "详情页 URL", "text", false, false, "", "可选的事件详情入口"),
+                        field("timeout_seconds", "请求超时 (秒)", "number", false, false, 10, "取值 1-60 秒")));
     }
 
     @Override
@@ -55,7 +56,7 @@ final class LarkWebhookSinkPlugin implements EventPlugin.Sink {
         Response response = transport.post(
                 URI.create(webhookUrl),
                 body,
-                Duration.ofMillis(longValue(config.get("timeout_ms"), 10_000)));
+                Duration.ofSeconds(longValue(config.get("timeout_seconds"), 10)));
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             throw new IllegalStateException("Lark webhook HTTP " + response.statusCode());
         }
@@ -100,10 +101,10 @@ final class LarkWebhookSinkPlugin implements EventPlugin.Sink {
         String title = text(config, "title", "Pulse 事件中心");
         List<Map<String, Object>> elements = new ArrayList<>();
         elements.add(facts(List.of(
-                "**状态**\n" + (recovery ? "全部恢复" : "触发中"),
-                "**活动事件**\n" + delivery.events().size(),
-                "**最高级别**\n" + highestSeverity(delivery.events()),
-                "**生成时间**\n" + Instant.ofEpochMilli(delivery.createdAtMs()))));
+                "**状态**\n" + (recovery ? "已恢复" : "需要关注"),
+                "**本次事件**\n" + delivery.events().size(),
+                "**最高级别**\n" + severityLabel(highestSeverity(delivery.events())),
+                "**推送时间**\n" + formatTime(delivery.createdAtMs()))));
         elements.add(Map.of("tag", "hr"));
         for (Event event : delivery.events().stream().limit(Math.max(0, visibleEvents)).toList()) {
             String host = attribute(event, "ip", attribute(event, "host", event.agentId()));
@@ -117,14 +118,13 @@ final class LarkWebhookSinkPlugin implements EventPlugin.Sink {
                     "saturated_for_ms",
                     attribute(event, "sustained_for_ms", "0"));
             elements.add(markdown(
-                    "**" + escape(event.subject()) + "**  ·  "
-                            + escape(event.severity().toUpperCase(java.util.Locale.ROOT))
+                    "**" + escape(host) + "  ·  " + escape(event.subject()) + "**"
                             + "\n" + escape(event.summary())));
             elements.add(facts(List.of(
-                    "**主机**\n" + escape(host),
                     "**IO 利用率**\n" + formatPercent(value),
-                    "**触发门槛**\n> " + formatPercent(threshold),
-                    "**连续时长**\n" + formatDuration(duration))));
+                    "**触发门槛**\n" + formatPercent(threshold),
+                    "**连续时长**\n" + formatDuration(duration),
+                    "**事件时间**\n" + formatTime(event.observedAtMs()))));
         }
         int folded = delivery.events().size() - Math.max(0, visibleEvents);
         if (folded > 0) {
@@ -147,7 +147,7 @@ final class LarkWebhookSinkPlugin implements EventPlugin.Sink {
                 "tag", "note",
                 "elements", List.of(Map.of(
                         "tag", "plain_text",
-                        "content", "route=" + delivery.routeId() + " · delivery=" + delivery.idempotencyKey()))));
+                        "content", "Pulse EventBus · 送达后自动清理待推送事件"))));
         Map<String, Object> card = new LinkedHashMap<>();
         card.put("config", Map.of("wide_screen_mode", true, "enable_forward", true));
         card.put("header", Map.of(
@@ -195,6 +195,19 @@ final class LarkWebhookSinkPlugin implements EventPlugin.Sink {
         } catch (NumberFormatException ignored) {
             return escape(value);
         }
+    }
+
+    private static String formatTime(long timestampMs) {
+        return Instant.ofEpochMilli(timestampMs).toString();
+    }
+
+    private static String severityLabel(String severity) {
+        return switch (severity.toLowerCase(java.util.Locale.ROOT)) {
+            case "critical" -> "严重";
+            case "error" -> "错误";
+            case "warn", "warning" -> "警告";
+            default -> "信息";
+        };
     }
 
     private static String highestSeverity(List<Event> events) {

@@ -197,7 +197,7 @@ class AgentHeartbeatFactoryTest {
                 "worker", 100, 15_000, clock, proc, 60_000);
 
         assertTrue(factory.applyEventSourceConfig(List.of(sourceConfig(
-                "generation-a", true, 95, 10_000))));
+                "generation-a", true, 95, 10))));
         factory.nextHeartbeat();
 
         clock.advanceMillis(5_000);
@@ -205,7 +205,7 @@ class AgentHeartbeatFactoryTest {
         assertEquals(1, factory.nextHeartbeat().messages().size());
 
         assertTrue(!factory.applyEventSourceConfig(List.of(sourceConfig(
-                "generation-a", true, 95, 10_000))));
+                "generation-a", true, 95, 10))));
         clock.advanceMillis(5_000);
         Files.writeString(proc.resolve("diskstats"), "8 0 sda 0 0 0 0 0 0 0 0 0 10550 0\n");
         assertEquals(1, factory.nextHeartbeat().messages().size());
@@ -217,7 +217,7 @@ class AgentHeartbeatFactoryTest {
         assertEquals("firing", firing.messages().get(1).payload().get("status"));
 
         assertTrue(factory.applyEventSourceConfig(List.of(sourceConfig(
-                "generation-b", false, 95, 10_000))));
+                "generation-b", false, 95, 10))));
         clock.advanceMillis(5_000);
         Files.writeString(proc.resolve("diskstats"), "8 0 sda 0 0 0 0 0 0 0 0 0 20150 0\n");
         assertEquals(1, factory.nextHeartbeat().messages().size());
@@ -227,7 +227,7 @@ class AgentHeartbeatFactoryTest {
             String generation,
             boolean enabled,
             double thresholdPct,
-            long sustainMs) {
+            long sustainSeconds) {
         return new PulseMessage(
                 "source-config-" + generation,
                 "cmd.event_source_config",
@@ -242,7 +242,7 @@ class AgentHeartbeatFactoryTest {
                                 "enabled", enabled,
                                 "config", Map.of(
                                         "threshold_pct", thresholdPct,
-                                        "sustain_ms", sustainMs)))));
+                                        "sustain_seconds", sustainSeconds)))));
     }
 
     private static final class MutableClock extends Clock {

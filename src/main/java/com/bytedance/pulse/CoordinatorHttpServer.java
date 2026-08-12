@@ -149,6 +149,14 @@ public class CoordinatorHttpServer {
                 writeJson(exchange, 200, service.hosts());
                 return;
             }
+            if ("GET".equals(method) && "/api/hosts/stream".equals(path)) {
+                try {
+                    writeHostStream(exchange);
+                } catch (IOException ignored) {
+                    // Client disconnected or proxy closed the SSE stream.
+                }
+                return;
+            }
             if ("GET".equals(method) && "/api/metrics/catalog".equals(path)) {
                 writeJson(exchange, 200, service.metricCatalog());
                 return;
@@ -170,6 +178,17 @@ public class CoordinatorHttpServer {
                     throw new IllegalArgumentException("eventbus is disabled");
                 }
                 writeJson(exchange, 200, eventBusService.view());
+                return;
+            }
+            if ("GET".equals(method) && "/api/eventbus/stream".equals(path)) {
+                if (eventBusService == null) {
+                    throw new IllegalArgumentException("eventbus is disabled");
+                }
+                try {
+                    writeEventBusStream(exchange);
+                } catch (IOException ignored) {
+                    // Client disconnected or proxy closed the SSE stream.
+                }
                 return;
             }
             if ("PUT".equals(method) && "/api/eventbus/config".equals(path)) {
@@ -551,6 +570,90 @@ public class CoordinatorHttpServer {
                                     "disk.saturated_for_ms",
                                     "group.submitted_agent_count"))));
                     writeCachedMetricEvent(output, "ping", mapper.writeValueAsString(Map.of("server_time_ms", tick)));
+                }
+            }
+        }
+    }
+
+    private void writeEventBusStream(HttpExchange exchange) throws IOException {
+        exchange.getResponseHeaders().set("content-type", "text/event-stream; charset=utf-8");
+        exchange.getResponseHeaders().set("cache-control", "no-cache");
+        exchange.getResponseHeaders().set("connection", "keep-alive");
+        exchange.getResponseHeaders().set("x-accel-buffering", "no");
+        exchange.sendResponseHeaders(200, 0);
+
+        boolean once = "true".equalsIgnoreCase(queryValue(exchange.getRequestURI(), "once"));
+        long revision = eventBusService.revision();
+        try (OutputStream output = exchange.getResponseBody()) {
+            writeSse(output, new SseEvent(
+                    String.valueOf(revision),
+                    "eventbus.snapshot",
+                    mapper.writeValueAsString(eventBusService.view())));
+            if (once) {
+                return;
+            }
+            long deadline = System.currentTimeMillis()
+                    + positiveLong("PULSE_EVENTBUS_SSE_MAX_MS", 15 * 60_000);
+            while (!Thread.currentThread().isInterrupted()
+                    && System.currentTimeMillis() < deadline) {
+                long nextRevision;
+                try {
+                    nextRevision = eventBusService.awaitRevision(revision, 30_000);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                if (nextRevision > revision) {
+                    revision = nextRevision;
+                    writeSse(output, new SseEvent(
+                            String.valueOf(revision),
+                            "eventbus.snapshot",
+                            mapper.writeValueAsString(eventBusService.view())));
+                } else {
+                    output.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
+                    output.flush();
+                }
+            }
+        }
+    }
+
+    private void writeHostStream(HttpExchange exchange) throws IOException {
+        exchange.getResponseHeaders().set("content-type", "text/event-stream; charset=utf-8");
+        exchange.getResponseHeaders().set("cache-control", "no-cache");
+        exchange.getResponseHeaders().set("connection", "keep-alive");
+        exchange.getResponseHeaders().set("x-accel-buffering", "no");
+        exchange.sendResponseHeaders(200, 0);
+
+        boolean once = "true".equalsIgnoreCase(queryValue(exchange.getRequestURI(), "once"));
+        long revision = service.hostRevision();
+        try (OutputStream output = exchange.getResponseBody()) {
+            writeSse(output, new SseEvent(
+                    String.valueOf(revision),
+                    "hosts.snapshot",
+                    mapper.writeValueAsString(service.hosts())));
+            if (once) {
+                return;
+            }
+            long deadline = System.currentTimeMillis()
+                    + positiveLong("PULSE_HOST_SSE_MAX_MS", 15 * 60_000);
+            while (!Thread.currentThread().isInterrupted()
+                    && System.currentTimeMillis() < deadline) {
+                long nextRevision;
+                try {
+                    nextRevision = service.awaitHostRevision(revision, 30_000);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                if (nextRevision > revision) {
+                    revision = nextRevision;
+                    writeSse(output, new SseEvent(
+                            String.valueOf(revision),
+                            "hosts.snapshot",
+                            mapper.writeValueAsString(service.hosts())));
+                } else {
+                    output.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
+                    output.flush();
                 }
             }
         }

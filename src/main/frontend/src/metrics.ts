@@ -167,6 +167,7 @@ export type EventBusView = {
   plugins: EventPluginDescriptor[];
   route_status?: Record<string, EventRouteStatus>;
   active_events?: EventBusEvent[];
+  pending_by_route?: Record<string, number>;
 };
 
 export type EventDeliveryReceipt = {

@@ -44,6 +44,9 @@ class LarkWebhookSinkPluginTest {
         assertTrue(payload.toString().contains("95.00%"));
         assertTrue(payload.toString().contains("20.0s"));
         assertTrue(payload.at("/card/elements/0/fields").isArray());
+        assertTrue(!payload.toString().contains("cdn_new"));
+        assertTrue(!payload.toString().contains("route-a"));
+        assertTrue(!payload.toString().contains("delivery-a"));
     }
 
     @Test
@@ -89,7 +92,9 @@ class LarkWebhookSinkPluginTest {
                         "ip", "10.0.0.1",
                         "io_util_pct", 98.2,
                         "threshold", 95,
-                        "saturated_for_ms", 20_000));
+                        "saturated_for_ms", 20_000,
+                        "cluster", "cdn_new",
+                        "area", "north"));
     }
 
     private static final class RecordingTransport implements LarkWebhookSinkPlugin.Transport {

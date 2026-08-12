@@ -321,6 +321,10 @@ body {
   gap: 1px;
   min-width: 0;
 }
+.eventbus-summary-head > .ant-tag {
+  margin-inline-start: auto;
+  white-space: nowrap;
+}
 .eventbus-summary-head strong {
   color: #1d1d1f;
   font-size: 15px;
@@ -416,6 +420,70 @@ body {
   gap: 12px;
   align-items: center;
   justify-content: flex-end;
+}
+.eventbus-pipeline-statuses {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 7px;
+  padding-top: 2px;
+}
+.eventbus-pipeline-status {
+  display: grid;
+  grid-template-columns: 8px minmax(180px, 1fr) 72px 72px 76px;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 11px;
+  border: 1px solid rgba(148, 163, 184, .14);
+  border-radius: 13px;
+  background: rgba(248, 248, 250, .72);
+  transition: background-color 180ms ease, border-color 180ms ease, opacity 180ms ease;
+}
+.eventbus-pipeline-status.is-failed {
+  border-color: rgba(255, 59, 48, .2);
+  background: rgba(255, 59, 48, .045);
+}
+.eventbus-pipeline-status.is-delivered {
+  background: rgba(52, 199, 89, .045);
+}
+.eventbus-pipeline-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #b0b0b5;
+}
+.eventbus-pipeline-status.is-pending .eventbus-pipeline-status-dot { background: #ff9f0a; }
+.eventbus-pipeline-status.is-delivered .eventbus-pipeline-status-dot { background: #34c759; }
+.eventbus-pipeline-status.is-failed .eventbus-pipeline-status-dot { background: #ff3b30; }
+.eventbus-pipeline-status > div,
+.eventbus-pipeline-status > span {
+  display: grid;
+  min-width: 0;
+}
+.eventbus-pipeline-status b,
+.eventbus-pipeline-status strong {
+  overflow: hidden;
+  color: #1d1d1f;
+  font-size: 12px;
+  font-weight: 680;
+  letter-spacing: -.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.eventbus-pipeline-status strong {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+.eventbus-pipeline-status small,
+.eventbus-pipeline-status time {
+  overflow: hidden;
+  color: #86868b;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.eventbus-pipeline-status time {
+  justify-self: end;
 }
 .eventbus-live-count {
   display: grid;
@@ -2014,6 +2082,12 @@ body {
   .eventbus-contract-note {
     grid-template-columns: 1fr;
   }
+  .eventbus-pipeline-status {
+    grid-template-columns: 8px minmax(0, 1fr) 62px 62px;
+  }
+  .eventbus-pipeline-status time {
+    display: none;
+  }
   .eventbus-field-wide {
     grid-column: auto;
   }
@@ -2057,6 +2131,7 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .eventbus-stage,
   .eventbus-item,
+  .eventbus-pipeline-status,
   .eventbus-flow > span:not(.eventbus-flow-link),
   .metrics-eventbus-card .ant-btn,
   .eventbus-modal .ant-btn {

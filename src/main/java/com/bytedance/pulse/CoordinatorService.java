@@ -37,11 +37,13 @@ public class CoordinatorService {
     private final long groupRecomputeIntervalMs;
     private final long expiredHostRetentionMs;
     private final Object hostSnapshotLock = new Object();
+    private final Object hostRevisionLock = new Object();
     private final Object groupRecomputeLock = new Object();
     private volatile List<HostView> hostSnapshot = List.of();
     private volatile long hostSnapshotAtMs = Long.MIN_VALUE;
     private volatile boolean groupRecomputeDirty = true;
     private volatile long lastGroupRecomputeAtMs = Long.MIN_VALUE;
+    private long hostRevision;
 
     public CoordinatorService(String coordinatorId, Clock clock) {
         this(coordinatorId, clock, null);
@@ -117,6 +119,27 @@ public class CoordinatorService {
         long now = clock.millis();
         pruneExpiredStates(now);
         return hostSnapshot(now);
+    }
+
+    long hostRevision() {
+        synchronized (hostRevisionLock) {
+            return hostRevision;
+        }
+    }
+
+    long awaitHostRevision(long observedRevision, long timeoutMs)
+            throws InterruptedException {
+        synchronized (hostRevisionLock) {
+            long deadline = System.currentTimeMillis() + Math.max(1, timeoutMs);
+            while (hostRevision <= observedRevision) {
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0) {
+                    break;
+                }
+                hostRevisionLock.wait(remaining);
+            }
+            return hostRevision;
+        }
     }
 
     public List<GroupView> groups() {
@@ -329,6 +352,10 @@ public class CoordinatorService {
     private void markStateChanged() {
         groupRecomputeDirty = true;
         hostSnapshotAtMs = Long.MIN_VALUE;
+        synchronized (hostRevisionLock) {
+            hostRevision++;
+            hostRevisionLock.notifyAll();
+        }
     }
 
     private void pruneExpiredStates(long now) {

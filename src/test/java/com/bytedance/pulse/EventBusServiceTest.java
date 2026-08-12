@@ -35,23 +35,39 @@ class EventBusServiceTest {
                                 PulseMessageEventSourcePlugin.TYPE,
                                 "disk.io_saturation",
                                 true,
-                                Map.of())),
-                        List.of(),
-                        List.of()),
+                                Map.of(
+                                        "threshold_pct", 95,
+                                        "sustain_ms", 10_000))),
+                        List.of(new EventSinkDefinition(
+                                "sink-a", "Recording", RecordingSink.TYPE, true, Map.of())),
+                        List.of(new EventRouteDefinition(
+                                "route-a",
+                                "Disk alerts",
+                                true,
+                                List.of("disk-io-saturation"),
+                                List.of("disk.io_saturation"),
+                                List.of("sink-a"),
+                                PeriodicDigestGatePlugin.TYPE,
+                                Map.of("interval_ms", 300_000, "publish_recovery", true)))),
                 Map.of(),
                 List.of())));
 
         try (EventBusService eventBus = new EventBusService(
-                statePath, Clock.systemUTC(), event -> {}, false)) {
+                statePath, Clock.systemUTC(), event -> {}, false, List.of(new RecordingSink()))) {
             EventSourceDefinition source = eventBus.view().config().sources().get(0);
             assertEquals(AgentDiskIoEventSourcePlugin.TYPE, source.pluginType());
-            assertEquals(95.0, source.config().get("threshold_pct"));
-            assertEquals(10_000L, source.config().get("sustain_ms"));
+            assertEquals(95.0, ((Number) source.config().get("threshold_pct")).doubleValue());
+            assertEquals(10L, source.config().get("sustain_seconds"));
+            assertFalse(source.config().containsKey("sustain_ms"));
+            Map<String, Object> gateConfig = eventBus.view().config().routes().get(0).gateConfig();
+            assertEquals(300L, gateConfig.get("interval_seconds"));
+            assertFalse(gateConfig.containsKey("interval_ms"));
+            assertFalse(gateConfig.containsKey("publish_recovery"));
 
             PulseMessage command = eventBus.agentSourceConfigMessage();
             assertEquals("cmd.event_source_config", command.type());
             assertEquals(20, command.payload().get("generation").toString().length());
-            assertTrue(command.payload().toString().contains("threshold_pct=95.0"));
+            assertTrue(command.payload().toString().contains("threshold_pct=95"));
 
             EventBusConfig current = eventBus.view().config();
             assertThrows(IllegalArgumentException.class, () -> eventBus.update(new EventBusConfig(
@@ -63,14 +79,14 @@ class EventBusServiceTest {
                             source.pluginType(),
                             source.eventType(),
                             true,
-                            Map.of("threshold_pct", 101, "sustain_ms", 10_000))),
+                            Map.of("threshold_pct", 101, "sustain_seconds", 10))),
                     current.sinks(),
                     current.routes())));
         }
     }
 
     @Test
-    void heartbeatMessagesFeedPeriodicRouteAndSingleRecovery() throws Exception {
+    void pendingEventsClearOnlyAfterEveryPipelineSinkSucceeds() throws Exception {
         MutableClock clock = new MutableClock(1_710_000_010_000L);
         List<HostEvent> recorded = new ArrayList<>();
         RecordingSink sinkPlugin = new RecordingSink();
@@ -82,17 +98,20 @@ class EventBusServiceTest {
                     1,
                     defaults.eventTypes(),
                     defaults.sources(),
-                    List.of(new EventSinkDefinition(
-                            "sink-a", "Recording", RecordingSink.TYPE, true, Map.of())),
+                    List.of(
+                            new EventSinkDefinition(
+                                    "sink-a", "Recording A", RecordingSink.TYPE, true, Map.of()),
+                            new EventSinkDefinition(
+                                    "sink-b", "Recording B", RecordingSink.TYPE, true, Map.of("fail", true))),
                     List.of(new EventRouteDefinition(
                             "route-a",
                             "Disk alerts",
                             true,
                             List.of("disk-io-saturation"),
                             List.of("disk.io_saturation"),
-                            List.of("sink-a"),
+                            List.of("sink-a", "sink-b"),
                             PeriodicDigestGatePlugin.TYPE,
-                            Map.of("interval_ms", 300_000, "publish_recovery", true)))));
+                            Map.of("interval_seconds", 300)))));
 
             eventBus.ingestMessages(
                     "agent-1",
@@ -104,31 +123,34 @@ class EventBusServiceTest {
             assertEquals(1, eventBus.view().activeEvents().size());
 
             eventBus.dispatchDue();
-            eventBus.dispatchDue();
-            assertEquals(1, sinkPlugin.deliveries.size());
-            assertFalse(sinkPlugin.deliveries.get(0).recovery());
-
-            clock.advance(300_000);
-            eventBus.dispatchDue();
             assertEquals(2, sinkPlugin.deliveries.size());
+            assertEquals(1, eventBus.view().activeEvents().size());
+            assertEquals(1, eventBus.view().pendingByRoute().get("route-a"));
+            assertTrue(eventBus.view().routeStatus().get("route-a::sink-b").lastError().contains("test failure"));
 
-            eventBus.ingestMessages(
-                    "agent-1",
-                    clock.millis(),
-                    List.of(eventMessage("resolved", clock.millis())));
-            assertEquals(2, recorded.stream()
-                    .filter(event -> "disk.io_saturation".equals(event.eventType()))
-                    .count());
-            assertTrue(eventBus.view().activeEvents().isEmpty());
-            eventBus.dispatchDue();
-            assertEquals(2, sinkPlugin.deliveries.size());
-
+            EventBusConfig configured = eventBus.view().config();
+            eventBus.update(new EventBusConfig(
+                    configured.version(),
+                    configured.eventTypes(),
+                    configured.sources(),
+                    List.of(
+                            new EventSinkDefinition(
+                                    "sink-a", "Recording A", RecordingSink.TYPE, true, Map.of()),
+                            new EventSinkDefinition(
+                                    "sink-b", "Recording B", RecordingSink.TYPE, true, Map.of())),
+                    configured.routes()));
             clock.advance(300_000);
             eventBus.dispatchDue();
             assertEquals(3, sinkPlugin.deliveries.size());
-            assertTrue(sinkPlugin.deliveries.get(2).recovery());
+            assertEquals(1, sinkPlugin.deliveries.stream()
+                    .filter(delivery -> "sink-a".equals(delivery.sinkId()))
+                    .count());
+            assertEquals(2, sinkPlugin.deliveries.stream()
+                    .filter(delivery -> "sink-b".equals(delivery.sinkId()))
+                    .count());
+            assertTrue(eventBus.view().activeEvents().isEmpty());
+            assertEquals(0, eventBus.view().pendingByRoute().get("route-a"));
 
-            clock.advance(300_000);
             eventBus.dispatchDue();
             assertEquals(3, sinkPlugin.deliveries.size());
             assertEquals(3, recorded.stream()
@@ -302,6 +324,9 @@ class EventBusServiceTest {
         @Override
         public DeliveryReceipt deliver(Map<String, Object> config, Delivery delivery) {
             deliveries.add(delivery);
+            if (Boolean.parseBoolean(String.valueOf(config.getOrDefault("fail", false)))) {
+                throw new IllegalStateException("test failure");
+            }
             return new DeliveryReceipt("", "test", delivery.events().size(), Map.of());
         }
     }

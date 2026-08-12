@@ -3,6 +3,7 @@ package com.bytedance.pulse;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 record EventBusConfig(
         int version,
@@ -90,10 +91,23 @@ record EventRouteDefinition(
 record EventBusState(
         EventBusConfig config,
         Map<String, EventRouteStatus> routeStatus,
-        List<EventPlugin.Event> activeEvents) {
+        List<EventPlugin.Event> activeEvents,
+        Map<String, Set<String>> deliveryAcks) {
     EventBusState {
         routeStatus = routeStatus == null ? Map.of() : Map.copyOf(new LinkedHashMap<>(routeStatus));
         activeEvents = activeEvents == null ? List.of() : List.copyOf(activeEvents);
+        deliveryAcks = deliveryAcks == null
+                ? Map.of()
+                : deliveryAcks.entrySet().stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
+                        Map.Entry::getKey,
+                        entry -> Set.copyOf(entry.getValue())));
+    }
+
+    EventBusState(
+            EventBusConfig config,
+            Map<String, EventRouteStatus> routeStatus,
+            List<EventPlugin.Event> activeEvents) {
+        this(config, routeStatus, activeEvents, Map.of());
     }
 }
 
@@ -122,5 +136,6 @@ record EventBusView(
         EventBusConfig config,
         List<EventPlugin.PluginDescriptor> plugins,
         Map<String, EventRouteStatus> routeStatus,
-        List<EventPlugin.Event> activeEvents) {
+        List<EventPlugin.Event> activeEvents,
+        Map<String, Integer> pendingByRoute) {
 }
