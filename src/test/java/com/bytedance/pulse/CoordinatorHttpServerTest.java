@@ -569,6 +569,8 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("localStorage"));
         assertTrue(js.body().contains("warming"));
         assertTrue(js.body().contains("timed_out"));
+        assertTrue(js.body().contains("状态确认中"));
+        assertTrue(js.body().contains("cluster-status-confirming"));
         assertTrue(js.body().contains("异常展开"));
         assertTrue(js.body().contains("折叠"));
         assertTrue(js.body().contains("展开"));

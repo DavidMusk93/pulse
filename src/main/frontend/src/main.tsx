@@ -771,7 +771,11 @@ function taskNeedsAttention(task: any) {
 }
 
 function hostHealthNeedsAttention(host: HostView) {
-  return host.status === 'warming' || host.status === 'expired';
+  return host.status === 'expired';
+}
+
+function hostIsWarming(host: HostView) {
+  return host.status === 'warming';
 }
 
 function hostTaskNeedsAttention(host: HostView) {
@@ -2675,6 +2679,7 @@ const ClusterSection = memo(function ClusterSection({
   const sorted = useMemo(() => sortClusterHosts(hosts, sortMode), [hosts, sortMode]);
   const attentionHosts = useMemo(() => clusterAttentionHosts(hosts), [hosts]);
   const healthAttentionHosts = useMemo(() => attentionHosts.filter(hostHealthNeedsAttention), [attentionHosts]);
+  const warmingHosts = useMemo(() => hosts.filter(hostIsWarming), [hosts]);
   const taskAttentionHosts = useMemo(
     () => attentionHosts.filter(host => !hostHealthNeedsAttention(host) && hostTaskNeedsAttention(host)),
     [attentionHosts]
@@ -2685,6 +2690,7 @@ const ClusterSection = memo(function ClusterSection({
     [attentionHosts]
   );
   const onlineCount = useMemo(() => hosts.filter(host => host.status === 'alive').length, [hosts]);
+  const warmingCount = warmingHosts.length;
   const visibleAttentionNames = attentionNames.slice(0, 4);
   const remainingAttentionCount = Math.max(0, attentionNames.length - visibleAttentionNames.length);
   const attentionLabel = healthAttentionHosts.length > 0
@@ -2696,12 +2702,22 @@ const ClusterSection = memo(function ClusterSection({
     title={
       <div className="cluster-title-block">
         <div className="cluster-title-line">
-          <Space size={8}><span>{cluster}</span><Tag>{hosts.length} 台</Tag>{needsAttention && <Tag color={healthAttentionHosts.length > 0 ? 'warning' : 'processing'}>{healthAttentionHosts.length > 0 ? '需关注' : '任务执行中'}</Tag>}</Space>
+          <Space size={8}>
+            <span>{cluster}</span>
+            <Tag>{hosts.length} 台</Tag>
+            {needsAttention
+              ? <Tag color={healthAttentionHosts.length > 0 ? 'warning' : 'processing'}>{healthAttentionHosts.length > 0 ? '需关注' : '任务执行中'}</Tag>
+              : warmingCount > 0 && <Tag color="processing">确认中</Tag>}
+          </Space>
         </div>
         <div
-          className={`cluster-status-bar ${needsAttention ? 'cluster-status-attention' : 'cluster-status-healthy'}`}
+          className={`cluster-status-bar ${needsAttention ? 'cluster-status-attention' : warmingCount > 0 ? 'cluster-status-confirming' : 'cluster-status-healthy'}`}
           role="status"
-          aria-label={needsAttention ? `${attentionLabel}：${attentionNames.join('、')}` : `状态正常，${onlineCount}/${hosts.length} 台在线`}
+          aria-label={needsAttention
+            ? `${attentionLabel}：${attentionNames.join('、')}`
+            : warmingCount > 0
+              ? `状态确认中，${warmingCount}/${hosts.length} 台`
+              : `状态正常，${onlineCount}/${hosts.length} 台在线`}
         >
           <span className="cluster-status-dot" aria-hidden="true" />
           {needsAttention ? <>
@@ -2709,7 +2725,9 @@ const ClusterSection = memo(function ClusterSection({
             <span className="cluster-status-hosts" title={attentionTitle}>
               {visibleAttentionNames.join('、')}{remainingAttentionCount > 0 ? ` +${remainingAttentionCount}` : ''}
             </span>
-          </> : (
+          </> : warmingCount > 0 ? (
+            <span>状态确认中 · {warmingCount}/{hosts.length}</span>
+          ) : (
             <span>状态正常 · {onlineCount}/{hosts.length} 在线</span>
           )}
         </div>

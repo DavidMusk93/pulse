@@ -1091,6 +1091,9 @@ body {
 .cluster-status-healthy {
   color: #047857;
 }
+.cluster-status-confirming {
+  color: #2563eb;
+}
 .cluster-status-attention {
   color: #b45309;
 }
