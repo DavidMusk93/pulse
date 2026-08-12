@@ -121,6 +121,83 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
+    void hostStreamV2ScopesCompleteSummaryBeforeSerialization() throws Exception {
+        postJson("/heartbeat", """
+                {
+                  "agent_id":"agent-cdn2",
+                  "epoch":7,
+                  "seq":11,
+                  "ttl_ms":30000,
+                  "messages":[{
+                    "message_id":"agent-cdn2-11",
+                    "type":"state.heartbeat",
+                    "version":1,
+                    "payload":{
+                      "host":"host-cdn2",
+                      "ip":"10.0.0.2",
+                      "cluster":"cdn2",
+                      "area":"hl",
+                      "zone":"az-a",
+                      "role":"worker",
+                      "load":"0.42"
+                    }
+                  }]
+                }
+                """);
+        postJson("/heartbeat", """
+                {
+                  "agent_id":"agent-other",
+                  "epoch":8,
+                  "seq":12,
+                  "ttl_ms":30000,
+                  "messages":[{
+                    "message_id":"agent-other-12",
+                    "type":"state.heartbeat",
+                    "version":1,
+                    "payload":{"host":"host-other","ip":"10.0.0.3","cluster":"other"}
+                  }]
+                }
+                """);
+
+        HttpResponse<String> response = get(
+                "/api/hosts/stream?v=2&clusters=cdn2&once=true");
+
+        assertEquals(200, response.statusCode());
+        JsonNode snapshot = sseData(response.body(), "hosts.snapshot");
+        assertEquals("hosts.v2", snapshot.get("schema").asText());
+        assertTrue(snapshot.get("revision").asLong() > 0);
+        assertEquals(List.of("cdn2"), mapper.convertValue(snapshot.get("scope"), List.class));
+        assertTrue(snapshot.get("available_clusters").toString().contains("cdn2"));
+        assertTrue(snapshot.get("available_clusters").toString().contains("other"));
+        assertEquals(1, snapshot.get("hosts").size());
+        JsonNode host = snapshot.get("hosts").get(0);
+        assertEquals("10.0.0.2", host.get("agent_id").asText());
+        assertEquals(7, host.get("epoch").asLong());
+        assertEquals(11, host.get("seq").asLong());
+        assertEquals("az-a", host.get("zone").asText());
+        assertEquals("worker", host.get("role").asText());
+        assertFalse(host.has("state"));
+        assertEquals(Set.of(
+                "agent_id", "epoch", "seq", "ttl_ms", "observed_at_ms",
+                "expire_at_ms", "last_observed_age_ms",
+                "heartbeat_confirmations", "status", "source",
+                "coordinator_id", "group_id", "group_mode",
+                "leader_agent_id", "leader_url", "group_size",
+                "group_size_limit", "host", "ip", "cluster", "area",
+                "zone", "role", "load"),
+                mapper.convertValue(host, Map.class).keySet());
+        assertFalse(response.body().contains("10.0.0.3"));
+    }
+
+    @Test
+    void hostStreamWithoutVersionRetainsV1ArrayContract() throws Exception {
+        HttpResponse<String> response = get("/api/hosts/stream?once=true");
+
+        JsonNode snapshot = sseData(response.body(), "hosts.snapshot");
+        assertTrue(snapshot.isArray());
+    }
+
+    @Test
     void hostDeltaIncludesOnlyChangedFieldsAndRemovals() {
         HostView before = hostView("agent-1", 10, "0.42", Map.of(
                 "host", "agent-1",
@@ -150,6 +227,28 @@ class CoordinatorHttpServerTest {
         assertFalse(patch.get("state").has("stable"));
         assertEquals("removed-agent", json.get("removed").get(0).asText());
         assertEquals("agent-2", json.get("upserts").get(1).get("agent_id").asText());
+    }
+
+    @Test
+    void hostSummaryDeltaPreservesContractAndOmitsOnlyState() {
+        HostView before = hostView("agent-1", 10, "0.42", Map.of("runtime", "large"));
+        HostView after = hostView("agent-1", 11, "0.84", Map.of("runtime", "larger"));
+
+        JsonNode summary = CoordinatorHttpServer.hostSummary(mapper, before);
+        JsonNode delta = mapper.valueToTree(CoordinatorHttpServer.hostSummaryDeltaV2(
+                mapper, 17, 19, List.of(before), List.of(after)));
+
+        assertEquals(24, summary.size());
+        assertFalse(summary.has("state"));
+        assertEquals("coordinator-a", summary.get("coordinator_id").asText());
+        assertEquals("agent-1", summary.get("leader_agent_id").asText());
+        assertEquals("zone-a", summary.get("zone").asText());
+        assertEquals("hosts.v2", delta.get("schema").asText());
+        assertEquals(17, delta.get("base_revision").asLong());
+        assertEquals(19, delta.get("revision").asLong());
+        assertEquals(11, delta.get("upserts").get(0).get("seq").asLong());
+        assertEquals("0.84", delta.get("upserts").get(0).get("load").asText());
+        assertFalse(delta.get("upserts").get(0).has("state"));
     }
 
     @Test
@@ -1542,6 +1641,22 @@ class CoordinatorHttpServerTest {
                 "worker",
                 load,
                 state);
+    }
+
+    private JsonNode sseData(String body, String eventName) throws IOException {
+        String eventMarker = "event: " + eventName;
+        for (String block : body.split("\\n\\n")) {
+            if (!block.contains(eventMarker)) {
+                continue;
+            }
+            String data = block.lines()
+                    .filter(line -> line.startsWith("data: "))
+                    .map(line -> line.substring("data: ".length()))
+                    .findFirst()
+                    .orElseThrow();
+            return mapper.readTree(data);
+        }
+        throw new IllegalArgumentException("missing SSE event " + eventName);
     }
 
     private static HttpServer heartbeatStub(AtomicInteger hits) throws IOException {

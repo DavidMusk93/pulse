@@ -626,6 +626,11 @@ public class CoordinatorHttpServer {
         exchange.getResponseHeaders().set("x-accel-buffering", "no");
         exchange.sendResponseHeaders(200, 0);
 
+        boolean version2 = "2".equals(queryValue(exchange.getRequestURI(), "v"));
+        if (version2) {
+            writeHostStreamV2(exchange);
+            return;
+        }
         boolean once = "true".equalsIgnoreCase(queryValue(exchange.getRequestURI(), "once"));
         long minIntervalMs = 1_000 * positiveLong("PULSE_HOST_SSE_MIN_INTERVAL_SECONDS", 5);
         long revision = service.hostRevision();
@@ -667,12 +672,183 @@ public class CoordinatorHttpServer {
         }
     }
 
+    private void writeHostStreamV2(HttpExchange exchange) throws IOException {
+        boolean once = "true".equalsIgnoreCase(queryValue(exchange.getRequestURI(), "once"));
+        List<String> scope = queryList(exchange.getRequestURI(), "clusters");
+        long minIntervalMs = 1_000 * positiveLong("PULSE_HOST_SSE_MIN_INTERVAL_SECONDS", 5);
+        long revision = service.hostRevision();
+        try (OutputStream output = exchange.getResponseBody()) {
+            List<HostView> allHosts = service.hosts();
+            List<ObjectNode> previousHosts = hostSummaryNodes(mapper, scopedHosts(allHosts, scope));
+            writeSse(output, new SseEvent(
+                    String.valueOf(revision),
+                    "hosts.snapshot",
+                    mapper.writeValueAsString(hostSnapshotV2(
+                            revision,
+                            scope,
+                            availableClusters(allHosts),
+                            previousHosts))));
+            if (once) {
+                return;
+            }
+            long deadline = System.currentTimeMillis()
+                    + positiveLong("PULSE_HOST_SSE_MAX_MS", 15 * 60_000);
+            while (!Thread.currentThread().isInterrupted()
+                    && System.currentTimeMillis() < deadline) {
+                long nextRevision;
+                try {
+                    nextRevision = service.awaitHostRevision(revision, 30_000);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                if (nextRevision > revision) {
+                    sleepQuietly(minIntervalMs);
+                    long baseRevision = revision;
+                    revision = service.hostRevision();
+                    List<ObjectNode> currentHosts = hostSummaryNodes(
+                            mapper, scopedHosts(service.hosts(), scope));
+                    writeSse(output, new SseEvent(
+                            String.valueOf(revision),
+                            "hosts.delta",
+                            mapper.writeValueAsString(hostNodeDeltaV2(
+                                    mapper,
+                                    baseRevision,
+                                    revision,
+                                    previousHosts,
+                                    currentHosts))));
+                    previousHosts = currentHosts;
+                } else {
+                    output.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
+                    output.flush();
+                }
+            }
+        }
+    }
+
+    private static Map<String, Object> hostSnapshotV2(
+            long revision,
+            List<String> scope,
+            List<String> availableClusters,
+            List<ObjectNode> hosts) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("schema", "hosts.v2");
+        snapshot.put("revision", revision);
+        snapshot.put("scope", scope);
+        snapshot.put("available_clusters", availableClusters);
+        snapshot.put("hosts", hosts);
+        return snapshot;
+    }
+
+    private static List<HostView> scopedHosts(List<HostView> hosts, List<String> scope) {
+        if (scope.isEmpty()) {
+            return hosts;
+        }
+        Set<String> selected = Set.copyOf(scope);
+        return hosts.stream()
+                .filter(host -> selected.contains(host.cluster()))
+                .toList();
+    }
+
+    private static List<String> availableClusters(List<HostView> hosts) {
+        return hosts.stream()
+                .map(HostView::cluster)
+                .filter(cluster -> cluster != null && !cluster.isBlank())
+                .distinct()
+                .sorted()
+                .toList();
+    }
+
+    static ObjectNode hostSummary(ObjectMapper mapper, HostView host) {
+        ObjectNode summary = mapper.createObjectNode();
+        summary.put("agent_id", host.agentId());
+        summary.put("epoch", host.epoch());
+        summary.put("seq", host.seq());
+        summary.put("ttl_ms", host.ttlMs());
+        summary.put("observed_at_ms", host.observedAtMs());
+        summary.put("expire_at_ms", host.expireAtMs());
+        summary.put("last_observed_age_ms", host.lastObservedAgeMs());
+        summary.put("heartbeat_confirmations", host.heartbeatConfirmations());
+        summary.put("status", host.status());
+        summary.put("source", host.source());
+        summary.put("coordinator_id", host.coordinatorId());
+        summary.put("group_id", host.groupId());
+        summary.put("group_mode", host.groupMode());
+        summary.put("leader_agent_id", host.leaderAgentId());
+        summary.put("leader_url", host.leaderUrl());
+        summary.put("group_size", host.groupSize());
+        summary.put("group_size_limit", host.groupSizeLimit());
+        summary.put("host", host.host());
+        summary.put("ip", host.ip());
+        summary.put("cluster", host.cluster());
+        summary.put("area", host.area());
+        summary.put("zone", host.zone());
+        summary.put("role", host.role());
+        summary.put("load", host.load());
+        return summary;
+    }
+
+    private static List<ObjectNode> hostSummaryNodes(
+            ObjectMapper mapper,
+            List<HostView> hosts) {
+        return hosts.stream()
+                .map(host -> hostSummary(mapper, host))
+                .toList();
+    }
+
     static Map<String, Object> hostDelta(
             ObjectMapper mapper,
             List<HostView> previous,
             List<HostView> current) {
         Map<String, JsonNode> previousById = hostNodesById(mapper, previous);
         Map<String, JsonNode> currentById = hostNodesById(mapper, current);
+        return hostNodeDelta(mapper, previousById, currentById);
+    }
+
+    static Map<String, Object> hostSummaryDeltaV2(
+            ObjectMapper mapper,
+            long baseRevision,
+            long revision,
+            List<HostView> previous,
+            List<HostView> current) {
+        return hostNodeDeltaV2(
+                mapper,
+                baseRevision,
+                revision,
+                hostSummaryNodes(mapper, previous),
+                hostSummaryNodes(mapper, current));
+    }
+
+    private static Map<String, Object> hostNodeDeltaV2(
+            ObjectMapper mapper,
+            long baseRevision,
+            long revision,
+            List<? extends JsonNode> previous,
+            List<? extends JsonNode> current) {
+        Map<String, Object> delta = hostNodeDelta(mapper, previous, current);
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("schema", "hosts.v2");
+        envelope.put("base_revision", baseRevision);
+        envelope.put("revision", revision);
+        envelope.put("upserts", delta.get("upserts"));
+        envelope.put("removed", delta.get("removed"));
+        return envelope;
+    }
+
+    private static Map<String, Object> hostNodeDelta(
+            ObjectMapper mapper,
+            List<? extends JsonNode> previous,
+            List<? extends JsonNode> current) {
+        return hostNodeDelta(
+                mapper,
+                nodesByAgentId(previous),
+                nodesByAgentId(current));
+    }
+
+    private static Map<String, Object> hostNodeDelta(
+            ObjectMapper mapper,
+            Map<String, JsonNode> previousById,
+            Map<String, JsonNode> currentById) {
         List<JsonNode> upserts = new ArrayList<>();
         for (Map.Entry<String, JsonNode> entry : currentById.entrySet()) {
             JsonNode before = previousById.get(entry.getKey());
@@ -691,6 +867,15 @@ public class CoordinatorHttpServer {
                 .filter(id -> !currentById.containsKey(id))
                 .toList();
         return Map.of("upserts", upserts, "removed", removed);
+    }
+
+    private static Map<String, JsonNode> nodesByAgentId(
+            List<? extends JsonNode> hosts) {
+        Map<String, JsonNode> nodes = new LinkedHashMap<>();
+        for (JsonNode host : hosts) {
+            nodes.put(host.path("agent_id").asText(), host);
+        }
+        return nodes;
     }
 
     private static Map<String, JsonNode> hostNodesById(

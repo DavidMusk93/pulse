@@ -142,6 +142,14 @@ After the initial `hosts.snapshot`, the Coordinator emits `hosts.delta` with rec
 
 Stable host and nested state fields are omitted. The frontend applies patches by stable `agent_id`, preserves object identity for unchanged hosts, and therefore limits React updates to changed clusters and tiles. Cluster and host surfaces use `content-visibility: auto` with intrinsic sizing so offscreen content skips layout and paint while preserving scroll geometry.
 
+Hosts SSE V2 is available only through explicit `v=2` negotiation. It replaces
+the collection stream's nested `state` with the complete 24-field HostSummary,
+applies optional cluster scope before serialization, and adds snapshot and
+delta revision envelopes. The persisted host cluster selector reconnects for an
+authoritative scoped snapshot, and rejects a delta whose `base_revision` does
+not match the current revision. The full contract and recovery rules are in
+[`host-sse-v2.md`](host-sse-v2.md).
+
 Every frontend SSE consumer records UTF-8 `MessageEvent.data` bytes and event count in a shared external store. The top status area shows rolling bytes per second, events per second, and cumulative payload bytes. Traffic state is rendered once per animation frame and expires from the rolling window with event-driven timers; it does not poll.
 
 ## Persistence and Security

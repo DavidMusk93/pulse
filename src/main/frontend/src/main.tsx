@@ -80,6 +80,8 @@ type HostView = {
   heartbeatConfirmations?: number;
   status?: string;
   source?: string;
+  coordinator_id?: string;
+  coordinatorId?: string;
   group_id?: string;
   groupId?: string;
   group_mode?: string;
@@ -103,8 +105,19 @@ type HostView = {
 };
 
 type HostDelta = {
+  schema?: string;
+  base_revision?: number;
+  revision?: number;
   upserts?: Array<Partial<HostView> & { agent_id: string }>;
   removed?: string[];
+};
+
+type HostSnapshotV2 = {
+  schema: 'hosts.v2';
+  revision: number;
+  scope: string[];
+  available_clusters: string[];
+  hosts: HostView[];
 };
 
 type TaskSnapshot = {
@@ -137,6 +150,7 @@ const virtualOutputCharWidth = 7.2;
 const palette = [205, 188, 168, 146, 126, 95, 48, 215, 200, 178];
 const loadWindows = new Map<string, { windowStart: number; displayAvg: number; sampledAtMs: number }>();
 const clusterCollapseStorageKey = 'pulse.cluster-collapse.v1';
+const hostClusterScopeStorageKey = 'pulse.host-cluster-scope.v1';
 
 const taskLabels: Record<string, string> = {
   prepare_disk_layout_dry_run: '磁盘布局',
@@ -289,6 +303,32 @@ function applyHostDelta(current: HostView[], delta: HostDelta) {
     }
   });
   return next;
+}
+
+function sameHost(left: HostView, right: HostView) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function reconcileHostSnapshot(current: HostView[], incoming: HostView[]) {
+  const currentById = new Map(current.map(host => [agentId(host), host]));
+  let changed = current.length !== incoming.length;
+  const next = incoming.map(host => {
+    const previous = currentById.get(agentId(host));
+    if (previous && sameHost(previous, host)) {
+      return previous;
+    }
+    changed = true;
+    return host;
+  });
+  return changed ? next : current;
+}
+
+function loadHostClusterScope() {
+  try {
+    return window.localStorage.getItem(hostClusterScopeStorageKey) || 'all';
+  } catch {
+    return 'all';
+  }
 }
 
 function formatTraffic(bytes: number) {
@@ -894,6 +934,9 @@ function snapshotVersion(snapshot: TaskSnapshot | null) {
 
 function App() {
   const [hosts, setHosts] = useState<HostView[]>([]);
+  const [hostClusterScope, setHostClusterScope] = useState(loadHostClusterScope);
+  const [availableHostClusters, setAvailableHostClusters] = useState<string[]>([]);
+  const [hostStreamGeneration, setHostStreamGeneration] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [activeHost, setActiveHost] = useState<HostView | null>(null);
@@ -915,6 +958,7 @@ function App() {
   const outputLogRef = useRef<OutputLog | null>(null);
   const outputLogFrameRef = useRef<number | null>(null);
   const hostsPayloadRef = useRef('');
+  const hostRevisionRef = useRef<number | null>(null);
   const activeTargetHost = activeHost || activeCluster?.hosts[0] || null;
   const clusterAgentKey = useMemo(() => (activeCluster?.hosts || []).map(agentId).join(','), [activeCluster?.name, activeCluster?.hosts]);
 
@@ -1203,7 +1247,7 @@ function App() {
     if (payload === hostsPayloadRef.current) return;
     hostsPayloadRef.current = payload;
     recordLoadSamples(data);
-    setHosts(data);
+    setHosts(current => reconcileHostSnapshot(current, data));
   }
 
   async function refreshSnapshot(host: HostView) {
@@ -1217,11 +1261,21 @@ function App() {
       refreshHosts();
       return () => closeOutputStream();
     }
-    const events = new EventSource('/api/hosts/stream');
+    hostRevisionRef.current = null;
+    const query = new URLSearchParams({ v: '2' });
+    if (hostClusterScope !== 'all') {
+      query.set('clusters', hostClusterScope);
+    }
+    const events = new EventSource(`/api/hosts/stream?${query}`);
     events.addEventListener('hosts.snapshot', trackedSseListener(event => {
       try {
-        const data = JSON.parse(event.data) as HostView[];
-        applyHosts(data);
+        const snapshot = JSON.parse(event.data) as HostSnapshotV2;
+        if (snapshot.schema !== 'hosts.v2' || !Number.isFinite(snapshot.revision)) {
+          throw new Error('Host SSE snapshot contract mismatch');
+        }
+        hostRevisionRef.current = snapshot.revision;
+        setAvailableHostClusters(snapshot.available_clusters || []);
+        applyHosts(snapshot.hosts || []);
         setError('');
         setLoading(false);
       } catch (err) {
@@ -1231,6 +1285,20 @@ function App() {
     events.addEventListener('hosts.delta', trackedSseListener(event => {
       try {
         const delta = JSON.parse(event.data) as HostDelta;
+        if (
+          delta.schema !== 'hosts.v2'
+          || hostRevisionRef.current === null
+          || delta.base_revision !== hostRevisionRef.current
+          || !Number.isFinite(delta.revision)
+          || (delta.revision as number) <= hostRevisionRef.current
+        ) {
+          events.close();
+          hostRevisionRef.current = null;
+          setError('Host SSE 版本断层，正在重新同步');
+          setHostStreamGeneration(generation => generation + 1);
+          return;
+        }
+        hostRevisionRef.current = delta.revision as number;
         setHosts(current => {
           const next = applyHostDelta(current, delta);
           recordLoadSamples(next);
@@ -1246,7 +1314,7 @@ function App() {
       events.close();
       closeOutputStream();
     };
-  }, []);
+  }, [hostClusterScope, hostStreamGeneration]);
 
   useEffect(() => {
     if (!activeTargetHost || activeCluster) return;
@@ -1334,6 +1402,26 @@ function App() {
   const attentionClusters = useMemo(() => new Set(groups.filter(([, clusterHosts]) => clusterNeedsAttention(clusterHosts)).map(([cluster]) => cluster)), [groups]);
   const alive = hosts.filter(host => host.status === 'alive').length;
   const avgLoad = hosts.length ? hosts.reduce((sum, host) => sum + averageLoad(host), 0) / hosts.length : 0;
+  const hostClusterScopeOptions = useMemo(
+    () => [
+      { label: 'All', value: 'all' },
+      ...[...new Set([
+        ...availableHostClusters,
+        ...(hostClusterScope === 'all' ? [] : [hostClusterScope])
+      ])].sort().map(cluster => ({ label: cluster, value: cluster }))
+    ],
+    [availableHostClusters, hostClusterScope]
+  );
+  const handleHostClusterScopeChange = useCallback((scope: string | number) => {
+    const selected = String(scope);
+    try {
+      window.localStorage.setItem(hostClusterScopeStorageKey, selected);
+    } catch {
+      // Storage can be unavailable in hardened browser contexts.
+    }
+    setLoading(true);
+    setHostClusterScope(selected);
+  }, []);
   const handleHostRun = useCallback((host: HostView) => {
     snapshotVersionRef.current = '';
     snapshotRevisionRef.current += 1;
@@ -1427,6 +1515,20 @@ function App() {
 
       <MetricsPanel hosts={hosts} />
 
+      <div className="host-cluster-toolbar">
+        <div>
+          <Typography.Text className="host-cluster-eyebrow">主机范围</Typography.Text>
+          <Typography.Title level={2}>集群</Typography.Title>
+        </div>
+        <Segmented
+          className="host-cluster-selector"
+          size="small"
+          value={hostClusterScope}
+          options={hostClusterScopeOptions}
+          onChange={handleHostClusterScopeChange}
+          aria-label="主机集群范围"
+        />
+      </div>
       <section id="clusters" className="clusters">
         {groups.map(([cluster, clusterHosts], index) => <ClusterSection
           key={cluster}
