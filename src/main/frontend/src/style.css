@@ -163,29 +163,59 @@ body {
   font-size: 24px;
   font-weight: 640;
 }
-.sse-traffic-card span,
-.sse-traffic-card em {
-  display: block;
+.hero-metrics .sse-traffic-card {
+  min-width: 0;
+  overflow: hidden;
+}
+.hero-metrics .sse-traffic-card .ant-card-body {
+  flex-direction: column;
+  justify-content: center;
+  align-items: stretch;
+  min-width: 0;
+  overflow: hidden;
+}
+.sse-traffic-title {
   color: #86868b;
-  font-size: 10px;
-  font-style: normal;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
   white-space: nowrap;
 }
-.sse-traffic-card strong {
+.sse-traffic-value {
   display: block;
-  margin: 4px 0 3px;
+  max-width: 100%;
+  margin: 7px 0 6px;
+  overflow: hidden;
   color: #1d1d1f;
-  font-size: 18px;
+  font-size: clamp(16px, 1.35vw, 22px);
+  line-height: 1;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -.025em;
+  letter-spacing: -.035em;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.sse-traffic-card strong small {
+.sse-traffic-value small {
   margin-left: 2px;
   color: #86868b;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0;
+}
+.sse-traffic-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+.sse-traffic-meta span {
+  min-width: 0;
+  overflow: hidden;
+  color: #86868b;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .auto-fit {
   display: block;

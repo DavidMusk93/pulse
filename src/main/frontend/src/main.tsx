@@ -300,9 +300,12 @@ function formatTraffic(bytes: number) {
 const SseTrafficCard = memo(function SseTrafficCard() {
   const traffic = useSseTraffic();
   return <Card className="sse-traffic-card">
-    <span>SSE 流量</span>
-    <strong>{formatTraffic(traffic.bytesPerSecond)}<small>/s</small></strong>
-    <em>{traffic.eventsPerSecond.toFixed(1)} events/s · 累计 {formatTraffic(traffic.totalBytes)}</em>
+    <span className="sse-traffic-title">SSE 流量</span>
+    <strong className="sse-traffic-value">{formatTraffic(traffic.bytesPerSecond)}<small>/s</small></strong>
+    <div className="sse-traffic-meta">
+      <span>{traffic.eventsPerSecond.toFixed(1)} events/s</span>
+      <span>累计 {formatTraffic(traffic.totalBytes)}</span>
+    </div>
   </Card>;
 });
 
