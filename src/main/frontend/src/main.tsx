@@ -110,6 +110,7 @@ type HostDelta = {
   revision?: number;
   upserts?: Array<Partial<HostView> & { agent_id: string }>;
   removed?: string[];
+  available_clusters?: string[];
 };
 
 type HostSnapshotV2 = {
@@ -287,22 +288,32 @@ function mergeObject<T extends Record<string, any>>(current: T, patch: Partial<T
 function applyHostDelta(current: HostView[], delta: HostDelta) {
   const removed = new Set(delta.removed || []);
   const patches = new Map((delta.upserts || []).map(patch => [patch.agent_id, patch]));
+  if (!removed.size && !patches.size) return current;
   const seen = new Set<string>();
+  let changed = false;
   const next = current
-    .filter(host => !removed.has(agentId(host)))
+    .filter(host => {
+      const keep = !removed.has(agentId(host));
+      if (!keep) changed = true;
+      return keep;
+    })
     .map(host => {
       const id = agentId(host);
       const patch = patches.get(id);
       if (!patch) return host;
       seen.add(id);
-      return mergeObject(host, patch);
+      const merged = mergeObject(host, patch);
+      if (sameHost(host, merged)) return host;
+      changed = true;
+      return merged;
     });
   patches.forEach((patch, id) => {
     if (!seen.has(id) && !removed.has(id)) {
       next.push(patch as HostView);
+      changed = true;
     }
   });
-  return next;
+  return changed ? next : current;
 }
 
 function sameHost(left: HostView, right: HostView) {
@@ -935,6 +946,7 @@ function snapshotVersion(snapshot: TaskSnapshot | null) {
 function App() {
   const [hosts, setHosts] = useState<HostView[]>([]);
   const [hostClusterScope, setHostClusterScope] = useState(loadHostClusterScope);
+  const [appliedHostClusterScope, setAppliedHostClusterScope] = useState<string | null>(null);
   const [availableHostClusters, setAvailableHostClusters] = useState<string[]>([]);
   const [hostStreamGeneration, setHostStreamGeneration] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -957,7 +969,6 @@ function App() {
   const focusedTaskIdRef = useRef('');
   const outputLogRef = useRef<OutputLog | null>(null);
   const outputLogFrameRef = useRef<number | null>(null);
-  const hostsPayloadRef = useRef('');
   const hostRevisionRef = useRef<number | null>(null);
   const activeTargetHost = activeHost || activeCluster?.hosts[0] || null;
   const clusterAgentKey = useMemo(() => (activeCluster?.hosts || []).map(agentId).join(','), [activeCluster?.name, activeCluster?.hosts]);
@@ -1233,7 +1244,9 @@ function App() {
   async function refreshHosts() {
     try {
       const data = await fetchJson<HostView[]>('/api/hosts');
-      applyHosts(data);
+      applyHosts(hostClusterScope === 'all'
+        ? data
+        : data.filter(host => host.cluster === hostClusterScope));
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -1243,11 +1256,11 @@ function App() {
   }
 
   function applyHosts(data: HostView[]) {
-    const payload = JSON.stringify(data);
-    if (payload === hostsPayloadRef.current) return;
-    hostsPayloadRef.current = payload;
-    recordLoadSamples(data);
-    setHosts(current => reconcileHostSnapshot(current, data));
+    setHosts(current => {
+      const next = reconcileHostSnapshot(current, data);
+      if (next !== current) recordLoadSamples(next);
+      return next;
+    });
   }
 
   async function refreshSnapshot(host: HostView) {
@@ -1259,7 +1272,8 @@ function App() {
   useEffect(() => {
     if (!('EventSource' in window)) {
       refreshHosts();
-      return () => closeOutputStream();
+      setAppliedHostClusterScope(hostClusterScope);
+      return;
     }
     hostRevisionRef.current = null;
     const query = new URLSearchParams({ v: '2' });
@@ -1267,19 +1281,34 @@ function App() {
       query.set('clusters', hostClusterScope);
     }
     const events = new EventSource(`/api/hosts/stream?${query}`);
+    let recoveryQueued = false;
+    const recover = (message: string) => {
+      if (recoveryQueued) return;
+      recoveryQueued = true;
+      events.close();
+      hostRevisionRef.current = null;
+      setAppliedHostClusterScope(null);
+      setError(message);
+      setHostStreamGeneration(generation => generation + 1);
+    };
     events.addEventListener('hosts.snapshot', trackedSseListener(event => {
       try {
         const snapshot = JSON.parse(event.data) as HostSnapshotV2;
+        const expectedScope = hostClusterScope === 'all' ? [] : [hostClusterScope];
         if (snapshot.schema !== 'hosts.v2' || !Number.isFinite(snapshot.revision)) {
           throw new Error('Host SSE snapshot contract mismatch');
+        }
+        if (JSON.stringify(snapshot.scope || []) !== JSON.stringify(expectedScope)) {
+          throw new Error('Host SSE snapshot scope mismatch');
         }
         hostRevisionRef.current = snapshot.revision;
         setAvailableHostClusters(snapshot.available_clusters || []);
         applyHosts(snapshot.hosts || []);
+        setAppliedHostClusterScope(hostClusterScope);
         setError('');
         setLoading(false);
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        recover(err instanceof Error ? err.message : String(err));
       }
     }));
     events.addEventListener('hosts.delta', trackedSseListener(event => {
@@ -1292,29 +1321,28 @@ function App() {
           || !Number.isFinite(delta.revision)
           || (delta.revision as number) <= hostRevisionRef.current
         ) {
-          events.close();
-          hostRevisionRef.current = null;
-          setError('Host SSE 版本断层，正在重新同步');
-          setHostStreamGeneration(generation => generation + 1);
+          recover('Host SSE 版本断层，正在重新同步');
           return;
         }
         hostRevisionRef.current = delta.revision as number;
+        if (delta.available_clusters) {
+          setAvailableHostClusters(delta.available_clusters);
+        }
         setHosts(current => {
           const next = applyHostDelta(current, delta);
-          recordLoadSamples(next);
+          if (next !== current) recordLoadSamples(next);
           return next;
         });
         setError('');
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        recover(err instanceof Error ? err.message : String(err));
       }
     }));
     events.onerror = () => setError('Host SSE 正在重连');
-    return () => {
-      events.close();
-      closeOutputStream();
-    };
+    return () => events.close();
   }, [hostClusterScope, hostStreamGeneration]);
+
+  useEffect(() => () => closeOutputStream(), []);
 
   useEffect(() => {
     if (!activeTargetHost || activeCluster) return;
@@ -1402,6 +1430,7 @@ function App() {
   const attentionClusters = useMemo(() => new Set(groups.filter(([, clusterHosts]) => clusterNeedsAttention(clusterHosts)).map(([cluster]) => cluster)), [groups]);
   const alive = hosts.filter(host => host.status === 'alive').length;
   const avgLoad = hosts.length ? hosts.reduce((sum, host) => sum + averageLoad(host), 0) / hosts.length : 0;
+  const hostScopePending = appliedHostClusterScope !== hostClusterScope;
   const hostClusterScopeOptions = useMemo(
     () => [
       { label: 'All', value: 'all' },
@@ -1414,14 +1443,22 @@ function App() {
   );
   const handleHostClusterScopeChange = useCallback((scope: string | number) => {
     const selected = String(scope);
+    if (selected === hostClusterScope) return;
     try {
       window.localStorage.setItem(hostClusterScopeStorageKey, selected);
     } catch {
       // Storage can be unavailable in hardened browser contexts.
     }
+    closeOutputStream();
+    setActiveHost(null);
+    setActiveCluster(null);
+    setSnapshot(null);
+    setClusterSnapshots({});
+    setHosts([]);
+    setAppliedHostClusterScope(null);
     setLoading(true);
     setHostClusterScope(selected);
-  }, []);
+  }, [hostClusterScope]);
   const handleHostRun = useCallback((host: HostView) => {
     snapshotVersionRef.current = '';
     snapshotRevisionRef.current += 1;
@@ -1518,7 +1555,10 @@ function App() {
       <div className="host-cluster-toolbar">
         <div>
           <Typography.Text className="host-cluster-eyebrow">主机范围</Typography.Text>
-          <Typography.Title level={2}>集群</Typography.Title>
+          <Typography.Title level={2}>
+            集群
+            {hostScopePending && <small>同步中</small>}
+          </Typography.Title>
         </div>
         <Segmented
           className="host-cluster-selector"
@@ -1526,6 +1566,7 @@ function App() {
           value={hostClusterScope}
           options={hostClusterScopeOptions}
           onChange={handleHostClusterScopeChange}
+          disabled={hostScopePending}
           aria-label="主机集群范围"
         />
       </div>

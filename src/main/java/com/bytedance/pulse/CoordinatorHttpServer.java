@@ -676,9 +676,11 @@ public class CoordinatorHttpServer {
         boolean once = "true".equalsIgnoreCase(queryValue(exchange.getRequestURI(), "once"));
         List<String> scope = queryList(exchange.getRequestURI(), "clusters");
         long minIntervalMs = 1_000 * positiveLong("PULSE_HOST_SSE_MIN_INTERVAL_SECONDS", 5);
-        long revision = service.hostRevision();
         try (OutputStream output = exchange.getResponseBody()) {
-            List<HostView> allHosts = service.hosts();
+            CoordinatorService.HostSnapshot captured = service.hostSnapshotWithRevision();
+            long revision = captured.revision();
+            List<HostView> allHosts = captured.hosts();
+            List<String> previousClusters = availableClusters(allHosts);
             List<ObjectNode> previousHosts = hostSummaryNodes(mapper, scopedHosts(allHosts, scope));
             writeSse(output, new SseEvent(
                     String.valueOf(revision),
@@ -686,7 +688,7 @@ public class CoordinatorHttpServer {
                     mapper.writeValueAsString(hostSnapshotV2(
                             revision,
                             scope,
-                            availableClusters(allHosts),
+                            previousClusters,
                             previousHosts))));
             if (once) {
                 return;
@@ -705,9 +707,11 @@ public class CoordinatorHttpServer {
                 if (nextRevision > revision) {
                     sleepQuietly(minIntervalMs);
                     long baseRevision = revision;
-                    revision = service.hostRevision();
+                    captured = service.hostSnapshotWithRevision();
+                    revision = captured.revision();
+                    List<String> currentClusters = availableClusters(captured.hosts());
                     List<ObjectNode> currentHosts = hostSummaryNodes(
-                            mapper, scopedHosts(service.hosts(), scope));
+                            mapper, scopedHosts(captured.hosts(), scope));
                     writeSse(output, new SseEvent(
                             String.valueOf(revision),
                             "hosts.delta",
@@ -716,8 +720,12 @@ public class CoordinatorHttpServer {
                                     baseRevision,
                                     revision,
                                     previousHosts,
-                                    currentHosts))));
+                                    currentHosts,
+                                    previousClusters.equals(currentClusters)
+                                            ? null
+                                            : currentClusters))));
                     previousHosts = currentHosts;
+                    previousClusters = currentClusters;
                 } else {
                     output.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
                     output.flush();
@@ -811,12 +819,24 @@ public class CoordinatorHttpServer {
             long revision,
             List<HostView> previous,
             List<HostView> current) {
+        return hostSummaryDeltaV2(
+                mapper, baseRevision, revision, previous, current, null);
+    }
+
+    static Map<String, Object> hostSummaryDeltaV2(
+            ObjectMapper mapper,
+            long baseRevision,
+            long revision,
+            List<HostView> previous,
+            List<HostView> current,
+            List<String> availableClusters) {
         return hostNodeDeltaV2(
                 mapper,
                 baseRevision,
                 revision,
                 hostSummaryNodes(mapper, previous),
-                hostSummaryNodes(mapper, current));
+                hostSummaryNodes(mapper, current),
+                availableClusters);
     }
 
     private static Map<String, Object> hostNodeDeltaV2(
@@ -824,7 +844,8 @@ public class CoordinatorHttpServer {
             long baseRevision,
             long revision,
             List<? extends JsonNode> previous,
-            List<? extends JsonNode> current) {
+            List<? extends JsonNode> current,
+            List<String> availableClusters) {
         Map<String, Object> delta = hostNodeDelta(mapper, previous, current);
         Map<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("schema", "hosts.v2");
@@ -832,6 +853,9 @@ public class CoordinatorHttpServer {
         envelope.put("revision", revision);
         envelope.put("upserts", delta.get("upserts"));
         envelope.put("removed", delta.get("removed"));
+        if (availableClusters != null) {
+            envelope.put("available_clusters", availableClusters);
+        }
         return envelope;
     }
 

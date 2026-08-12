@@ -50,6 +50,22 @@ class CoordinatorServiceTest {
     }
 
     @Test
+    void hostSnapshotCapturesRevisionAndHostsAsOnePublishedState() {
+        CoordinatorService service = new CoordinatorService("coordinator-a", clock);
+        CoordinatorService.HostSnapshot empty = service.hostSnapshotWithRevision();
+
+        service.handleHeartbeat(singleHeartbeat("agent-1", 1, 40, "host-a", "10.0.0.1"));
+        CoordinatorService.HostSnapshot first = service.hostSnapshotWithRevision();
+        service.handleHeartbeat(singleHeartbeat("agent-1", 1, 41, "host-a", "10.0.0.1"));
+        CoordinatorService.HostSnapshot second = service.hostSnapshotWithRevision();
+
+        assertTrue(first.revision() > empty.revision());
+        assertEquals(40, first.hosts().get(0).seq());
+        assertTrue(second.revision() > first.revision());
+        assertEquals(41, second.hosts().get(0).seq());
+    }
+
+    @Test
     void heartbeatResponseCarriesAgentEventSourceConfig() throws Exception {
         CoordinatorService service = new CoordinatorService("coordinator-a", clock);
         try (EventBusService eventBus = new EventBusService(

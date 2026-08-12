@@ -252,6 +252,26 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
+    void hostSummaryDeltaCarriesClusterCatalogOnlyWhenItChanges() {
+        HostView host = hostView("agent-1", 10, "0.42", Map.of());
+
+        JsonNode unchanged = mapper.valueToTree(CoordinatorHttpServer.hostSummaryDeltaV2(
+                mapper, 17, 19, List.of(host), List.of(host)));
+        JsonNode changed = mapper.valueToTree(CoordinatorHttpServer.hostSummaryDeltaV2(
+                mapper,
+                19,
+                21,
+                List.of(host),
+                List.of(host),
+                List.of("cdn2", "doubao")));
+
+        assertFalse(unchanged.has("available_clusters"));
+        assertEquals(
+                List.of("cdn2", "doubao"),
+                mapper.convertValue(changed.get("available_clusters"), List.class));
+    }
+
+    @Test
     void metricsEndpointsExposeCatalogAndQueryHeartbeatRange() throws Exception {
         postJson("/heartbeat", """
                 {

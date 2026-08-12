@@ -36,6 +36,7 @@ public class CoordinatorService {
     private final long hostSnapshotTtlMs;
     private final long groupRecomputeIntervalMs;
     private final long expiredHostRetentionMs;
+    private final Object hostStateLock = new Object();
     private final Object hostSnapshotLock = new Object();
     private final Object hostRevisionLock = new Object();
     private final Object groupRecomputeLock = new Object();
@@ -44,6 +45,12 @@ public class CoordinatorService {
     private volatile boolean groupRecomputeDirty = true;
     private volatile long lastGroupRecomputeAtMs = Long.MIN_VALUE;
     private long hostRevision;
+
+    record HostSnapshot(long revision, List<HostView> hosts) {
+        HostSnapshot {
+            hosts = List.copyOf(hosts);
+        }
+    }
 
     public CoordinatorService(String coordinatorId, Clock clock) {
         this(coordinatorId, clock, null);
@@ -119,6 +126,14 @@ public class CoordinatorService {
         long now = clock.millis();
         pruneExpiredStates(now);
         return hostSnapshot(now);
+    }
+
+    HostSnapshot hostSnapshotWithRevision() {
+        synchronized (hostStateLock) {
+            long now = clock.millis();
+            pruneExpiredStates(now);
+            return new HostSnapshot(hostRevision(), hostSnapshot(now));
+        }
     }
 
     long hostRevision() {
@@ -302,22 +317,28 @@ public class CoordinatorService {
             long observedAtMs,
             List<PulseMessage> messages,
             String ownerCoordinatorId) {
-        NodeState previous = states.get(heartbeat.agentId());
-        NodeState incoming = NodeState.fromHeartbeat(
-                heartbeat,
-                source,
-                observedAtMs,
-                messages,
-                ownerCoordinatorId,
-                previous == null ? Map.of() : previous.state);
-        boolean acceptedNewVersion = previous == null || NodeState.isNewerVersion(incoming, previous);
-        states.merge(heartbeat.agentId(), incoming, NodeState::newer);
+        NodeState previous;
+        boolean acceptedNewVersion;
+        long selectedSeq;
+        synchronized (hostStateLock) {
+            previous = states.get(heartbeat.agentId());
+            NodeState incoming = NodeState.fromHeartbeat(
+                    heartbeat,
+                    source,
+                    observedAtMs,
+                    messages,
+                    ownerCoordinatorId,
+                    previous == null ? Map.of() : previous.state);
+            acceptedNewVersion = previous == null || NodeState.isNewerVersion(incoming, previous);
+            states.merge(heartbeat.agentId(), incoming, NodeState::newer);
+            selectedSeq = states.get(heartbeat.agentId()).seq;
+            markStateChangedLocked();
+        }
         writeHeartbeatMetric(heartbeat, source, observedAtMs, messages, previous);
         if (acceptedNewVersion) {
             ingestEvents(heartbeat.agentId(), observedAtMs, messages);
         }
-        markStateChanged();
-        return states.get(heartbeat.agentId()).seq;
+        return selectedSeq;
     }
 
     private boolean mergeForwardState(
@@ -325,20 +346,23 @@ public class CoordinatorService {
             String source,
             String ownerCoordinatorId,
             List<PulseMessage> messages) {
-        NodeState existing = states.get(state.agentId());
-        NodeState incoming = NodeState.fromForwardState(
-                state,
-                source,
-                ownerCoordinatorId,
-                messages,
-                existing == null ? Map.of() : existing.state);
-        NodeState selected = existing == null ? incoming : NodeState.newer(existing, incoming);
-        states.put(state.agentId(), selected);
-        boolean acceptedNewVersion = existing == null || NodeState.isNewerVersion(incoming, existing);
+        boolean acceptedNewVersion;
+        synchronized (hostStateLock) {
+            NodeState existing = states.get(state.agentId());
+            NodeState incoming = NodeState.fromForwardState(
+                    state,
+                    source,
+                    ownerCoordinatorId,
+                    messages,
+                    existing == null ? Map.of() : existing.state);
+            NodeState selected = existing == null ? incoming : NodeState.newer(existing, incoming);
+            states.put(state.agentId(), selected);
+            acceptedNewVersion = existing == null || NodeState.isNewerVersion(incoming, existing);
+            markStateChangedLocked();
+        }
         if (acceptedNewVersion) {
             ingestEvents(state.agentId(), state.observedAtMs(), messages);
         }
-        markStateChanged();
         return acceptedNewVersion;
     }
 
@@ -349,7 +373,7 @@ public class CoordinatorService {
         }
     }
 
-    private void markStateChanged() {
+    private void markStateChangedLocked() {
         groupRecomputeDirty = true;
         hostSnapshotAtMs = Long.MIN_VALUE;
         synchronized (hostRevisionLock) {
@@ -360,26 +384,32 @@ public class CoordinatorService {
 
     private void pruneExpiredStates(long now) {
         List<String> removedAgentIds = new ArrayList<>();
-        for (Map.Entry<String, NodeState> entry : states.entrySet()) {
-            NodeState state = entry.getValue();
-            if (state.removableAt(now, expiredHostRetentionMs) && states.remove(entry.getKey(), state)) {
-                removedAgentIds.add(entry.getKey());
-                System.out.printf(
-                        "host_state_cleanup status=removed agent_id=%s observed_at_ms=%d expire_at_ms=%d retention_ms=%d%n",
-                        entry.getKey(),
-                        state.observedAtMs,
-                        state.expireAtMs,
-                        expiredHostRetentionMs);
+        synchronized (hostStateLock) {
+            for (Map.Entry<String, NodeState> entry : states.entrySet()) {
+                NodeState state = entry.getValue();
+                if (state.removableAt(now, expiredHostRetentionMs) && states.remove(entry.getKey(), state)) {
+                    removedAgentIds.add(entry.getKey());
+                    System.out.printf(
+                            "host_state_cleanup status=removed agent_id=%s observed_at_ms=%d expire_at_ms=%d retention_ms=%d%n",
+                            entry.getKey(),
+                            state.observedAtMs,
+                            state.expireAtMs,
+                            expiredHostRetentionMs);
+                }
+            }
+            if (!removedAgentIds.isEmpty()) {
+                for (String agentId : removedAgentIds) {
+                    groupPlans.remove(agentId);
+                }
+                markStateChangedLocked();
             }
         }
         if (removedAgentIds.isEmpty()) {
             return;
         }
         for (String agentId : removedAgentIds) {
-            groupPlans.remove(agentId);
             taskService.removeAgent(agentId);
         }
-        markStateChanged();
     }
 
     private void writeHeartbeatMetric(
@@ -874,12 +904,16 @@ public class CoordinatorService {
             }
         }
 
-        groupPlans.clear();
-        groupPlans.putAll(nextPlans);
+        synchronized (hostStateLock) {
+            if (!groupPlans.equals(nextPlans)) {
+                groupPlans.clear();
+                groupPlans.putAll(nextPlans);
+                markStateChangedLocked();
+            }
+        }
         groupViews.clear();
         groupViews.putAll(nextGroups);
         groupMetricObservedAt.keySet().retainAll(nextGroups.keySet());
-        hostSnapshotAtMs = Long.MIN_VALUE;
     }
 
     private static boolean eligibleForGroup(HostView host, AgentGroupPlan previousPlan) {
