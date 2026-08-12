@@ -58,6 +58,7 @@ import {
   type EventRouteStatus,
   type EventPluginDescriptor
 } from './metrics';
+import { trackOnlySseEvent, trackedSseListener, useSseTraffic } from './sseTraffic';
 import 'antd/dist/reset.css';
 import './style.css';
 
@@ -99,6 +100,11 @@ type HostView = {
   role?: string;
   load?: string;
   state?: Record<string, any>;
+};
+
+type HostDelta = {
+  upserts?: Array<Partial<HostView> & { agent_id: string }>;
+  removed?: string[];
 };
 
 type TaskSnapshot = {
@@ -242,6 +248,63 @@ function normalizeUrlHost(value?: string) {
 function agentId(host: HostView) {
   return host.agent_id || host.agentId || host.ip || '';
 }
+
+function mergeObject<T extends Record<string, any>>(current: T, patch: Partial<T>): T {
+  const next = { ...current };
+  Object.entries(patch).forEach(([key, value]) => {
+    if (value === null) {
+      delete next[key];
+    } else if (
+      value
+      && typeof value === 'object'
+      && !Array.isArray(value)
+      && current[key]
+      && typeof current[key] === 'object'
+      && !Array.isArray(current[key])
+    ) {
+      next[key] = mergeObject(current[key], value);
+    } else {
+      next[key] = value;
+    }
+  });
+  return next;
+}
+
+function applyHostDelta(current: HostView[], delta: HostDelta) {
+  const removed = new Set(delta.removed || []);
+  const patches = new Map((delta.upserts || []).map(patch => [patch.agent_id, patch]));
+  const seen = new Set<string>();
+  const next = current
+    .filter(host => !removed.has(agentId(host)))
+    .map(host => {
+      const id = agentId(host);
+      const patch = patches.get(id);
+      if (!patch) return host;
+      seen.add(id);
+      return mergeObject(host, patch);
+    });
+  patches.forEach((patch, id) => {
+    if (!seen.has(id) && !removed.has(id)) {
+      next.push(patch as HostView);
+    }
+  });
+  return next;
+}
+
+function formatTraffic(bytes: number) {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${Math.round(bytes)} B`;
+}
+
+const SseTrafficCard = memo(function SseTrafficCard() {
+  const traffic = useSseTraffic();
+  return <Card className="sse-traffic-card">
+    <span>SSE 流量</span>
+    <strong>{formatTraffic(traffic.bytesPerSecond)}<small>/s</small></strong>
+    <em>{traffic.eventsPerSecond.toFixed(1)} events/s · 累计 {formatTraffic(traffic.totalBytes)}</em>
+  </Card>;
+});
 
 function hostKey(host: HostView) {
   return 'ip-' + String(host.ip || agentId(host) || 'unknown').replaceAll(/[^a-zA-Z0-9_-]/g, '_');
@@ -844,9 +907,6 @@ function App() {
   const focusedTaskIdRef = useRef('');
   const outputLogRef = useRef<OutputLog | null>(null);
   const outputLogFrameRef = useRef<number | null>(null);
-  const scrollingRef = useRef(false);
-  const scrollIdleTimerRef = useRef<number | null>(null);
-  const pendingHostsRef = useRef<HostView[] | null>(null);
   const hostsPayloadRef = useRef('');
   const activeTargetHost = activeHost || activeCluster?.hosts[0] || null;
   const clusterAgentKey = useMemo(() => (activeCluster?.hosts || []).map(agentId).join(','), [activeCluster?.name, activeCluster?.hosts]);
@@ -1038,7 +1098,7 @@ function App() {
         outputSourceRef.current = null;
       }
     };
-    source.addEventListener('completion.output_start', (event: MessageEvent<string>) => {
+    source.addEventListener('completion.output_start', trackedSseListener(event => {
       if (outputRequestRef.current === key) {
         const offset = Number(JSON.parse(event.data).offset || 0);
         if (offset === 0) {
@@ -1048,8 +1108,8 @@ function App() {
           previewCharsRemaining = 0;
         }
       }
-    });
-    source.addEventListener('completion.output_chunk', (event: MessageEvent<string>) => {
+    }));
+    source.addEventListener('completion.output_chunk', trackedSseListener(event => {
       if (outputRequestRef.current !== key) return;
       const payload = JSON.parse(event.data);
       const chunk = String(payload.chunk || '');
@@ -1057,8 +1117,11 @@ function App() {
       const skipped = Math.min(previewCharsRemaining, chunk.length);
       previewCharsRemaining -= skipped;
       appendCompletionOutputLog(key, chunk.slice(skipped), chunk);
+    }));
+    source.addEventListener('completion.output_end', event => {
+      trackOnlySseEvent(event);
+      finish();
     });
-    source.addEventListener('completion.output_end', finish);
     source.onerror = () => {
       // EventSource reconnects automatically and sends Last-Event-ID, which is the next output offset.
     };
@@ -1119,11 +1182,7 @@ function App() {
   async function refreshHosts() {
     try {
       const data = await fetchJson<HostView[]>('/api/hosts');
-      if (scrollingRef.current) {
-        pendingHostsRef.current = data;
-      } else {
-        applyHosts(data);
-      }
+      applyHosts(data);
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -1152,48 +1211,33 @@ function App() {
       return () => closeOutputStream();
     }
     const events = new EventSource('/api/hosts/stream');
-    events.addEventListener('hosts.snapshot', (event: MessageEvent<string>) => {
+    events.addEventListener('hosts.snapshot', trackedSseListener(event => {
       try {
         const data = JSON.parse(event.data) as HostView[];
-        if (scrollingRef.current) {
-          pendingHostsRef.current = data;
-        } else {
-          applyHosts(data);
-        }
+        applyHosts(data);
         setError('');
         setLoading(false);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
-    });
+    }));
+    events.addEventListener('hosts.delta', trackedSseListener(event => {
+      try {
+        const delta = JSON.parse(event.data) as HostDelta;
+        setHosts(current => {
+          const next = applyHostDelta(current, delta);
+          recordLoadSamples(next);
+          return next;
+        });
+        setError('');
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    }));
     events.onerror = () => setError('Host SSE 正在重连');
     return () => {
       events.close();
       closeOutputStream();
-    };
-  }, []);
-
-  useEffect(() => {
-    const flushPendingHosts = () => {
-      scrollingRef.current = false;
-      if (!pendingHostsRef.current) return;
-      const pendingHosts = pendingHostsRef.current;
-      pendingHostsRef.current = null;
-      applyHosts(pendingHosts);
-    };
-    const onScroll = () => {
-      scrollingRef.current = true;
-      if (scrollIdleTimerRef.current) {
-        window.clearTimeout(scrollIdleTimerRef.current);
-      }
-      scrollIdleTimerRef.current = window.setTimeout(flushPendingHosts, 350);
-    };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => {
-      window.removeEventListener('scroll', onScroll);
-      if (scrollIdleTimerRef.current) {
-        window.clearTimeout(scrollIdleTimerRef.current);
-      }
     };
   }, []);
 
@@ -1213,7 +1257,9 @@ function App() {
         setOutput(String(err));
       }
     };
-    events.addEventListener('task.snapshot', handleSnapshot as EventListener);
+    events.addEventListener('task.snapshot', trackedSseListener(handleSnapshot));
+    events.addEventListener('hello', trackOnlySseEvent);
+    events.addEventListener('ping', trackOnlySseEvent);
     events.onerror = () => {
       // EventSource reconnects automatically; keep current output visible.
     };
@@ -1265,7 +1311,9 @@ function App() {
         setOutput(String(err));
       }
     };
-    events.addEventListener('task.snapshot', handleSnapshot as EventListener);
+    events.addEventListener('task.snapshot', trackedSseListener(handleSnapshot));
+    events.addEventListener('hello', trackOnlySseEvent);
+    events.addEventListener('ping', trackOnlySseEvent);
     events.onerror = () => {
       // EventSource reconnects automatically; keep the current cluster result visible.
     };
@@ -1364,7 +1412,7 @@ function App() {
           <Card><Statistic title="主机" value={hosts.length} suffix="台" loading={loading}/></Card>
           <Card><Statistic title="在线率" value={hosts.length ? Math.round(alive * 100 / hosts.length) : 0} suffix="%"/></Card>
           <Card><Statistic title="5min AVG" value={formatLoad(avgLoad)}/></Card>
-          <Card><Statistic title="更新" value="SSE"/></Card>
+          <SseTrafficCard />
         </div>
       </section>
 
@@ -1592,14 +1640,14 @@ function EventBusPanel({
     }
     const events = new EventSource('/api/eventbus/stream');
     events.onopen = () => setStreamState('connected');
-    events.addEventListener('eventbus.snapshot', (event: MessageEvent<string>) => {
+    events.addEventListener('eventbus.snapshot', trackedSseListener(event => {
       try {
         setView(JSON.parse(event.data) as EventBusView);
         setStreamState('connected');
       } catch {
         setStreamState('reconnecting');
       }
-    });
+    }));
     events.onerror = () => setStreamState('reconnecting');
     return () => events.close();
   }, [load]);
@@ -2077,14 +2125,16 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
     }
     const events = new EventSource('/api/metrics/stream');
     events.onopen = () => setLiveStatus('connected');
-    events.addEventListener('storage.health', (event: MessageEvent<string>) => {
+    events.addEventListener('hello', trackOnlySseEvent);
+    events.addEventListener('ping', trackOnlySseEvent);
+    events.addEventListener('storage.health', trackedSseListener(event => {
       try {
         setStorage(JSON.parse(event.data) as MetricStorageHealth);
       } catch {
         setLiveStatus('degraded');
       }
-    });
-    events.addEventListener('metric.invalidate', (event: MessageEvent<string>) => {
+    }));
+    events.addEventListener('metric.invalidate', trackedSseListener(event => {
       const invalidation = parseInvalidation(event.data);
       setLastInvalidateAt(Date.now());
       if (!invalidation || (invalidation.metrics.length && !invalidation.metrics.includes(metric))) {
@@ -2096,7 +2146,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
       }
       queryController.invalidate();
       setInvalidatedRange(current => mergeInvalidation(current, invalidation));
-    });
+    }));
     events.onerror = () => setLiveStatus('reconnecting');
     return () => events.close();
   }, [metric, queryController, rangePaused]);

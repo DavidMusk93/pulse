@@ -119,6 +119,26 @@ The sink test endpoint is strict: it tests the configured sink itself and return
 
 `/api/hosts/stream` also remains SSE-only, but heartbeat fan-in must not become render fan-out. The Coordinator coalesces host revisions into at most one `hosts.snapshot` every five seconds by default (`PULSE_HOST_SSE_MIN_INTERVAL_SECONDS`). The initial snapshot is immediate. The frontend ignores identical snapshots, never restores scroll position after a live update, and isolates the Metrics panel from heartbeat-only host changes. This keeps control-plane feedback stable without polling or full-page refresh behavior.
 
+After the initial `hosts.snapshot`, the Coordinator emits `hosts.delta` with recursive merge patches:
+
+```json
+{
+  "upserts": [
+    {
+      "agent_id": "agent-1",
+      "seq": 42,
+      "load": "0.84",
+      "state": {"load": "0.84"}
+    }
+  ],
+  "removed": ["agent-2"]
+}
+```
+
+Stable host and nested state fields are omitted. The frontend applies patches by stable `agent_id`, preserves object identity for unchanged hosts, and therefore limits React updates to changed clusters and tiles. Cluster and host surfaces use `content-visibility: auto` with intrinsic sizing so offscreen content skips layout and paint while preserving scroll geometry.
+
+Every frontend SSE consumer records UTF-8 `MessageEvent.data` bytes and event count in a shared external store. The top status area shows rolling bytes per second, events per second, and cumulative payload bytes. Traffic state is rendered once per animation frame and expires from the rolling window with event-driven timers; it does not poll.
+
 ## Persistence and Security
 
 The EventBus state file contains configuration plus per-route/sink delivery status. Updates use a temporary file and atomic rename. On POSIX filesystems the file mode is `0600`.

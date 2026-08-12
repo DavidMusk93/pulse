@@ -1,6 +1,8 @@
 package com.bytedance.pulse;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -628,10 +630,11 @@ public class CoordinatorHttpServer {
         long minIntervalMs = 1_000 * positiveLong("PULSE_HOST_SSE_MIN_INTERVAL_SECONDS", 5);
         long revision = service.hostRevision();
         try (OutputStream output = exchange.getResponseBody()) {
+            List<HostView> previousHosts = service.hosts();
             writeSse(output, new SseEvent(
                     String.valueOf(revision),
                     "hosts.snapshot",
-                    mapper.writeValueAsString(service.hosts())));
+                    mapper.writeValueAsString(previousHosts)));
             if (once) {
                 return;
             }
@@ -649,16 +652,80 @@ public class CoordinatorHttpServer {
                 if (nextRevision > revision) {
                     sleepQuietly(minIntervalMs);
                     revision = service.hostRevision();
+                    List<HostView> currentHosts = service.hosts();
+                    Map<String, Object> delta = hostDelta(mapper, previousHosts, currentHosts);
                     writeSse(output, new SseEvent(
                             String.valueOf(revision),
-                            "hosts.snapshot",
-                            mapper.writeValueAsString(service.hosts())));
+                            "hosts.delta",
+                            mapper.writeValueAsString(delta)));
+                    previousHosts = currentHosts;
                 } else {
                     output.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
                     output.flush();
                 }
             }
         }
+    }
+
+    static Map<String, Object> hostDelta(
+            ObjectMapper mapper,
+            List<HostView> previous,
+            List<HostView> current) {
+        Map<String, JsonNode> previousById = hostNodesById(mapper, previous);
+        Map<String, JsonNode> currentById = hostNodesById(mapper, current);
+        List<JsonNode> upserts = new ArrayList<>();
+        for (Map.Entry<String, JsonNode> entry : currentById.entrySet()) {
+            JsonNode before = previousById.get(entry.getKey());
+            if (before == null) {
+                upserts.add(entry.getValue());
+                continue;
+            }
+            ObjectNode patch = mapper.createObjectNode();
+            patch.put("agent_id", entry.getKey());
+            mergePatch(before, entry.getValue(), patch);
+            if (patch.size() > 1) {
+                upserts.add(patch);
+            }
+        }
+        List<String> removed = previousById.keySet().stream()
+                .filter(id -> !currentById.containsKey(id))
+                .toList();
+        return Map.of("upserts", upserts, "removed", removed);
+    }
+
+    private static Map<String, JsonNode> hostNodesById(
+            ObjectMapper mapper,
+            List<HostView> hosts) {
+        Map<String, JsonNode> nodes = new LinkedHashMap<>();
+        for (HostView host : hosts) {
+            nodes.put(host.agentId(), mapper.valueToTree(host));
+        }
+        return nodes;
+    }
+
+    private static void mergePatch(JsonNode before, JsonNode after, ObjectNode patch) {
+        before.fieldNames().forEachRemaining(field -> {
+            if (!after.has(field)) {
+                patch.putNull(field);
+            }
+        });
+        after.fields().forEachRemaining(entry -> {
+            String field = entry.getKey();
+            JsonNode next = entry.getValue();
+            JsonNode prior = before.get(field);
+            if (next.equals(prior)) {
+                return;
+            }
+            if (prior != null && prior.isObject() && next.isObject()) {
+                ObjectNode nested = patch.objectNode();
+                mergePatch(prior, next, nested);
+                if (!nested.isEmpty()) {
+                    patch.set(field, nested);
+                }
+            } else {
+                patch.set(field, next);
+            }
+        });
     }
 
     private static void sleepQuietly(long intervalMs) {

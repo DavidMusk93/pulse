@@ -163,6 +163,30 @@ body {
   font-size: 24px;
   font-weight: 640;
 }
+.sse-traffic-card span,
+.sse-traffic-card em {
+  display: block;
+  color: #86868b;
+  font-size: 10px;
+  font-style: normal;
+  white-space: nowrap;
+}
+.sse-traffic-card strong {
+  display: block;
+  margin: 4px 0 3px;
+  color: #1d1d1f;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.025em;
+  white-space: nowrap;
+}
+.sse-traffic-card strong small {
+  margin-left: 2px;
+  color: #86868b;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
 .auto-fit {
   display: block;
   width: 100%;
@@ -1010,6 +1034,10 @@ body {
 }
 .cluster-section .ant-card-head {
   min-height: 54px;
+}
+.cluster-section {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 360px;
 }
 .cluster-section .ant-card-head-title {
   min-width: 0;

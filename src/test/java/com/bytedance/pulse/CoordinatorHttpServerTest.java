@@ -121,6 +121,38 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
+    void hostDeltaIncludesOnlyChangedFieldsAndRemovals() {
+        HostView before = hostView("agent-1", 10, "0.42", Map.of(
+                "host", "agent-1",
+                "ip", "agent-1",
+                "load", "0.42",
+                "stable", "keep"));
+        HostView after = hostView("agent-1", 11, "0.84", Map.of(
+                "host", "agent-1",
+                "ip", "agent-1",
+                "load", "0.84",
+                "stable", "keep"));
+        HostView added = hostView("agent-2", 1, "0.10", Map.of("load", "0.10"));
+
+        Map<String, Object> delta = CoordinatorHttpServer.hostDelta(
+                mapper,
+                List.of(before, hostView("removed-agent", 1, "0.20", Map.of())),
+                List.of(after, added));
+        JsonNode json = mapper.valueToTree(delta);
+
+        assertEquals(2, json.get("upserts").size());
+        JsonNode patch = json.get("upserts").get(0);
+        assertEquals("agent-1", patch.get("agent_id").asText());
+        assertEquals(11, patch.get("seq").asLong());
+        assertEquals("0.84", patch.get("load").asText());
+        assertEquals("0.84", patch.get("state").get("load").asText());
+        assertFalse(patch.has("cluster"));
+        assertFalse(patch.get("state").has("stable"));
+        assertEquals("removed-agent", json.get("removed").get(0).asText());
+        assertEquals("agent-2", json.get("upserts").get(1).get("agent_id").asText());
+    }
+
+    @Test
     void metricsEndpointsExposeCatalogAndQueryHeartbeatRange() throws Exception {
         postJson("/heartbeat", """
                 {
@@ -1473,6 +1505,39 @@ class CoordinatorHttpServerTest {
                     .replace("__IP__", ip)
                     .replace("__SEQ__", String.valueOf(seq)));
         }
+    }
+
+    private static HostView hostView(
+            String agentId,
+            long seq,
+            String load,
+            Map<String, Object> state) {
+        return new HostView(
+                agentId,
+                1,
+                seq,
+                15_000,
+                1_710_000_000_000L,
+                1_710_000_015_000L,
+                0,
+                3,
+                "alive",
+                "direct",
+                "coordinator-a",
+                "direct",
+                "direct",
+                agentId,
+                "",
+                1,
+                100,
+                agentId,
+                agentId,
+                "cluster-a",
+                "area-a",
+                "zone-a",
+                "worker",
+                load,
+                state);
     }
 
     private static HttpServer heartbeatStub(AtomicInteger hits) throws IOException {
