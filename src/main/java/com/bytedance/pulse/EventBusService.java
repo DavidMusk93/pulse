@@ -214,10 +214,7 @@ final class EventBusService implements AutoCloseable {
             return 0;
         }
         return (int) activeEvents.entrySet().stream()
-                .filter(entry -> route.sourceIds().isEmpty()
-                        || route.sourceIds().contains(entry.getValue().sourceId()))
-                .filter(entry -> route.eventTypes().isEmpty()
-                        || route.eventTypes().contains(entry.getValue().eventType()))
+                .filter(entry -> routeMatches(route, entry.getValue()))
                 .filter(entry -> !deliveryAcks
                         .getOrDefault(entry.getKey(), Set.of())
                         .containsAll(targets))
@@ -475,8 +472,7 @@ final class EventBusService implements AutoCloseable {
             EventRouteDefinition route,
             String statusKey) {
         return activeEvents.values().stream()
-                .filter(event -> route.sourceIds().isEmpty() || route.sourceIds().contains(event.sourceId()))
-                .filter(event -> route.eventTypes().isEmpty() || route.eventTypes().contains(event.eventType()))
+                .filter(event -> routeMatches(route, event))
                 .filter(event -> !deliveryAcks
                         .getOrDefault(activeKey(event), Set.of())
                         .contains(statusKey))
@@ -501,9 +497,7 @@ final class EventBusService implements AutoCloseable {
         Set<String> targets = new HashSet<>();
         Map<String, EventSinkDefinition> configuredSinks = sinks(config);
         for (EventRouteDefinition route : config.routes()) {
-            if (!route.enabled()
-                    || (!route.sourceIds().isEmpty() && !route.sourceIds().contains(event.sourceId()))
-                    || (!route.eventTypes().isEmpty() && !route.eventTypes().contains(event.eventType()))) {
+            if (!routeMatches(route, event)) {
                 continue;
             }
             for (String sinkId : route.sinkIds()) {
@@ -652,6 +646,9 @@ final class EventBusService implements AutoCloseable {
             if (!eventTypes.keySet().containsAll(route.eventTypes())) {
                 throw new IllegalArgumentException("route references unknown event type: " + route.id());
             }
+            if (route.clusters().stream().anyMatch(cluster -> cluster == null || cluster.isBlank())) {
+                throw new IllegalArgumentException("route cluster filters must not be blank: " + route.id());
+            }
             if (route.sinkIds().isEmpty() || !sinks.keySet().containsAll(route.sinkIds())) {
                 throw new IllegalArgumentException("route must reference existing sinks: " + route.id());
             }
@@ -738,6 +735,7 @@ final class EventBusService implements AutoCloseable {
                             route.enabled(),
                             route.sourceIds(),
                             route.eventTypes(),
+                            route.clusters(),
                             route.sinkIds(),
                             route.gateType(),
                             configWithDefaults);
@@ -928,6 +926,21 @@ final class EventBusService implements AutoCloseable {
 
     private static String activeKey(EventPlugin.Event event) {
         return event.sourceId() + "::" + event.incidentId();
+    }
+
+    private static boolean routeMatches(
+            EventRouteDefinition route,
+            EventPlugin.Event event) {
+        if (!route.enabled()
+                || (!route.sourceIds().isEmpty() && !route.sourceIds().contains(event.sourceId()))
+                || (!route.eventTypes().isEmpty() && !route.eventTypes().contains(event.eventType()))) {
+            return false;
+        }
+        if (route.clusters().isEmpty()) {
+            return true;
+        }
+        Object cluster = event.attributes().get("cluster");
+        return cluster != null && route.clusters().contains(cluster.toString());
     }
 
     private static EventBusConfig defaultConfig() {

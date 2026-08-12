@@ -129,6 +129,7 @@ export type EventRouteDefinition = {
   enabled: boolean;
   source_ids: string[];
   event_types: string[];
+  clusters: string[];
   sink_ids: string[];
   gate_type: string;
   gate_config: Record<string, unknown>;

@@ -22,6 +22,24 @@ class EventBusServiceTest {
     Path tempDir;
 
     @Test
+    void legacyRouteWithoutClusterFilterMatchesAllClusters() throws Exception {
+        EventRouteDefinition route = JsonSupport.objectMapper().readValue("""
+                {
+                  "id": "route-a",
+                  "name": "All clusters",
+                  "enabled": true,
+                  "source_ids": ["disk-io-saturation"],
+                  "event_types": ["disk.io_saturation"],
+                  "sink_ids": ["sink-a"],
+                  "gate_type": "periodic_digest",
+                  "gate_config": {"interval_seconds": 300}
+                }
+                """, EventRouteDefinition.class);
+
+        assertTrue(route.clusters().isEmpty());
+    }
+
+    @Test
     void diskSourceExposesValidatedAgentRuntimeConfig() throws Exception {
         Path statePath = tempDir.resolve("source-config-eventbus.json");
         Files.writeString(statePath, JsonSupport.objectMapper().writeValueAsString(new EventBusState(
@@ -46,6 +64,7 @@ class EventBusServiceTest {
                                 true,
                                 List.of("disk-io-saturation"),
                                 List.of("disk.io_saturation"),
+                                List.of(),
                                 List.of("sink-a"),
                                 PeriodicDigestGatePlugin.TYPE,
                                 Map.of("interval_ms", 300_000, "publish_recovery", true)))),
@@ -109,6 +128,7 @@ class EventBusServiceTest {
                             true,
                             List.of("disk-io-saturation"),
                             List.of("disk.io_saturation"),
+                            List.of(),
                             List.of("sink-a", "sink-b"),
                             PeriodicDigestGatePlugin.TYPE,
                             Map.of("interval_seconds", 300)))));
@@ -159,6 +179,81 @@ class EventBusServiceTest {
         }
 
         assertTrue(Files.readString(statePath).contains("\"route-a::sink-a\""));
+    }
+
+    @Test
+    void pipelineRoutesOnlyEventsFromSelectedClusters() throws Exception {
+        MutableClock clock = new MutableClock(1_710_000_010_000L);
+        RecordingSink sinkPlugin = new RecordingSink();
+        try (EventBusService eventBus = new EventBusService(
+                tempDir.resolve("cluster-filter-eventbus.json"),
+                clock,
+                event -> {},
+                false,
+                List.of(sinkPlugin))) {
+            EventBusConfig defaults = eventBus.view().config();
+            eventBus.update(new EventBusConfig(
+                    1,
+                    defaults.eventTypes(),
+                    defaults.sources(),
+                    List.of(new EventSinkDefinition(
+                            "sink-a", "Recording", RecordingSink.TYPE, true, Map.of())),
+                    List.of(new EventRouteDefinition(
+                            "route-a",
+                            "CDN alerts",
+                            true,
+                            List.of("disk-io-saturation"),
+                            List.of("disk.io_saturation"),
+                            List.of("cdn2"),
+                            List.of("sink-a"),
+                            PeriodicDigestGatePlugin.TYPE,
+                            Map.of("interval_seconds", 300)))));
+
+            eventBus.ingestMessages("agent-cdn", clock.millis(), List.of(
+                    eventMessage("incident-cdn", "firing", "cdn2", clock.millis())));
+            eventBus.ingestMessages("agent-doubao", clock.millis(), List.of(
+                    eventMessage("incident-doubao", "firing", "doubao", clock.millis())));
+
+            assertEquals(2, eventBus.view().activeEvents().size());
+            assertEquals(1, eventBus.view().pendingByRoute().get("route-a"));
+
+            eventBus.dispatchDue();
+
+            assertEquals(1, sinkPlugin.deliveries.size());
+            assertEquals(List.of("cdn2"), sinkPlugin.deliveries.get(0).events().stream()
+                    .map(event -> event.attributes().get("cluster").toString())
+                    .toList());
+            assertEquals(1, eventBus.view().activeEvents().size());
+            assertEquals(
+                    "doubao",
+                    eventBus.view().activeEvents().get(0).attributes().get("cluster"));
+            assertEquals(0, eventBus.view().pendingByRoute().get("route-a"));
+
+            EventRouteDefinition route = eventBus.view().config().routes().get(0);
+            eventBus.update(new EventBusConfig(
+                    1,
+                    defaults.eventTypes(),
+                    defaults.sources(),
+                    eventBus.view().config().sinks(),
+                    List.of(new EventRouteDefinition(
+                            route.id(),
+                            route.name(),
+                            route.enabled(),
+                            route.sourceIds(),
+                            route.eventTypes(),
+                            List.of("doubao"),
+                            route.sinkIds(),
+                            route.gateType(),
+                            route.gateConfig()))));
+            clock.advance(300_000);
+            eventBus.dispatchDue();
+
+            assertEquals(2, sinkPlugin.deliveries.size());
+            assertEquals(
+                    "doubao",
+                    sinkPlugin.deliveries.get(1).events().get(0).attributes().get("cluster"));
+            assertTrue(eventBus.view().activeEvents().isEmpty());
+        }
     }
 
     @Test
@@ -290,15 +385,29 @@ class EventBusServiceTest {
     }
 
     private static PulseMessage eventMessage(String status, long observedAtMs) {
+        return eventMessage("incident-1", status, "", observedAtMs);
+    }
+
+    private static PulseMessage eventMessage(
+            String incidentId,
+            String status,
+            String cluster,
+            long observedAtMs) {
+        Map<String, Object> attributes = new java.util.LinkedHashMap<>();
+        attributes.put("ip", "10.0.0.1");
+        attributes.put("io_util_pct", "firing".equals(status) ? 97 : 20);
+        if (!cluster.isBlank()) {
+            attributes.put("cluster", cluster);
+        }
         return new PulseMessage(
-                "incident-1:" + status,
+                incidentId + ":" + status,
                 AgentDiskIoEventEmitter.MESSAGE_TYPE,
                 1,
                 null,
                 null,
                 Map.ofEntries(
-                        Map.entry("event_id", "incident-1:" + status),
-                        Map.entry("incident_id", "incident-1"),
+                        Map.entry("event_id", incidentId + ":" + status),
+                        Map.entry("incident_id", incidentId),
                         Map.entry("event_type", AgentDiskIoEventEmitter.EVENT_TYPE),
                         Map.entry("source_id", AgentDiskIoEventEmitter.SOURCE_ID),
                         Map.entry("subject", "nvme0n1"),
@@ -307,9 +416,7 @@ class EventBusServiceTest {
                         Map.entry("status", status),
                         Map.entry("observed_at_ms", observedAtMs),
                         Map.entry("summary", "disk " + status),
-                        Map.entry("attributes", Map.of(
-                                "ip", "10.0.0.1",
-                                "io_util_pct", "firing".equals(status) ? 97 : 20))));
+                        Map.entry("attributes", attributes)));
     }
 
     private static final class RecordingSink implements EventPlugin.Sink {

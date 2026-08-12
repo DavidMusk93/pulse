@@ -400,6 +400,7 @@ class CoordinatorHttpServerTest {
                     "enabled": true,
                     "source_ids": ["disk-source"],
                     "event_types": ["disk.io_saturation"],
+                    "clusters": ["cdn2"],
                     "sink_ids": ["lark-sink"],
                     "gate_type": "periodic_digest",
                     "gate_config": {"interval_seconds": 900}
@@ -411,6 +412,7 @@ class CoordinatorHttpServerTest {
 
         assertEquals(200, updated.statusCode());
         assertTrue(updated.body().contains(EventBusService.SECRET_MASK));
+        assertTrue(updated.body().contains("\"clusters\":[\"cdn2\"]"));
         assertFalse(updated.body().contains("private-token"));
         assertFalse(get("/api/eventbus").body().contains("private-secret"));
     }

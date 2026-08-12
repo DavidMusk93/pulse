@@ -1622,9 +1622,11 @@ function EventPluginFields({
 
 function EventBusPanel({
   controller,
+  clusters,
   onError
 }: {
   controller: MetricQueryController;
+  clusters: string[];
   onError: (error: string) => void;
 }) {
   const [view, setView] = useState<EventBusView | null>(null);
@@ -1663,6 +1665,10 @@ function EventBusPanel({
   const byKind = (kind: EventPluginDescriptor['kind']) => plugins.filter(plugin => plugin.kind === kind);
   const descriptor = (kind: EventPluginDescriptor['kind'], type: string) =>
     plugins.find(plugin => plugin.kind === kind && plugin.type === type);
+  const routeClusterOptions = (routeClusters: string[] = []) =>
+    [...new Set([...clusters, ...routeClusters])]
+      .sort((left, right) => left.localeCompare(right))
+      .map(cluster => ({ value: cluster, label: cluster }));
   const updateList = <K extends 'event_types' | 'sources' | 'sinks' | 'routes'>(
     key: K,
     index: number,
@@ -1886,6 +1892,7 @@ function EventBusPanel({
                 enabled: true,
                 source_ids: draft.sources[0] ? [draft.sources[0].id] : [],
                 event_types: draft.event_types[0] ? [draft.event_types[0].id] : [],
+                clusters: [],
                 sink_ids: draft.sinks[0] ? [draft.sinks[0].id] : [],
                 gate_type: plugin.type,
                 gate_config: pluginConfigDefaults(plugin)
@@ -1906,7 +1913,10 @@ function EventBusPanel({
                 <ArrowRightOutlined className="eventbus-pipeline-arrow" />
                 <div className="eventbus-pipeline-node is-gate">
                   <ThunderboltOutlined />
-                  <span><small>CONTRACT + GATE</small><b>{route.event_types.length || 0} Types · {route.gate_type}</b></span>
+                  <span>
+                    <small>CONTRACT + FILTER + GATE</small>
+                    <b>{route.event_types.length || 0} Types · {route.clusters?.length ? `${route.clusters.length} Clusters` : 'All Clusters'} · {route.gate_type}</b>
+                  </span>
                 </div>
                 <ArrowRightOutlined className="eventbus-pipeline-arrow" />
                 <div className="eventbus-pipeline-node">
@@ -1925,6 +1935,7 @@ function EventBusPanel({
               <div className="eventbus-route-selectors">
                 <label className="eventbus-field"><span>输入 Sources</span><Select mode="multiple" value={route.source_ids} options={draft.sources.map(item => ({ value: item.id, label: item.name }))} placeholder="选择 Source" onChange={sourceIds => updateList('routes', index, { ...route, source_ids: sourceIds })} /></label>
                 <label className="eventbus-field"><span>事件契约</span><Select mode="multiple" value={route.event_types} options={draft.event_types.map(item => ({ value: item.id, label: item.name }))} placeholder="选择事件类型" onChange={eventTypes => updateList('routes', index, { ...route, event_types: eventTypes })} /></label>
+                <label className="eventbus-field"><span>过滤集群</span><Select mode="multiple" allowClear showSearch maxTagCount="responsive" value={route.clusters || []} options={routeClusterOptions(route.clusters)} placeholder="全部集群" onChange={clusters => updateList('routes', index, { ...route, clusters })} /></label>
                 <label className="eventbus-field"><span>输出 Sinks</span><Select mode="multiple" value={route.sink_ids} options={draft.sinks.map(item => ({ value: item.id, label: item.name }))} placeholder="选择 Sink" onChange={sinkIds => updateList('routes', index, { ...route, sink_ids: sinkIds })} /></label>
               </div>
               <EventPluginFields plugin={descriptor('gate', route.gate_type)} config={route.gate_config} onChange={gateConfig => updateList('routes', index, { ...route, gate_config: gateConfig })} />
@@ -2037,6 +2048,10 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
         }))
     ];
   }, [hosts]);
+  const eventBusClusters = useMemo(() => [...new Set(hosts
+    .map(host => host.cluster)
+    .filter((cluster): cluster is string => Boolean(cluster && cluster !== '-')))]
+    .sort((left, right) => left.localeCompare(right)), [hosts]);
   const clusterHosts = useMemo(() => selectedCluster === 'all'
     ? hosts
     : hosts.filter(host => (host.cluster && host.cluster !== '-' ? host.cluster : 'unknown') === selectedCluster), [hosts, selectedCluster]);
@@ -2243,7 +2258,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
           <div className="metrics-scope-card"><span>Retention Lag</span><b>{formatDuration(storage?.retention_lag_ms)}</b><em>lag</em></div>
         </div>
       </div>
-      <EventBusPanel controller={queryController} onError={setError} />
+      <EventBusPanel controller={queryController} clusters={eventBusClusters} onError={setError} />
       <div className="metrics-control-grid">
         <div className="metrics-control-card metrics-preset-card">
           <span className="metrics-field-label">健康视角</span>

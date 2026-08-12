@@ -56,7 +56,10 @@ Firing events enter the pending-delivery map. Each matching `route_id::sink_id` 
 
 ### Route and gate
 
-A route filters by source IDs and event types, then fans a batch out to one or more sinks. Gate state is isolated per `route_id::sink_id`, so one failed destination does not advance another destination.
+A route filters by source IDs, event types, and optional exact cluster names from
+`event.attributes.cluster`, then fans a batch out to one or more sinks. An empty
+cluster list means all clusters. Gate state is isolated per `route_id::sink_id`,
+so one failed destination does not advance another destination.
 
 The built-in `periodic_digest` gate:
 

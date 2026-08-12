@@ -77,12 +77,14 @@ record EventRouteDefinition(
         boolean enabled,
         List<String> sourceIds,
         List<String> eventTypes,
+        List<String> clusters,
         List<String> sinkIds,
         String gateType,
         Map<String, Object> gateConfig) {
     EventRouteDefinition {
         sourceIds = sourceIds == null ? List.of() : List.copyOf(sourceIds);
         eventTypes = eventTypes == null ? List.of() : List.copyOf(eventTypes);
+        clusters = clusters == null ? List.of() : List.copyOf(clusters);
         sinkIds = sinkIds == null ? List.of() : List.copyOf(sinkIds);
         gateConfig = gateConfig == null ? Map.of() : Map.copyOf(new LinkedHashMap<>(gateConfig));
     }
