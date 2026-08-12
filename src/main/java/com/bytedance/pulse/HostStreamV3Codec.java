@@ -3,6 +3,7 @@ package com.bytedance.pulse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -50,7 +51,7 @@ public final class HostStreamV3Codec {
             List<String> scope,
             List<HostView> hosts) {
         Objects.requireNonNull(mapper, "mapper");
-        return new Session(revision, canonicalScope(scope), hosts);
+        return new Session(mapper, revision, canonicalScope(scope), hosts);
     }
 
     public static final class Session {
@@ -60,8 +61,13 @@ public final class HostStreamV3Codec {
         private long revision;
         private List<String> catalog;
         private ArrayList<HostView> activeHosts;
+        private ArrayList<ValueDictionary> valueDictionaries;
 
-        private Session(long revision, List<String> scope, List<HostView> hosts) {
+        private Session(
+                ObjectMapper mapper,
+                long revision,
+                List<String> scope,
+                List<HostView> hosts) {
             this.scope = scope;
             this.revision = revision;
             this.catalog = catalog(hosts);
@@ -69,7 +75,7 @@ public final class HostStreamV3Codec {
             TreeMap<String, HostView> scoped = scopedById(hosts, scope);
             this.entities = new ArrayList<>(scoped.keySet());
             this.activeHosts = new ArrayList<>(scoped.values());
-            this.snapshot = snapshotEnvelope();
+            this.snapshot = snapshotEnvelope(mapper);
         }
 
         public Object snapshot() {
@@ -125,20 +131,53 @@ public final class HostStreamV3Codec {
             ArrayList<List<Object>> additions = new ArrayList<>(current.size());
             ArrayList<String> addedIds = new ArrayList<>(current.size());
             ArrayList<HostView> addedHosts = new ArrayList<>(current.size());
-            int nextEntityIndex = entities.size();
             for (Map.Entry<String, HostView> entry : current.entrySet()) {
                 String agentId = entry.getKey();
                 HostView host = entry.getValue();
-                additions.add(List.of(nextEntityIndex++, agentId, completeRow(host)));
                 addedIds.add(agentId);
                 addedHosts.add(host);
+            }
+
+            ArrayList<ValueDictionary> nextValueDictionaries =
+                    copyValueDictionaries(valueDictionaries);
+            ArrayList<List<Object>> extensions = new ArrayList<>();
+            for (int fieldIndex = 0; fieldIndex < FIELDS.size(); fieldIndex++) {
+                ValueDictionary dictionary = nextValueDictionaries.get(fieldIndex);
+                if (dictionary == null) {
+                    continue;
+                }
+                ArrayList<Object> appended = new ArrayList<>();
+                ArrayList<Object> values = changedValues.get(fieldIndex);
+                if (values != null) {
+                    appendMissing(dictionary, values, appended);
+                }
+                for (HostView host : addedHosts) {
+                    appendMissing(dictionary, fieldValue(fieldIndex, host), appended);
+                }
+                if (!appended.isEmpty()) {
+                    extensions.add(List.of(fieldIndex, appended));
+                }
+            }
+
+            int nextEntityIndex = entities.size();
+            for (int index = 0; index < addedHosts.size(); index++) {
+                additions.add(List.of(
+                        nextEntityIndex++,
+                        addedIds.get(index),
+                        completeRow(addedHosts.get(index), nextValueDictionaries)));
             }
 
             ArrayList<List<Object>> columns = new ArrayList<>();
             for (int fieldIndex = 0; fieldIndex < FIELDS.size(); fieldIndex++) {
                 ArrayList<Integer> indexes = changedIndexes.get(fieldIndex);
                 if (indexes != null) {
-                    columns.add(List.of(fieldIndex, indexes, changedValues.get(fieldIndex)));
+                    columns.add(List.of(
+                            fieldIndex,
+                            indexes,
+                            encodeValues(
+                                    fieldIndex,
+                                    changedValues.get(fieldIndex),
+                                    nextValueDictionaries)));
                 }
             }
 
@@ -146,6 +185,9 @@ public final class HostStreamV3Codec {
             envelope.put("schema", "hosts.v3");
             envelope.put("base_revision", revision);
             envelope.put("revision", nextRevision);
+            if (!extensions.isEmpty()) {
+                envelope.put("values", extensions);
+            }
             envelope.put("add", additions);
             envelope.put("remove", removed);
             envelope.put("columns", columns);
@@ -157,24 +199,61 @@ public final class HostStreamV3Codec {
             entities.addAll(addedIds);
             nextActiveHosts.addAll(addedHosts);
             activeHosts = nextActiveHosts;
+            valueDictionaries = nextValueDictionaries;
             catalog = nextCatalog;
             revision = nextRevision;
             return envelope;
         }
 
-        private Map<String, Object> snapshotEnvelope() {
-            ArrayList<List<Object>> columns = new ArrayList<>(FIELDS.size());
+        private Map<String, Object> snapshotEnvelope(ObjectMapper mapper) {
+            ArrayList<List<Object>> rawColumns = new ArrayList<>(FIELDS.size());
             for (int fieldIndex = 0; fieldIndex < FIELDS.size(); fieldIndex++) {
                 ArrayList<Object> values = new ArrayList<>(activeHosts.size());
                 for (HostView host : activeHosts) {
                     values.add(fieldValue(fieldIndex, host));
                 }
-                columns.add(Collections.unmodifiableList(values));
+                rawColumns.add(Collections.unmodifiableList(values));
             }
 
+            ArrayList<ValueDictionary> selected = candidateDictionaries(rawColumns);
+            Map<String, Object> rawEnvelope = snapshotEnvelope(rawColumns, null);
+            int rawBytes = serializedBytes(mapper, rawEnvelope);
+            int selectedBytes = serializedBytes(mapper, snapshotEnvelope(
+                    encodedColumns(rawColumns, selected), selected));
+
+            for (int fieldIndex = 0; fieldIndex < FIELDS.size(); fieldIndex++) {
+                ValueDictionary dictionary = selected.get(fieldIndex);
+                if (dictionary == null) {
+                    continue;
+                }
+                selected.set(fieldIndex, null);
+                Map<String, Object> withoutField = snapshotEnvelope(
+                        encodedColumns(rawColumns, selected), selected);
+                int withoutFieldBytes = serializedBytes(mapper, withoutField);
+                if (withoutFieldBytes <= selectedBytes) {
+                    selectedBytes = withoutFieldBytes;
+                } else {
+                    selected.set(fieldIndex, dictionary);
+                }
+            }
+
+            if (selectedBytes >= rawBytes) {
+                selected = emptyValueDictionaries();
+            }
+            valueDictionaries = selected;
+            return snapshotEnvelope(encodedColumns(rawColumns, selected), selected);
+        }
+
+        private Map<String, Object> snapshotEnvelope(
+                List<List<Object>> columns,
+                List<ValueDictionary> dictionariesByField) {
             Map<String, Object> dictionaries = new LinkedHashMap<>();
             dictionaries.put("fields", FIELDS);
             dictionaries.put("entities", List.copyOf(entities));
+            List<List<Object>> declarations = dictionaryDeclarations(dictionariesByField);
+            if (!declarations.isEmpty()) {
+                dictionaries.put("values", declarations);
+            }
 
             Map<String, Object> envelope = new LinkedHashMap<>();
             envelope.put("schema", "hosts.v3");
@@ -184,6 +263,14 @@ public final class HostStreamV3Codec {
             envelope.put("dictionaries", dictionaries);
             envelope.put("columns", columns);
             return envelope;
+        }
+
+        private static int serializedBytes(ObjectMapper mapper, Object value) {
+            try {
+                return mapper.writeValueAsBytes(value).length;
+            } catch (Exception exception) {
+                throw new IllegalStateException("failed to measure V3 snapshot bytes", exception);
+            }
         }
     }
 
@@ -229,12 +316,147 @@ public final class HostStreamV3Codec {
         return result;
     }
 
-    private static List<Object> completeRow(HostView host) {
+    private static List<Object> completeRow(
+            HostView host,
+            List<ValueDictionary> valueDictionaries) {
         ArrayList<Object> values = new ArrayList<>(FIELDS.size());
         for (int fieldIndex = 0; fieldIndex < FIELDS.size(); fieldIndex++) {
-            values.add(fieldValue(fieldIndex, host));
+            values.add(encodeValue(
+                    fieldIndex,
+                    fieldValue(fieldIndex, host),
+                    valueDictionaries));
         }
         return Collections.unmodifiableList(values);
+    }
+
+    private static ArrayList<ValueDictionary> candidateDictionaries(
+            List<List<Object>> columns) {
+        ArrayList<ValueDictionary> result = emptyValueDictionaries();
+        for (int fieldIndex = 0; fieldIndex < FIELDS.size(); fieldIndex++) {
+            ValueDictionary dictionary = new ValueDictionary();
+            for (Object value : columns.get(fieldIndex)) {
+                dictionary.add(value);
+            }
+            if (!dictionary.values.isEmpty()) {
+                result.set(fieldIndex, dictionary);
+            }
+        }
+        return result;
+    }
+
+    private static ArrayList<ValueDictionary> emptyValueDictionaries() {
+        ArrayList<ValueDictionary> result = new ArrayList<>(FIELDS.size());
+        for (int fieldIndex = 0; fieldIndex < FIELDS.size(); fieldIndex++) {
+            result.add(null);
+        }
+        return result;
+    }
+
+    private static ArrayList<ValueDictionary> copyValueDictionaries(
+            List<ValueDictionary> dictionaries) {
+        ArrayList<ValueDictionary> result = new ArrayList<>(dictionaries.size());
+        for (ValueDictionary dictionary : dictionaries) {
+            result.add(dictionary == null ? null : new ValueDictionary(dictionary));
+        }
+        return result;
+    }
+
+    private static List<List<Object>> encodedColumns(
+            List<List<Object>> rawColumns,
+            List<ValueDictionary> dictionaries) {
+        ArrayList<List<Object>> result = new ArrayList<>(FIELDS.size());
+        for (int fieldIndex = 0; fieldIndex < FIELDS.size(); fieldIndex++) {
+            result.add(encodeValues(fieldIndex, rawColumns.get(fieldIndex), dictionaries));
+        }
+        return result;
+    }
+
+    private static List<Object> encodeValues(
+            int fieldIndex,
+            List<Object> rawValues,
+            List<ValueDictionary> dictionaries) {
+        ValueDictionary dictionary = dictionaries.get(fieldIndex);
+        if (dictionary == null) {
+            return rawValues;
+        }
+        ArrayList<Object> encoded = new ArrayList<>(rawValues.size());
+        for (Object value : rawValues) {
+            encoded.add(encodeValue(fieldIndex, value, dictionaries));
+        }
+        return Collections.unmodifiableList(encoded);
+    }
+
+    private static Object encodeValue(
+            int fieldIndex,
+            Object value,
+            List<ValueDictionary> dictionaries) {
+        if (value == null) {
+            return null;
+        }
+        ValueDictionary dictionary = dictionaries.get(fieldIndex);
+        if (dictionary == null) {
+            return value;
+        }
+        Integer reference = dictionary.indexes.get(value);
+        if (reference == null) {
+            throw new IllegalStateException(
+                    "missing value dictionary entry for field " + fieldIndex + ": " + value);
+        }
+        return reference;
+    }
+
+    private static List<List<Object>> dictionaryDeclarations(
+            List<ValueDictionary> dictionaries) {
+        if (dictionaries == null) {
+            return List.of();
+        }
+        ArrayList<List<Object>> declarations = new ArrayList<>();
+        for (int fieldIndex = 0; fieldIndex < dictionaries.size(); fieldIndex++) {
+            ValueDictionary dictionary = dictionaries.get(fieldIndex);
+            if (dictionary != null) {
+                declarations.add(List.of(fieldIndex, List.copyOf(dictionary.values)));
+            }
+        }
+        return declarations;
+    }
+
+    private static void appendMissing(
+            ValueDictionary dictionary,
+            List<Object> values,
+            List<Object> appended) {
+        for (Object value : values) {
+            appendMissing(dictionary, value, appended);
+        }
+    }
+
+    private static void appendMissing(
+            ValueDictionary dictionary,
+            Object value,
+            List<Object> appended) {
+        if (value != null && dictionary.add(value)) {
+            appended.add(value);
+        }
+    }
+
+    private static final class ValueDictionary {
+        private final ArrayList<Object> values = new ArrayList<>();
+        private final Map<Object, Integer> indexes = new HashMap<>();
+
+        private ValueDictionary() {}
+
+        private ValueDictionary(ValueDictionary source) {
+            values.addAll(source.values);
+            indexes.putAll(source.indexes);
+        }
+
+        private boolean add(Object value) {
+            if (value == null || indexes.containsKey(value)) {
+                return false;
+            }
+            indexes.put(value, values.size());
+            values.add(value);
+            return true;
+        }
     }
 
     private static boolean sameField(int fieldIndex, HostView left, HostView right) {

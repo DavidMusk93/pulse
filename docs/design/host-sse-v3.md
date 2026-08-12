@@ -41,8 +41,32 @@ Entity indexes are local to one connection. Initial entities are sorted by
 New and reappearing entities are sorted by `agent_id` within a delta and
 appended to the dictionary.
 
-There are no value dictionaries, bitmaps, numeric coercions, derived fields,
-dependencies, or opaque abbreviated keys.
+The snapshot may also declare adaptive, field-scoped value dictionaries.
+Bitmaps, numeric coercions, derived fields, dependencies, and opaque
+abbreviated keys are not used.
+
+## Value Dictionaries
+
+The producer first builds raw columns after applying scope. It then constructs
+a deterministic candidate dictionary for each field, with non-null values in
+first entity-order occurrence. Starting with all candidates, it removes a
+field whenever serializing the complete snapshot without that field is no
+larger. Jackson's final UTF-8 JSON byte length is the cost function, including
+the `dictionaries.values` property, declarations, references, commas, and
+columns. If the resulting snapshot is not smaller than raw V3, all value
+dictionaries are omitted. High-cardinality fields therefore remain raw
+without a fixed cardinality heuristic.
+
+Snapshot declarations have this shape:
+
+```json
+"values": [[8, ["alive", "draining"]], [21, ["zone-a", "zone-b"]]]
+```
+
+The outer array is ordered by field index. In a declared field, every non-null
+cell is a non-negative integer reference into that field's values. In an
+undeclared field, cells retain their public JSON value, including numeric
+integers. JSON `null` is never dictionary-coded.
 
 ## Snapshot
 
@@ -55,19 +79,21 @@ The complete snapshot shape is:
   "scope": ["cdn2"],
   "catalog": ["cdn2", "cdn3"],
   "dictionaries": {
-    "fields": ["agent_id", "epoch"],
-    "entities": ["agent-1"]
+    "fields": ["status", "epoch"],
+    "entities": ["agent-1", "agent-2"],
+    "values": [[0, ["alive"]]]
   },
   "columns": [
-    ["agent-1"],
-    [1]
+    [0, 0],
+    [1, 1]
   ]
 }
 ```
 
 The example abbreviates `fields` and `columns`; production output always has
 all 24. Column `n` corresponds to field `n`, and every column has exactly one
-cell for every initial entity. JSON `null` is an explicit cell value.
+cell for every initial entity. `dictionaries.values` is optional. JSON `null`
+is an explicit cell value.
 
 The cluster catalog is collected from the complete host input before scope is
 applied. Scope and catalog are deduplicated and sorted. Only selected hosts are
@@ -82,9 +108,10 @@ Every delta has this shape:
   "schema": "hosts.v3",
   "base_revision": 42,
   "revision": 45,
+  "values": [[8, ["draining"]]],
   "add": [[2, "agent-3", ["agent-3", 1]]],
   "remove": [0],
-  "columns": [[2, [1], [99]]],
+  "columns": [[8, [1], [1]]],
   "unset": [[21, [1]]],
   "catalog": ["cdn2", "cdn3"]
 }
@@ -96,11 +123,16 @@ The example abbreviates an added row; each real added row contains 24 values.
 - `remove` contains tombstoned entity indexes.
 - `columns` entries are `[field_index, entity_indexes, changed_values]`.
 - `unset` entries are `[field_index, entity_indexes]`.
+- `values` entries are `[field_index, appended_values]`.
 - `catalog`, when present, replaces the complete previous catalog.
 
 `add`, `remove`, `columns`, and `unset` are always present and may be empty.
-`catalog` is emitted only when it changes. Field groups and entity indexes are
-ascending, giving deterministic output independent of host input order.
+`values` and `catalog` are emitted only when needed. A delta extends only
+fields declared by the snapshot, at most once per field. New non-null values
+are appended in deterministic changed-entity then added-entity order and may
+be referenced by additions and columns in that same delta. Existing indexes
+never change. Field groups and entity indexes are ascending, giving
+deterministic output independent of host input order.
 
 Current `HostView` records always contain all 24 fields, so codec-produced
 `unset` groups are empty. A transition to JSON `null` is emitted in `columns`
@@ -121,8 +153,15 @@ once, applies all collected field operations to that clone, and publishes the
 new entity map. This preserves explicit nulls and bounds entity allocation by
 the number of changed entities rather than changed fields.
 
+Before decoding additions or columns, the client validates and applies value
+dictionary extensions. Invalid references, duplicate declarations or
+extensions, empty extensions, duplicate values, undeclared-field extensions,
+and non-append-only data reject the complete delta without changing rows,
+revision, catalog, dictionaries, or subscription invalidations.
+
 An invalid revision chain must not be applied. Recovery is an authoritative
-snapshot on a new connection.
+snapshot on a new connection and replaces all connection-local value
+dictionaries.
 
 ## Producer State
 
@@ -132,7 +171,8 @@ For an accepted delta it:
 1. Builds the complete sorted catalog from the unscoped input.
 2. Filters by the fixed session scope and sorts by `agent_id`.
 3. Finds removals, existing-entity field changes, and additions.
-4. Builds deterministic sparse field groups.
-5. Advances dictionaries, active rows, catalog, and revision.
+4. Copies selected value dictionaries and appends required new values.
+5. Encodes complete additions and deterministic sparse field groups.
+6. Advances dictionaries, active rows, catalog, and revision together.
 
 This core experiment deliberately has no HTTP or frontend integration.

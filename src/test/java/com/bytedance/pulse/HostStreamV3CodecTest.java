@@ -179,6 +179,82 @@ class HostStreamV3CodecTest {
                         MAPPER, 1, List.of(), List.of(alpha, alpha)));
     }
 
+    @Test
+    void snapshotUsesOnlyValueDictionariesThatReduceSerializedBytes() throws Exception {
+        ArrayList<HostView> hosts = new ArrayList<>();
+        for (int index = 0; index < 32; index++) {
+            hosts.add(host(
+                    "agent-" + index,
+                    index,
+                    "cluster-" + index,
+                    index == 0 ? null : "zone-" + (index % 2),
+                    "0." + index));
+        }
+
+        JsonNode snapshot = json(HostStreamV3Codec.session(
+                MAPPER, 1, List.of(), hosts).snapshot());
+        Map<Integer, JsonNode> dictionaries = valueDictionaries(
+                snapshot.at("/dictionaries/values"));
+
+        assertTrue(dictionaries.containsKey(8), "repeated status should be dictionary-coded");
+        assertTrue(dictionaries.containsKey(21), "repeated non-null zones should be dictionary-coded");
+        assertFalse(dictionaries.containsKey(0), "unique agent ids must remain raw");
+        assertFalse(dictionaries.containsKey(2), "unique numeric sequence values must remain raw");
+        assertFalse(dictionaries.containsKey(19), "high-cardinality clusters must remain raw");
+        assertTrue(snapshot.at("/columns/8/0").isIntegralNumber());
+        assertTrue(snapshot.at("/columns/21/0").isNull());
+        int agentSevenIndex = strings(snapshot.at("/dictionaries/entities")).indexOf("agent-7");
+        assertTrue(snapshot.get("columns").get(2).get(agentSevenIndex).isIntegralNumber());
+        assertEquals(7, snapshot.get("columns").get(2).get(agentSevenIndex).asLong());
+
+        Decoded decoded = decode(snapshot);
+        for (HostView host : hosts) {
+            assertEquals(expectedRow(host), decoded.rows.get(host.agentId()));
+        }
+
+        ArrayList<HostView> reversed = new ArrayList<>();
+        for (int index = hosts.size() - 1; index >= 0; index--) {
+            reversed.add(hosts.get(index));
+        }
+        assertEquals(
+                MAPPER.writeValueAsString(snapshot),
+                MAPPER.writeValueAsString(HostStreamV3Codec.session(
+                        MAPPER, 1, List.of(), reversed).snapshot()));
+    }
+
+    @Test
+    void deltaAppendsValuesBeforeUsingReferencesAndReconstructsAllFields() {
+        ArrayList<HostView> initial = new ArrayList<>();
+        for (int index = 0; index < 24; index++) {
+            initial.add(host("agent-" + index, index, "cdn1", "zone-a", "0.10"));
+        }
+        HostStreamV3Codec.Session session = HostStreamV3Codec.session(
+                MAPPER, 10, List.of(), initial);
+        JsonNode snapshot = json(session.snapshot());
+        assertTrue(valueDictionaries(snapshot.at("/dictionaries/values")).containsKey(8));
+
+        ArrayList<HostView> next = new ArrayList<>(initial);
+        HostView changed = hostWithStatus(
+                "agent-0", 99, "cdn1", "zone-b", "0.99", "draining");
+        next.set(0, changed);
+        HostView added = hostWithStatus(
+                "agent-new", 100, "cdn1", "zone-c", "0.50", "starting");
+        next.add(added);
+        JsonNode delta = json(session.delta(11, next));
+
+        Map<Integer, JsonNode> extensions = valueDictionaries(delta.get("values"));
+        assertEquals(List.of("draining", "starting"), strings(extensions.get(8)));
+        assertTrue(column(delta, 8).at("/2/0").isIntegralNumber());
+        assertEquals(1, column(delta, 8).at("/2/0").asInt());
+        assertEquals(2, delta.at("/add/0/2/8").asInt());
+
+        Decoded decoded = decode(snapshot);
+        apply(decoded, delta);
+        assertEquals(expectedRow(changed), decoded.rows.get("agent-0"));
+        assertEquals(24, decoded.rows.get("agent-0").size());
+        assertEquals(expectedRow(added), decoded.rows.get("agent-new"));
+    }
+
     private static JsonNode column(JsonNode delta, int fieldIndex) {
         for (JsonNode column : delta.get("columns")) {
             if (column.get(0).asInt() == fieldIndex) {
@@ -207,20 +283,31 @@ class HostStreamV3CodecTest {
     private static Decoded decode(JsonNode snapshot) {
         List<String> fields = strings(snapshot.at("/dictionaries/fields"));
         List<String> entities = strings(snapshot.at("/dictionaries/entities"));
+        Map<Integer, ArrayList<Object>> dictionaries = decodeValueDictionaries(
+                snapshot.at("/dictionaries/values"));
         Map<String, Map<String, Object>> rows = new LinkedHashMap<>();
         for (int entityIndex = 0; entityIndex < entities.size(); entityIndex++) {
             Map<String, Object> row = new LinkedHashMap<>();
             for (int fieldIndex = 0; fieldIndex < fields.size(); fieldIndex++) {
                 row.put(
                         fields.get(fieldIndex),
-                        scalar(snapshot.get("columns").get(fieldIndex).get(entityIndex)));
+                        decodedScalar(
+                                snapshot.get("columns").get(fieldIndex).get(entityIndex),
+                                dictionaries.get(fieldIndex)));
             }
             rows.put(entities.get(entityIndex), row);
         }
-        return new Decoded(fields, new ArrayList<>(entities), rows);
+        return new Decoded(fields, new ArrayList<>(entities), dictionaries, rows);
     }
 
     private static void apply(Decoded decoded, JsonNode delta) {
+        if (delta.has("values")) {
+            for (JsonNode extension : delta.get("values")) {
+                int fieldIndex = extension.get(0).asInt();
+                ArrayList<Object> values = decoded.valueDictionaries.get(fieldIndex);
+                extension.get(1).forEach(value -> values.add(scalar(value)));
+            }
+        }
         for (JsonNode addition : delta.get("add")) {
             int entityIndex = addition.get(0).asInt();
             String agentId = addition.get(1).asText();
@@ -228,7 +315,11 @@ class HostStreamV3CodecTest {
             decoded.entities.add(agentId);
             Map<String, Object> row = new LinkedHashMap<>();
             for (int fieldIndex = 0; fieldIndex < decoded.fields.size(); fieldIndex++) {
-                row.put(decoded.fields.get(fieldIndex), scalar(addition.get(2).get(fieldIndex)));
+                row.put(
+                        decoded.fields.get(fieldIndex),
+                        decodedScalar(
+                                addition.get(2).get(fieldIndex),
+                                decoded.valueDictionaries.get(fieldIndex)));
             }
             decoded.rows.put(agentId, row);
         }
@@ -242,7 +333,11 @@ class HostStreamV3CodecTest {
             for (int index = 0; index < column.get(1).size(); index++) {
                 int entityIndex = column.get(1).get(index).asInt();
                 pending.computeIfAbsent(entityIndex, ignored -> new LinkedHashMap<>())
-                        .put(field, scalar(column.get(2).get(index)));
+                        .put(
+                                field,
+                                decodedScalar(
+                                        column.get(2).get(index),
+                                        decoded.valueDictionaries.get(column.get(0).asInt())));
             }
         }
         for (Map.Entry<Integer, Map<String, Object>> entry : pending.entrySet()) {
@@ -251,6 +346,30 @@ class HostStreamV3CodecTest {
             clone.putAll(entry.getValue());
             decoded.rows.put(agentId, clone);
         }
+    }
+
+    private static Map<Integer, JsonNode> valueDictionaries(JsonNode declarations) {
+        Map<Integer, JsonNode> result = new LinkedHashMap<>();
+        declarations.forEach(declaration ->
+                result.put(declaration.get(0).asInt(), declaration.get(1)));
+        return result;
+    }
+
+    private static Map<Integer, ArrayList<Object>> decodeValueDictionaries(JsonNode declarations) {
+        Map<Integer, ArrayList<Object>> result = new LinkedHashMap<>();
+        declarations.forEach(declaration -> {
+            ArrayList<Object> values = new ArrayList<>();
+            declaration.get(1).forEach(value -> values.add(scalar(value)));
+            result.put(declaration.get(0).asInt(), values);
+        });
+        return result;
+    }
+
+    private static Object decodedScalar(JsonNode value, List<Object> dictionary) {
+        if (value.isNull() || dictionary == null) {
+            return scalar(value);
+        }
+        return dictionary.get(value.asInt());
     }
 
     private static Object scalar(JsonNode value) {
@@ -263,12 +382,51 @@ class HostStreamV3CodecTest {
         return value.asText();
     }
 
+    private static Map<String, Object> expectedRow(HostView host) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("agent_id", host.agentId());
+        row.put("epoch", host.epoch());
+        row.put("seq", host.seq());
+        row.put("ttl_ms", host.ttlMs());
+        row.put("observed_at_ms", host.observedAtMs());
+        row.put("expire_at_ms", host.expireAtMs());
+        row.put("last_observed_age_ms", host.lastObservedAgeMs());
+        row.put("heartbeat_confirmations", (long) host.heartbeatConfirmations());
+        row.put("status", host.status());
+        row.put("source", host.source());
+        row.put("coordinator_id", host.coordinatorId());
+        row.put("group_id", host.groupId());
+        row.put("group_mode", host.groupMode());
+        row.put("leader_agent_id", host.leaderAgentId());
+        row.put("leader_url", host.leaderUrl());
+        row.put("group_size", (long) host.groupSize());
+        row.put("group_size_limit", (long) host.groupSizeLimit());
+        row.put("host", host.host());
+        row.put("ip", host.ip());
+        row.put("cluster", host.cluster());
+        row.put("area", host.area());
+        row.put("zone", host.zone());
+        row.put("role", host.role());
+        row.put("load", host.load());
+        return row;
+    }
+
     private static HostView host(
             String agentId,
             long seq,
             String cluster,
             String zone,
             String load) {
+        return hostWithStatus(agentId, seq, cluster, zone, load, "alive");
+    }
+
+    private static HostView hostWithStatus(
+            String agentId,
+            long seq,
+            String cluster,
+            String zone,
+            String load,
+            String status) {
         return new HostView(
                 agentId,
                 1,
@@ -278,7 +436,7 @@ class HostStreamV3CodecTest {
                 1_710_000_015_000L + seq,
                 seq,
                 3,
-                "alive",
+                status,
                 "direct",
                 "coordinator-a",
                 "direct",
@@ -300,5 +458,6 @@ class HostStreamV3CodecTest {
     private record Decoded(
             List<String> fields,
             ArrayList<String> entities,
+            Map<Integer, ArrayList<Object>> valueDictionaries,
             Map<String, Map<String, Object>> rows) {}
 }
