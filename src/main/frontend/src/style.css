@@ -417,6 +417,8 @@ body {
 }
 .eventbus-summary-actions {
   display: flex;
+  grid-column: 3;
+  grid-row: 1;
   gap: 12px;
   align-items: center;
   justify-content: flex-end;
@@ -424,6 +426,7 @@ body {
 .eventbus-pipeline-statuses {
   display: grid;
   grid-column: 1 / -1;
+  grid-row: 2;
   gap: 7px;
   padding-top: 2px;
 }
@@ -2067,6 +2070,11 @@ body {
   .metrics-control-grid,
   .metrics-insight-grid {
     grid-template-columns: 1fr;
+  }
+  .eventbus-summary-actions,
+  .eventbus-pipeline-statuses {
+    grid-column: auto;
+    grid-row: auto;
   }
   .eventbus-flow,
   .eventbus-form-grid,

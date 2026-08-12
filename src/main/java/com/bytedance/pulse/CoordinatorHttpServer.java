@@ -625,6 +625,7 @@ public class CoordinatorHttpServer {
         exchange.sendResponseHeaders(200, 0);
 
         boolean once = "true".equalsIgnoreCase(queryValue(exchange.getRequestURI(), "once"));
+        long minIntervalMs = 1_000 * positiveLong("PULSE_HOST_SSE_MIN_INTERVAL_SECONDS", 5);
         long revision = service.hostRevision();
         try (OutputStream output = exchange.getResponseBody()) {
             writeSse(output, new SseEvent(
@@ -646,7 +647,8 @@ public class CoordinatorHttpServer {
                     break;
                 }
                 if (nextRevision > revision) {
-                    revision = nextRevision;
+                    sleepQuietly(minIntervalMs);
+                    revision = service.hostRevision();
                     writeSse(output, new SseEvent(
                             String.valueOf(revision),
                             "hosts.snapshot",

@@ -836,7 +836,6 @@ function App() {
   const [clusterSnapshots, setClusterSnapshots] = useState<Record<string, TaskSnapshot>>({});
   const [taskType, setTaskType] = useState('prepare_disk_layout_dry_run');
   const [collapsedClusters, setCollapsedClusters] = useState<Record<string, boolean>>(() => loadCollapsedClusters());
-  const viewport = useRef({ left: 0, top: 0 });
   const snapshotVersionRef = useRef('');
   const snapshotRevisionRef = useRef(0);
   const outputRequestRef = useRef('');
@@ -848,6 +847,7 @@ function App() {
   const scrollingRef = useRef(false);
   const scrollIdleTimerRef = useRef<number | null>(null);
   const pendingHostsRef = useRef<HostView[] | null>(null);
+  const hostsPayloadRef = useRef('');
   const activeTargetHost = activeHost || activeCluster?.hosts[0] || null;
   const clusterAgentKey = useMemo(() => (activeCluster?.hosts || []).map(agentId).join(','), [activeCluster?.name, activeCluster?.hosts]);
 
@@ -1117,7 +1117,6 @@ function App() {
   }
 
   async function refreshHosts() {
-    viewport.current = { left: window.scrollX, top: window.scrollY };
     try {
       const data = await fetchJson<HostView[]>('/api/hosts');
       if (scrollingRef.current) {
@@ -1134,9 +1133,11 @@ function App() {
   }
 
   function applyHosts(data: HostView[]) {
+    const payload = JSON.stringify(data);
+    if (payload === hostsPayloadRef.current) return;
+    hostsPayloadRef.current = payload;
     recordLoadSamples(data);
     setHosts(data);
-    requestAnimationFrame(() => window.scrollTo(viewport.current.left, viewport.current.top));
   }
 
   async function refreshSnapshot(host: HostView) {
@@ -1697,6 +1698,13 @@ function EventBusPanel({
         <span className="eventbus-flow-link"><ArrowRightOutlined /><small>Delivery</small></span>
         <span><SendOutlined /><b>Sink</b><em>{view?.config.sinks.length || 0} targets</em></span>
       </div>
+      <div className="eventbus-summary-actions">
+        <div className="eventbus-live-count">
+          <span className={activeCount ? 'is-active' : ''}>{activeCount}</span>
+          <small>待推送事件</small>
+        </div>
+        <Button type="primary" icon={<SettingOutlined />} onClick={openEditor}>管理事件流</Button>
+      </div>
       {pipelineViews.length > 0 && <div className="eventbus-pipeline-statuses" aria-live="polite">
         {pipelineViews.map(({ route, pending, lastSuccessAt, lastDelivered, error, state }) =>
           <div className={`eventbus-pipeline-status is-${state}`} key={route.id}>
@@ -1710,13 +1718,6 @@ function EventBusPanel({
             <time>{lastSuccessAt ? new Date(lastSuccessAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}</time>
           </div>)}
       </div>}
-      <div className="eventbus-summary-actions">
-        <div className="eventbus-live-count">
-          <span className={activeCount ? 'is-active' : ''}>{activeCount}</span>
-          <small>待推送事件</small>
-        </div>
-        <Button type="primary" icon={<SettingOutlined />} onClick={openEditor}>管理事件流</Button>
-      </div>
       {statusErrors.length > 0 && <div className="eventbus-error-strip">
         {statusErrors.map(([key, status]) => <span key={key}><ExclamationCircleFilled /> {key} · {status.last_error}</span>)}
       </div>}
@@ -1916,6 +1917,18 @@ function EventBusPanel({
       </div>}
     </Modal>
   </>;
+}
+
+function sameMetricHostScope(left: HostView[], right: HostView[]) {
+  if (left.length !== right.length) return false;
+  return left.every((host, index) => {
+    const next = right[index];
+    return agentId(host) === agentId(next)
+      && host.ip === next.ip
+      && host.cluster === next.cluster
+      && host.status === next.status
+      && (host.groupMode || host.group_mode) === (next.groupMode || next.group_mode);
+  });
 }
 
 const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }) {
@@ -2305,7 +2318,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
       </div>
     </div>
   </Card>;
-});
+}, (previous, next) => sameMetricHostScope(previous.hosts, next.hosts));
 
 type MetricPreset = {
   key: string;

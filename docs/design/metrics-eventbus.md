@@ -117,6 +117,8 @@ The sink test endpoint is strict: it tests the configured sink itself and return
 
 `/api/eventbus/stream` is the only live-update path for the EventBus UI. It sends `eventbus.snapshot` SSE events when the persisted EventBus revision changes. The frontend updates only the EventBus component state; it does not poll or refresh the full page.
 
+`/api/hosts/stream` also remains SSE-only, but heartbeat fan-in must not become render fan-out. The Coordinator coalesces host revisions into at most one `hosts.snapshot` every five seconds by default (`PULSE_HOST_SSE_MIN_INTERVAL_SECONDS`). The initial snapshot is immediate. The frontend ignores identical snapshots, never restores scroll position after a live update, and isolates the Metrics panel from heartbeat-only host changes. This keeps control-plane feedback stable without polling or full-page refresh behavior.
+
 ## Persistence and Security
 
 The EventBus state file contains configuration plus per-route/sink delivery status. Updates use a temporary file and atomic rename. On POSIX filesystems the file mode is `0600`.
