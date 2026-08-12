@@ -37,6 +37,10 @@ class LarkWebhookSinkPluginTest {
         assertEquals("interactive", payload.get("msg_type").asText());
         assertEquals("2.0", payload.at("/card/schema").asText());
         assertTrue(payload.get("card").get("elements") == null);
+        assertEquals("10px 12px 10px 12px", payload.at("/card/header/padding").asText());
+        assertEquals(
+                "6px 8px 6px 8px",
+                payload.at("/card/body/elements/0/columns/0/padding").asText());
         assertEquals("red", payload.at("/card/header/template").asText());
         assertEquals(
                 LarkWebhookSinkPlugin.sign(now / 1_000, "private-secret"),

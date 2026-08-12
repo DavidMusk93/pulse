@@ -539,6 +539,10 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.eventbus-pipeline-status .eventbus-pipeline-error {
+  color: #b42318;
+  font-weight: 560;
+}
 .eventbus-pipeline-status time {
   justify-self: end;
 }
@@ -561,19 +565,6 @@ body {
   margin-top: 3px;
   color: #86868b;
   font-size: 10px;
-}
-.eventbus-error-strip {
-  display: flex;
-  grid-column: 1 / -1;
-  gap: 8px;
-  overflow-x: auto;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255, 59, 48, .12);
-  color: #b42318;
-  font-size: 11px;
-}
-.eventbus-error-strip span {
-  flex: 0 0 auto;
 }
 .eventbus-modal {
   height: min(61.8vh, 760px);

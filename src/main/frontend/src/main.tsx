@@ -1762,15 +1762,14 @@ function EventBusPanel({
             <span className="eventbus-pipeline-status-dot" aria-hidden="true" />
             <div>
               <b>{route.name || route.id}</b>
-              <small>{error || (state === 'pending' ? '等待发布门禁' : state === 'delivered' ? '最近一次推送成功' : '等待事件')}</small>
+              <small className={error ? 'eventbus-pipeline-error' : undefined} title={error || undefined}>
+                {error || (state === 'pending' ? '等待发布门禁' : state === 'delivered' ? '最近一次推送成功' : '等待事件')}
+              </small>
             </div>
             <span><strong>{pending}</strong><small>待推送</small></span>
             <span><strong>{lastDelivered}</strong><small>最近推送</small></span>
             <time>{lastSuccessAt ? new Date(lastSuccessAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}</time>
           </div>)}
-      </div>}
-      {statusErrors.length > 0 && <div className="eventbus-error-strip">
-        {statusErrors.map(([key, status]) => <span key={key}><ExclamationCircleFilled /> {key} · {status.last_error}</span>)}
       </div>}
     </div>
     <Modal

@@ -166,7 +166,7 @@ final class LarkWebhookSinkPlugin implements EventPlugin.Sink {
                 "subtitle", Map.of(
                         "tag", "plain_text",
                         "content", "按持续时间降序 · " + events.size() + " 个活动事件"),
-                "padding", "10px 12px"));
+                "padding", "10px 12px 10px 12px"));
         card.put("body", Map.of(
                 "direction", "vertical",
                 "padding", "8px",
@@ -202,7 +202,7 @@ final class LarkWebhookSinkPlugin implements EventPlugin.Sink {
                 "tag", "column",
                 "width", "weighted",
                 "weight", 1,
-                "padding", "6px 8px",
+                "padding", "6px 8px 6px 8px",
                 "elements", List.of(Map.of(
                         "tag", "markdown",
                         "content", label + "\n**" + value + "**",
