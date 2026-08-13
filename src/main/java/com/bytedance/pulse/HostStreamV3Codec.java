@@ -78,6 +78,21 @@ public final class HostStreamV3Codec {
             this.snapshot = snapshotEnvelope(mapper);
         }
 
+        private Session(Session template) {
+            this.scope = template.scope;
+            this.entities = new ArrayList<>(template.entities);
+            this.snapshot = template.snapshot;
+            this.revision = template.revision;
+            this.catalog = template.catalog;
+            this.activeHosts = new ArrayList<>(template.activeHosts);
+            this.valueDictionaries = copyValueDictionaries(
+                    template.valueDictionaries);
+        }
+
+        Session fork() {
+            return new Session(this);
+        }
+
         public Object snapshot() {
             return snapshot;
         }

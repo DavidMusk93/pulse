@@ -114,23 +114,6 @@ type HostView = {
   state?: Record<string, any>;
 };
 
-type HostDelta = {
-  schema?: string;
-  base_revision?: number;
-  revision?: number;
-  upserts?: Array<Partial<HostView> & { agent_id: string }>;
-  removed?: string[];
-  available_clusters?: string[];
-};
-
-type HostSnapshotV2 = {
-  schema: 'hosts.v2';
-  revision: number;
-  scope: string[];
-  available_clusters: string[];
-  hosts: HostView[];
-};
-
 type TaskSnapshot = {
   agent_id?: string;
   execution_queue?: any[];
@@ -295,37 +278,6 @@ function mergeObject<T extends Record<string, any>>(current: T, patch: Partial<T
   return next;
 }
 
-function applyHostDelta(current: HostView[], delta: HostDelta) {
-  const removed = new Set(delta.removed || []);
-  const patches = new Map((delta.upserts || []).map(patch => [patch.agent_id, patch]));
-  if (!removed.size && !patches.size) return current;
-  const seen = new Set<string>();
-  let changed = false;
-  const next = current
-    .filter(host => {
-      const keep = !removed.has(agentId(host));
-      if (!keep) changed = true;
-      return keep;
-    })
-    .map(host => {
-      const id = agentId(host);
-      const patch = patches.get(id);
-      if (!patch) return host;
-      seen.add(id);
-      const merged = mergeObject(host, patch);
-      if (sameHost(host, merged)) return host;
-      changed = true;
-      return merged;
-    });
-  patches.forEach((patch, id) => {
-    if (!seen.has(id) && !removed.has(id)) {
-      next.push(patch as HostView);
-      changed = true;
-    }
-  });
-  return changed ? next : current;
-}
-
 function sameHost(left: HostView, right: HostView) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
@@ -371,17 +323,13 @@ function formatTraffic(bytes: number) {
   return `${Math.round(bytes)} B`;
 }
 
-const SseTrafficCard = memo(function SseTrafficCard({
-  hostStreamVersion
-}: {
-  hostStreamVersion: 2 | 3;
-}) {
+const SseTrafficCard = memo(function SseTrafficCard() {
   const traffic = useSseTraffic();
   return <Card className="sse-traffic-card">
     <span className="sse-traffic-title">SSE 流量</span>
     <strong className="sse-traffic-value">{formatTraffic(traffic.bytesPerSecond)}<small>/s</small></strong>
     <div className="sse-traffic-meta">
-      <span>Host V{hostStreamVersion}</span>
+      <span>Control V4</span>
       <span>{traffic.eventsPerSecond.toFixed(1)} events/s</span>
       <span>累计 {formatTraffic(traffic.totalBytes)}</span>
     </div>
@@ -908,6 +856,23 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json();
 }
 
+const controlEvents = new EventTarget();
+
+function publishControlEvent(event: MessageEvent<string>) {
+  controlEvents.dispatchEvent(new CustomEvent(event.type, { detail: event }));
+}
+
+function subscribeControlEvent(
+  type: string,
+  listener: (event: MessageEvent<string>) => void
+) {
+  const wrapped = (event: Event) => listener(
+    (event as CustomEvent<MessageEvent<string>>).detail
+  );
+  controlEvents.addEventListener(type, wrapped);
+  return () => controlEvents.removeEventListener(type, wrapped);
+}
+
 function parseTaskArgs(input: string) {
   return input.split(/\s+/).map(part => part.trim()).filter(Boolean);
 }
@@ -979,7 +944,6 @@ function App() {
   const [appliedHostClusterScope, setAppliedHostClusterScope] = useState<string | null>(null);
   const [availableHostClusters, setAvailableHostClusters] = useState<string[]>([]);
   const [hostStreamGeneration, setHostStreamGeneration] = useState(0);
-  const [hostStreamVersion, setHostStreamVersion] = useState<2 | 3>(3);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [activeHost, setActiveHost] = useState<HostView | null>(null);
@@ -1000,7 +964,6 @@ function App() {
   const focusedTaskIdRef = useRef('');
   const outputLogRef = useRef<OutputLog | null>(null);
   const outputLogFrameRef = useRef<number | null>(null);
-  const hostRevisionRef = useRef<number | null>(null);
   const hostV3StateRef = useRef<HostStreamV3State<HostView> | null>(null);
   const hostClustersRef = useRef<HTMLElement | null>(null);
   const hostScopeRequestRef = useRef(hostClusterScope);
@@ -1223,6 +1186,39 @@ function App() {
     };
   }
 
+  function streamRunningOutput(agentIdValue: string, stream: any) {
+    const taskId = stream?.task_id || stream?.taskId;
+    if (!agentIdValue || !taskId) return;
+    const key = `${agentIdValue}:${taskId}:live`;
+    if (outputRequestRef.current === key && outputSourceRef.current) return;
+    outputRequestRef.current = key;
+    closeOutputStream();
+    replaceOutputLog(key, '');
+    if (!('EventSource' in window)) {
+      setOutput('当前浏览器不支持实时任务输出');
+      return;
+    }
+    const streamUrl = stream.output_stream_url || stream.outputStreamUrl
+      || `/api/agents/${encodeURIComponent(agentIdValue)}/tasks/${encodeURIComponent(taskId)}/output_stream`;
+    const source = new EventSource(streamUrl);
+    outputSourceRef.current = source;
+    source.addEventListener('task.output_start', trackedSseListener(event => {
+      if (outputRequestRef.current !== key) return;
+      const offset = Number(JSON.parse(event.data).offset || 0);
+      if (offset === 0) replaceOutputLog(key, '');
+    }));
+    source.addEventListener('task.output_chunk', trackedSseListener(event => {
+      if (outputRequestRef.current !== key) return;
+      const payload = JSON.parse(event.data);
+      const chunk = String(payload.chunk || '');
+      appendCompletionOutputLog(key, chunk, chunk);
+    }));
+    source.addEventListener('task.output_cursor', trackOnlySseEvent);
+    source.onerror = () => {
+      // EventSource reconnects with Last-Event-ID and requests only appended output.
+    };
+  }
+
   function applyTaskSnapshot(data: TaskSnapshot) {
     const version = snapshotVersion(data);
     if (snapshotVersionRef.current !== version) {
@@ -1234,14 +1230,12 @@ function App() {
     const selectedCompletion = completionForTask(data, selectedTaskId);
     const selectedStream = selectedTaskId ? streamForTask(data, selectedTaskId) : null;
     if (selectedTaskId && !selectedCompletion) {
-      if (outputRequestRef.current) {
-        outputRequestRef.current = '';
-        closeOutputStream();
-      }
       if (selectedStream) {
         const selectedAgent = data.agent_id || data.agentId || '';
-        syncLiveOutputLog(`${selectedAgent}:${selectedTaskId}:live`, streamOutput(selectedStream));
+        streamRunningOutput(selectedAgent, selectedStream);
       } else {
+        outputRequestRef.current = '';
+        closeOutputStream();
         const waiting = '任务已提交，等待 agent 实时输出...';
         clearOutputLog();
         setOutput(current => current === waiting ? current : waiting);
@@ -1342,75 +1336,43 @@ function App() {
       refreshHosts(hostClusterScope, controller.signal);
       return () => controller.abort();
     }
-    hostRevisionRef.current = null;
     hostV3StateRef.current = null;
-    const query = new URLSearchParams({ v: String(hostStreamVersion) });
+    const query = new URLSearchParams();
     const requestedScope = requestedHostClusterScope(hostClusterScope);
     query.set('clusters', requestedScope);
-    const events = new EventSource(`/api/hosts/stream?${query}`);
+    const controlAgentIds = activeCluster
+      ? activeCluster.hosts.map(agentId)
+      : activeTargetHost ? [agentId(activeTargetHost)] : [];
+    if (controlAgentIds.length) query.set('agents', controlAgentIds.join(','));
+    const events = new EventSource(`/api/control/stream?${query}`);
     let recoveryQueued = false;
     const isCurrentScopeRequest = () => hostScopeRequestRef.current === hostClusterScope;
     const recover = (message: string) => {
       if (recoveryQueued) return;
       recoveryQueued = true;
       events.close();
-      hostRevisionRef.current = null;
       hostV3StateRef.current = null;
       setAppliedHostClusterScope(null);
       setError(message);
       setHostStreamGeneration(generation => generation + 1);
-    };
-    const fallbackToV2 = () => {
-      events.close();
-      hostRevisionRef.current = null;
-      hostV3StateRef.current = null;
-      setAppliedHostClusterScope(null);
-      setError('Coordinator 暂不支持 Host SSE V3，已回退 V2');
-      setHostStreamVersion(2);
     };
     events.addEventListener('hosts.snapshot', trackedSseListener(event => {
       if (!isCurrentScopeRequest()) return;
       try {
         const parsed = JSON.parse(event.data);
         const expectedScope = [requestedScope];
-        if (hostStreamVersion === 3) {
-          if (Array.isArray(parsed) || parsed?.schema === 'hosts.v2') {
-            fallbackToV2();
-            return;
-          }
-          const snapshot = decodeHostSnapshotV3<HostView>(parsed);
-          if (JSON.stringify(snapshot.scope) !== JSON.stringify(expectedScope)) {
-            throw new Error('Host SSE V3 snapshot scope mismatch');
-          }
-          hostV3StateRef.current = snapshot;
-          hostRevisionRef.current = snapshot.revision;
-          setAvailableHostClusters(snapshot.catalog);
-          const selected = selectHostCluster(hostClusterScope, snapshot.catalog);
-          if (selected !== hostClusterScope) {
-            changeHostClusterScope(selected);
-            return;
-          }
-          applyHosts(snapshot.hosts);
-        } else {
-          const snapshot = parsed as HostSnapshotV2;
-          if (snapshot.schema !== 'hosts.v2' || !Number.isFinite(snapshot.revision)) {
-            throw new Error('Host SSE V2 snapshot contract mismatch');
-          }
-          if (JSON.stringify(snapshot.scope || []) !== JSON.stringify(expectedScope)) {
-            throw new Error('Host SSE V2 snapshot scope mismatch');
-          }
-          hostRevisionRef.current = snapshot.revision;
-          setAvailableHostClusters(snapshot.available_clusters || []);
-          const selected = selectHostCluster(
-            hostClusterScope,
-            snapshot.available_clusters || []
-          );
-          if (selected !== hostClusterScope) {
-            changeHostClusterScope(selected);
-            return;
-          }
-          applyHosts(snapshot.hosts || []);
+        const snapshot = decodeHostSnapshotV3<HostView>(parsed);
+        if (JSON.stringify(snapshot.scope) !== JSON.stringify(expectedScope)) {
+          throw new Error('Host SSE V3 snapshot scope mismatch');
         }
+        hostV3StateRef.current = snapshot;
+        setAvailableHostClusters(snapshot.catalog);
+        const selected = selectHostCluster(hostClusterScope, snapshot.catalog);
+        if (selected !== hostClusterScope) {
+          changeHostClusterScope(selected);
+          return;
+        }
+        applyHosts(snapshot.hosts);
         setAppliedHostClusterScope(hostClusterScope);
         setError('');
         setLoading(false);
@@ -1422,62 +1384,47 @@ function App() {
       if (!isCurrentScopeRequest()) return;
       try {
         const parsed = JSON.parse(event.data);
-        if (hostStreamVersion === 3) {
-          const previous = hostV3StateRef.current;
-          if (!previous) throw new Error('Host SSE V3 delta arrived before snapshot');
-          const next = applyHostDeltaV3(previous, parsed);
-          hostV3StateRef.current = next;
-          hostRevisionRef.current = next.revision;
-          if (next.catalog !== previous.catalog) {
-            setAvailableHostClusters(next.catalog);
-            const selected = selectHostCluster(hostClusterScope, next.catalog);
-            if (selected !== hostClusterScope) {
-              changeHostClusterScope(selected);
-              return;
-            }
-          }
-          if (next.hosts !== previous.hosts) {
-            recordLoadSamples(next.hosts);
-            setHosts(next.hosts);
-          }
-          setError('');
-          return;
-        }
-        const delta = parsed as HostDelta;
-        if (
-          delta.schema !== 'hosts.v2'
-          || hostRevisionRef.current === null
-          || delta.base_revision !== hostRevisionRef.current
-          || !Number.isFinite(delta.revision)
-          || (delta.revision as number) <= hostRevisionRef.current
-        ) {
-          recover('Host SSE 版本断层，正在重新同步');
-          return;
-        }
-        hostRevisionRef.current = delta.revision as number;
-        if (delta.available_clusters) {
-          setAvailableHostClusters(delta.available_clusters);
-          const selected = selectHostCluster(hostClusterScope, delta.available_clusters);
+        const previous = hostV3StateRef.current;
+        if (!previous) throw new Error('Host SSE V3 delta arrived before snapshot');
+        const next = applyHostDeltaV3(previous, parsed);
+        hostV3StateRef.current = next;
+        if (next.catalog !== previous.catalog) {
+          setAvailableHostClusters(next.catalog);
+          const selected = selectHostCluster(hostClusterScope, next.catalog);
           if (selected !== hostClusterScope) {
             changeHostClusterScope(selected);
             return;
           }
         }
-        setHosts(current => {
-          const next = applyHostDelta(current, delta);
-          if (next !== current) recordLoadSamples(next);
-          return next;
-        });
+        if (next.hosts !== previous.hosts) {
+          recordLoadSamples(next.hosts);
+          setHosts(next.hosts);
+        }
         setError('');
       } catch (err) {
         recover(err instanceof Error ? err.message : String(err));
       }
     }));
+    [
+      'eventbus.snapshot',
+      'storage.health',
+      'metric.invalidate',
+      'task.snapshot',
+      'ping',
+      'control.resync_required'
+    ].forEach(type => events.addEventListener(type, trackedSseListener(publishControlEvent)));
     events.onerror = () => {
       if (isCurrentScopeRequest()) setError('Host SSE 正在重连');
     };
     return () => events.close();
-  }, [hostClusterScope, hostStreamGeneration, hostStreamVersion]);
+  }, [
+    hostClusterScope,
+    hostStreamGeneration,
+    activeTargetHost?.agent_id,
+    activeTargetHost?.agentId,
+    activeCluster?.name,
+    clusterAgentKey
+  ]);
 
   useEffect(() => () => closeOutputStream(), []);
 
@@ -1495,22 +1442,16 @@ function App() {
       };
     }
 
-    const id = encodeURIComponent(agentId(activeTargetHost));
-    const events = new EventSource(`/api/agents/${id}/tasks/stream`);
     const handleSnapshot = (event: MessageEvent<string>) => {
       try {
-        applyTaskSnapshot(JSON.parse(event.data) as TaskSnapshot);
+        const data = JSON.parse(event.data) as TaskSnapshot;
+        const id = data.agent_id || (data as any).agentId || '';
+        if (id === agentId(activeTargetHost)) applyTaskSnapshot(data);
       } catch (err) {
         setOutput(String(err));
       }
     };
-    events.addEventListener('task.snapshot', trackedSseListener(handleSnapshot));
-    events.addEventListener('hello', trackOnlySseEvent);
-    events.addEventListener('ping', trackOnlySseEvent);
-    events.onerror = () => {
-      // EventSource reconnects automatically; keep current output visible.
-    };
-    return () => events.close();
+    return subscribeControlEvent('task.snapshot', trackedSseListener(handleSnapshot));
   }, [activeTargetHost?.ip, activeTargetHost?.agent_id, activeTargetHost?.agentId, activeCluster?.name]);
 
   useEffect(() => {
@@ -1542,8 +1483,6 @@ function App() {
       };
     }
 
-    const agents = cluster.hosts.map(host => encodeURIComponent(agentId(host))).join(',');
-    const events = new EventSource(`/api/tasks/stream?agents=${agents}`);
     const handleSnapshot = (event: MessageEvent<string>) => {
       try {
         const data = JSON.parse(event.data) as TaskSnapshot;
@@ -1558,15 +1497,13 @@ function App() {
         setOutput(String(err));
       }
     };
-    events.addEventListener('task.snapshot', trackedSseListener(handleSnapshot));
-    events.addEventListener('hello', trackOnlySseEvent);
-    events.addEventListener('ping', trackOnlySseEvent);
-    events.onerror = () => {
-      // EventSource reconnects automatically; keep the current cluster result visible.
-    };
+    const unsubscribe = subscribeControlEvent(
+      'task.snapshot',
+      trackedSseListener(handleSnapshot)
+    );
     return () => {
       disposed = true;
-      events.close();
+      unsubscribe();
     };
   }, [activeCluster?.name, clusterAgentKey, batchSummary?.updatedAt]);
 
@@ -1673,7 +1610,7 @@ function App() {
           <Card><Statistic title="主机" value={hosts.length} suffix="台" loading={loading}/></Card>
           <Card><Statistic title="在线率" value={hosts.length ? Math.round(alive * 100 / hosts.length) : 0} suffix="%"/></Card>
           <Card><Statistic title="5min AVG" value={formatLoad(avgLoad)}/></Card>
-          <SseTrafficCard hostStreamVersion={hostStreamVersion} />
+          <SseTrafficCard />
         </div>
       </section>
 
@@ -1934,9 +1871,8 @@ function EventBusPanel({
       load();
       return;
     }
-    const events = new EventSource('/api/eventbus/stream');
-    events.onopen = () => setStreamState('connected');
-    events.addEventListener('eventbus.snapshot', trackedSseListener(event => {
+    setStreamState('connecting');
+    return subscribeControlEvent('eventbus.snapshot', trackedSseListener(event => {
       try {
         setView(JSON.parse(event.data) as EventBusView);
         setStreamState('connected');
@@ -1944,8 +1880,6 @@ function EventBusPanel({
         setStreamState('reconnecting');
       }
     }));
-    events.onerror = () => setStreamState('reconnecting');
-    return () => events.close();
   }, [load]);
 
   const plugins = view?.plugins || [];
@@ -2472,18 +2406,16 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
       setLiveStatus('fallback');
       return;
     }
-    const events = new EventSource('/api/metrics/stream');
-    events.onopen = () => setLiveStatus('connected');
-    events.addEventListener('hello', trackOnlySseEvent);
-    events.addEventListener('ping', trackOnlySseEvent);
-    events.addEventListener('storage.health', trackedSseListener(event => {
+    setLiveStatus('connecting');
+    const unsubscribeStorage = subscribeControlEvent('storage.health', trackedSseListener(event => {
       try {
         setStorage(JSON.parse(event.data) as MetricStorageHealth);
+        setLiveStatus('connected');
       } catch {
         setLiveStatus('degraded');
       }
     }));
-    events.addEventListener('metric.invalidate', trackedSseListener(event => {
+    const unsubscribeInvalidate = subscribeControlEvent('metric.invalidate', trackedSseListener(event => {
       const invalidation = parseInvalidation(event.data);
       const activeMetric = metricRef.current;
       if (!invalidation || (invalidation.metrics.length && !invalidation.metrics.includes(activeMetric))) {
@@ -2503,8 +2435,10 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
       queryController.invalidate();
       setInvalidatedRange(current => mergeInvalidation(current, invalidation));
     }));
-    events.onerror = () => setLiveStatus('reconnecting');
-    return () => events.close();
+    return () => {
+      unsubscribeStorage();
+      unsubscribeInvalidate();
+    };
   }, [queryController]);
 
   useEffect(() => () => {

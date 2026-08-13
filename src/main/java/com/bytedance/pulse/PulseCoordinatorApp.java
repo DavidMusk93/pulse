@@ -20,6 +20,7 @@ public final class PulseCoordinatorApp {
         CoordinatorHttpServer server = new CoordinatorHttpServer(service, bindHost, port, eventBusService);
         Runtime.getRuntime().addShutdownHook(new Thread(
                 () -> {
+                    closeQuietly(server::stop);
                     closeQuietly(eventBusService);
                     closeQuietly(metricStorage);
                 },

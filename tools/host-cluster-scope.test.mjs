@@ -127,6 +127,14 @@ test('metrics queries require explicit activation before loading or live compens
   );
   assert.match(metricsPanel, /const compensationSequence = \+\+compensationSequenceRef\.current/);
   assert.match(metricsPanel, /compensationSequenceRef\.current !== compensationSequence/);
-  assert.match(metricsPanel, /return \(\) => events\.close\(\);\n  }, \[queryController\]\);/);
+  assert.match(
+    metricsPanel,
+    /const unsubscribeStorage = subscribeControlEvent\('storage\.health'/
+  );
+  assert.match(
+    metricsPanel,
+    /const unsubscribeInvalidate = subscribeControlEvent\('metric\.invalidate'/
+  );
+  assert.doesNotMatch(metricsPanel, /new EventSource\('\/api\/metrics\/stream'\)/);
   assert.match(metricsPanel, /\{metricsActivated \? '刷新时序' : '开始查询'\}/);
 });

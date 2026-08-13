@@ -245,7 +245,9 @@ public class AgentTaskRunner {
         Thread outputReader = null;
         try {
             if (!Files.isRegularFile(scriptPath)) {
-                enqueueResultMessages(resultMessages(replyTo, taskId, traceId, taskType, "failed", null, started, clock.millis(), "", "script not found"));
+                finishTask(taskId, resultMessages(
+                        replyTo, taskId, traceId, taskType, "failed", null,
+                        started, clock.millis(), "", "script not found"));
                 return;
             }
             List<String> command = new ArrayList<>();
@@ -267,10 +269,10 @@ public class AgentTaskRunner {
             outputReader.start();
             process.waitFor();
             long finishedAt = clock.millis();
-            joinQuietly(outputReader);
+            awaitOutputReader(outputReader, process);
             int exitCode = process.exitValue();
             String finalOutput = output.snapshot();
-            enqueueResultMessages(resultMessages(
+            finishTask(taskId, resultMessages(
                     replyTo,
                     taskId,
                     traceId,
@@ -284,10 +286,12 @@ public class AgentTaskRunner {
         } catch (Exception exception) {
             if (process != null) {
                 process.destroyForcibly();
+                closeQuietly(process.getInputStream());
             }
-            enqueueResultMessages(resultMessages(replyTo, taskId, traceId, taskType, "failed", null, started, clock.millis(), "", exception.getMessage()));
-        } finally {
-            runningTasks.remove(taskId);
+            joinQuietly(outputReader, 1_000);
+            finishTask(taskId, resultMessages(
+                    replyTo, taskId, traceId, taskType, "failed", null,
+                    started, clock.millis(), "", exception.getMessage()));
         }
     }
 
@@ -314,24 +318,80 @@ public class AgentTaskRunner {
         }
     }
 
-    private static void joinQuietly(Thread thread) {
+    private static void awaitOutputReader(Thread thread, Process process)
+            throws Exception {
+        if (thread == null) {
+            return;
+        }
+        thread.join(5_000);
+        if (!thread.isAlive()) {
+            return;
+        }
+        closeQuietly(process.getInputStream());
+        thread.join(1_000);
+        if (thread.isAlive()) {
+            throw new IllegalStateException("task output reader did not finish");
+        }
+    }
+
+    private static void joinQuietly(Thread thread, long timeoutMs) {
         if (thread == null) {
             return;
         }
         try {
-            thread.join(1_000);
+            thread.join(timeoutMs);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
         }
     }
 
+    private static void closeQuietly(java.io.Closeable resource) {
+        try {
+            resource.close();
+        } catch (Exception ignored) {
+        }
+    }
+
     private void drainOutputChunksToPendingReplies() {
         for (RunningTask task : runningTasks.values()) {
+            drainTaskReplies(task, MAX_STREAM_CHUNKS_PER_DRAIN);
+        }
+    }
+
+    private void finishTask(String taskId, List<PulseMessage> terminalReplies) {
+        RunningTask task = runningTasks.get(taskId);
+        if (task == null) {
+            enqueueResultMessages(terminalReplies);
+            return;
+        }
+        task.finish(terminalReplies);
+    }
+
+    private void drainTaskReplies(RunningTask task, int outputLimit) {
+        synchronized (task) {
             int drained = 0;
             OutputChunk chunk;
-            while (drained < MAX_STREAM_CHUNKS_PER_DRAIN && (chunk = task.pollOutput()) != null) {
+            while (drained < outputLimit && (chunk = task.peekOutput()) != null) {
+                if (!enqueuePending(new PendingReply(
+                        streamMessage(task, chunk), REPLY_REPLAY_SENDS))) {
+                    return;
+                }
+                task.removeOutput();
                 drained++;
-                enqueuePending(new PendingReply(streamMessage(task, chunk), REPLY_REPLAY_SENDS));
+            }
+            if (task.peekOutput() != null) {
+                return;
+            }
+            PulseMessage terminal;
+            while ((terminal = task.peekTerminal()) != null) {
+                if (!enqueuePending(new PendingReply(
+                        terminal, REPLY_REPLAY_SENDS))) {
+                    return;
+                }
+                task.removeTerminal();
+            }
+            if (task.isFinished()) {
+                runningTasks.remove(task.taskId(), task);
             }
         }
     }
@@ -655,6 +715,9 @@ public class AgentTaskRunner {
         private long streamChunks;
         private Long lastOutputAtMs;
         private boolean backpressureActive;
+        private final java.util.ArrayDeque<PulseMessage> terminalReplies =
+                new java.util.ArrayDeque<>();
+        private boolean finishing;
 
         private RunningTask(String taskId, String traceId, String taskType, String status, long acceptedAtMs, Long startedAtMs) {
             this.taskId = taskId;
@@ -695,8 +758,29 @@ public class AgentTaskRunner {
             }
         }
 
-        OutputChunk pollOutput() {
-            return outputQueue.poll();
+        OutputChunk peekOutput() {
+            return outputQueue.peek();
+        }
+
+        void removeOutput() {
+            outputQueue.poll();
+        }
+
+        synchronized void finish(List<PulseMessage> replies) {
+            terminalReplies.addAll(replies);
+            finishing = true;
+        }
+
+        PulseMessage peekTerminal() {
+            return terminalReplies.peekFirst();
+        }
+
+        void removeTerminal() {
+            terminalReplies.removeFirst();
+        }
+
+        boolean isFinished() {
+            return finishing && outputQueue.peek() == null && terminalReplies.isEmpty();
         }
 
         void markBackpressure() {
@@ -764,6 +848,12 @@ public class AgentTaskRunner {
             elements[currentHead] = null;
             head = (currentHead + 1) % elements.length;
             return (T) value;
+        }
+
+        @SuppressWarnings("unchecked")
+        T peek() {
+            int currentHead = head;
+            return currentHead == tail ? null : (T) elements[currentHead];
         }
 
         int size() {

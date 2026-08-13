@@ -1,0 +1,1853 @@
+package com.bytedance.pulse;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiFunction;
+
+public class LegacyCoordinatorHttpServer {
+    private final CoordinatorService service;
+    private final HttpServer server;
+    private final ObjectMapper mapper = JsonSupport.objectMapper();
+    private final PeerForwarder peerForwarder;
+    private final HttpClient routeClient = HttpClient.newHttpClient();
+    private final BiFunction<String, URI, URI> taskRouteResolver;
+    private final List<String> metricPeerUrls;
+    private final EventBusService eventBusService;
+    private final ThreadPoolExecutor executor;
+    private final ArrayDeque<SseEvent> metricEventCache = new ArrayDeque<>();
+    private final AtomicLong metricEventSequence = new AtomicLong();
+    private final int metricEventCacheLimit;
+    private final int taskOutputPreviewChars;
+
+    public LegacyCoordinatorHttpServer(CoordinatorService service, int port) throws IOException {
+        this(service, "127.0.0.1", port);
+    }
+
+    public LegacyCoordinatorHttpServer(CoordinatorService service, String bindHost, int port) throws IOException {
+        this(service, bindHost, port, PeerForwarder.fromEnvironment(service.coordinatorId()));
+    }
+
+    public LegacyCoordinatorHttpServer(
+            CoordinatorService service,
+            String bindHost,
+            int port,
+            EventBusService eventBusService) throws IOException {
+        this(
+                service,
+                bindHost,
+                port,
+                PeerForwarder.fromEnvironment(service.coordinatorId()),
+                LegacyCoordinatorHttpServer::defaultTaskRouteUri,
+                peerUrlsFromEnvironment(),
+                eventBusService);
+    }
+
+    LegacyCoordinatorHttpServer(CoordinatorService service, String bindHost, int port, PeerForwarder peerForwarder) throws IOException {
+        this(service, bindHost, port, peerForwarder, LegacyCoordinatorHttpServer::defaultTaskRouteUri);
+    }
+
+    LegacyCoordinatorHttpServer(
+            CoordinatorService service,
+            String bindHost,
+            int port,
+            PeerForwarder peerForwarder,
+            BiFunction<String, URI, URI> taskRouteResolver) throws IOException {
+        this(service, bindHost, port, peerForwarder, taskRouteResolver, peerUrlsFromEnvironment());
+    }
+
+    LegacyCoordinatorHttpServer(
+            CoordinatorService service,
+            String bindHost,
+            int port,
+            PeerForwarder peerForwarder,
+            BiFunction<String, URI, URI> taskRouteResolver,
+            List<String> metricPeerUrls) throws IOException {
+        this(service, bindHost, port, peerForwarder, taskRouteResolver, metricPeerUrls, null);
+    }
+
+    LegacyCoordinatorHttpServer(
+            CoordinatorService service,
+            String bindHost,
+            int port,
+            PeerForwarder peerForwarder,
+            BiFunction<String, URI, URI> taskRouteResolver,
+            List<String> metricPeerUrls,
+            EventBusService eventBusService) throws IOException {
+        this.service = service;
+        this.peerForwarder = peerForwarder;
+        this.taskRouteResolver = taskRouteResolver;
+        this.metricPeerUrls = metricPeerUrls == null ? List.of() : List.copyOf(metricPeerUrls);
+        this.eventBusService = eventBusService;
+        this.metricEventCacheLimit = positiveInt("PULSE_METRIC_SSE_CACHE_EVENTS", 256);
+        this.taskOutputPreviewChars = positiveInt("PULSE_TASK_OUTPUT_PREVIEW_CHARS", 8 * 1024);
+        this.server = HttpServer.create(new InetSocketAddress(bindHost, port), httpBacklog());
+        this.server.createContext("/", this::handle);
+        this.executor = httpExecutor();
+        this.server.setExecutor(executor);
+    }
+
+    public void start() {
+        server.start();
+    }
+
+    public void stop() {
+        server.stop(0);
+        executor.shutdownNow();
+    }
+
+    public int port() {
+        return server.getAddress().getPort();
+    }
+
+    private void handle(HttpExchange exchange) throws IOException {
+        try {
+            String method = exchange.getRequestMethod();
+            String path = exchange.getRequestURI().getPath();
+            if ("POST".equals(method) && "/heartbeat".equals(path)) {
+                HeartbeatRequest request = readJson(exchange, HeartbeatRequest.class);
+                HeartbeatResponse response = service.handleHeartbeat(request);
+                try {
+                    peerForwarder.forward(request);
+                } catch (Exception exception) {
+                    System.err.printf("heartbeat_fwd status=unexpected_error error=%s%n", exception.getMessage());
+                }
+                if (BinaryHeartbeatCodec.writeIfBinary(exchange, response, mapper)) {
+                    return;
+                }
+                writeJson(exchange, 200, response);
+                return;
+            }
+            if ("POST".equals(method) && "/heartbeat_fwd".equals(path)) {
+                HeartbeatForwardRequest request = readJson(exchange, HeartbeatForwardRequest.class);
+                writeJson(exchange, 200, service.handleForward(request));
+                return;
+            }
+            if ("GET".equals(method) && "/api/hosts".equals(path)) {
+                writeJson(exchange, 200, service.hosts());
+                return;
+            }
+            if ("GET".equals(method) && "/api/hosts/stream".equals(path)) {
+                try {
+                    writeHostStream(exchange);
+                } catch (IOException ignored) {
+                    // Client disconnected or proxy closed the SSE stream.
+                }
+                return;
+            }
+            if ("GET".equals(method) && "/api/metrics/catalog".equals(path)) {
+                writeJson(exchange, 200, service.metricCatalog());
+                return;
+            }
+            if ("GET".equals(method) && "/api/metrics/query_range".equals(path)) {
+                writeJson(exchange, 200, queryMetrics(exchange));
+                return;
+            }
+            if ("GET".equals(method) && "/api/metrics/events".equals(path)) {
+                writeJson(exchange, 200, service.queryMetricEvents(metricEventQuery(exchange.getRequestURI())));
+                return;
+            }
+            if ("GET".equals(method) && "/api/metrics/storage".equals(path)) {
+                writeJson(exchange, 200, service.metricStorageHealth());
+                return;
+            }
+            if ("GET".equals(method) && "/api/eventbus".equals(path)) {
+                if (eventBusService == null) {
+                    throw new IllegalArgumentException("eventbus is disabled");
+                }
+                writeJson(exchange, 200, eventBusService.view());
+                return;
+            }
+            if ("GET".equals(method) && "/api/eventbus/stream".equals(path)) {
+                if (eventBusService == null) {
+                    throw new IllegalArgumentException("eventbus is disabled");
+                }
+                try {
+                    writeEventBusStream(exchange);
+                } catch (IOException ignored) {
+                    // Client disconnected or proxy closed the SSE stream.
+                }
+                return;
+            }
+            if ("PUT".equals(method) && "/api/eventbus/config".equals(path)) {
+                if (eventBusService == null) {
+                    throw new IllegalArgumentException("eventbus is disabled");
+                }
+                EventBusConfig config = mapper.readValue(readBody(exchange), EventBusConfig.class);
+                writeJson(exchange, 200, eventBusService.update(config));
+                return;
+            }
+            if ("POST".equals(method)
+                    && path.startsWith("/api/eventbus/sources/")
+                    && path.endsWith("/events")) {
+                if (eventBusService == null) {
+                    throw new IllegalArgumentException("eventbus is disabled");
+                }
+                String sourceId = path.substring(
+                        "/api/eventbus/sources/".length(),
+                        path.length() - "/events".length());
+                if (sourceId.isBlank()) {
+                    throw new IllegalArgumentException("source_id is required");
+                }
+                try {
+                    Map<String, Object> payload = mapper.readValue(readBody(exchange), Map.class);
+                    writeJson(exchange, 202, eventBusService.publish(
+                            URLDecoder.decode(sourceId, StandardCharsets.UTF_8),
+                            exchange.getRequestHeaders().getFirst("x-pulse-event-token"),
+                            payload));
+                } catch (SecurityException exception) {
+                    writeJson(exchange, 401, Map.of("error", exception.getMessage()));
+                }
+                return;
+            }
+            if ("POST".equals(method)
+                    && path.startsWith("/api/eventbus/sinks/")
+                    && path.endsWith("/test")) {
+                if (eventBusService == null) {
+                    throw new IllegalArgumentException("eventbus is disabled");
+                }
+                String sinkId = path.substring(
+                        "/api/eventbus/sinks/".length(),
+                        path.length() - "/test".length());
+                if (sinkId.isBlank()) {
+                    throw new IllegalArgumentException("sink_id is required");
+                }
+                try {
+                    writeJson(exchange, 200, eventBusService.testSink(URLDecoder.decode(
+                            sinkId, StandardCharsets.UTF_8)));
+                } catch (IllegalArgumentException exception) {
+                    throw exception;
+                } catch (Exception exception) {
+                    writeJson(exchange, 502, Map.of("error", exception.getMessage()));
+                }
+                return;
+            }
+            if ("GET".equals(method) && "/api/metrics/stream".equals(path)) {
+                try {
+                    writeMetricStream(exchange);
+                } catch (IOException ignored) {
+                    // Client disconnected or proxy closed the SSE stream.
+                }
+                return;
+            }
+            if ("GET".equals(method) && path.startsWith("/assets/")) {
+                writeStaticAsset(exchange, path);
+                return;
+            }
+            if ("GET".equals(method) && "/api/tasks/stream".equals(path)) {
+                List<String> agentIds = queryList(exchange.getRequestURI(), "agents");
+                try {
+                    writeTaskSnapshotStream(exchange, agentIds);
+                } catch (IOException ignored) {
+                    // Client disconnected or proxy closed the SSE stream.
+                }
+                return;
+            }
+            if ("POST".equals(method) && "/api/files/batch_put".equals(path)) {
+                writeJson(exchange, 200, handleBatchFilePut(exchange, readBody(exchange)));
+                return;
+            }
+            if ("GET".equals(method) && path.startsWith("/api/agents/") && path.endsWith("/tasks/stream")) {
+                String agentId = path.substring("/api/agents/".length(), path.length() - "/tasks/stream".length());
+                if (proxyTaskRequestIfNeeded(exchange, agentId, null, true)) {
+                    return;
+                }
+                try {
+                    writeTaskSnapshotStream(exchange, agentId);
+                } catch (IOException ignored) {
+                    // Client disconnected or proxy closed the SSE stream.
+                }
+                return;
+            }
+            if (path.startsWith("/api/agents/") && path.endsWith("/tasks")) {
+                String agentId = path.substring("/api/agents/".length(), path.length() - "/tasks".length());
+                if ("GET".equals(method)) {
+                    if (proxyTaskRequestIfNeeded(exchange, agentId, null, false)) {
+                        return;
+                    }
+                    writeJson(exchange, 200, taskSnapshotView(service.taskSnapshot(agentId)));
+                    return;
+                }
+                if ("POST".equals(method)) {
+                    String rawBody = readBody(exchange);
+                    if (proxyTaskRequestIfNeeded(exchange, agentId, rawBody, false)) {
+                        return;
+                    }
+                    Map<?, ?> body = mapper.readValue(rawBody, Map.class);
+                    String operation = stringBody(body, "operation");
+                    if ("file_put".equals(operation)) {
+                        writeJson(exchange, 200, taskSnapshotView(service.enqueueFilePut(
+                                agentId,
+                                stringBody(body, "file_name"),
+                                stringBody(body, "content_base64"),
+                                stringBody(body, "content_sha256"),
+                                longBody(body, "content_bytes"),
+                                stringBody(body, "target_dir"),
+                                stringBody(body, "file_role"))));
+                        return;
+                    }
+                    if ("shell_script".equals(operation)) {
+                        writeJson(exchange, 200, taskSnapshotView(service.enqueueShellScript(
+                                agentId,
+                                stringBody(body, "file_name"),
+                                stringBody(body, "content_base64"),
+                                stringBody(body, "content_sha256"),
+                                longBody(body, "content_bytes"),
+                                parseArgs(body.get("args")))));
+                        return;
+                    }
+                    Object taskType = body.get("task_type");
+                    if (taskType == null || taskType.toString().isBlank()) {
+                        throw new IllegalArgumentException("task_type is required");
+                    }
+                    writeJson(exchange, 200, taskSnapshotView(service.enqueueTask(agentId, taskType.toString(), parseArgs(body.get("args")))));
+                    return;
+                }
+            }
+            Optional<TaskCompletionAction> completionAction = completionAction(path);
+            if (completionAction.isPresent()) {
+                TaskCompletionAction action = completionAction.get();
+                boolean streamResponse = "output_stream".equals(action.action());
+                if (proxyTaskRequestIfNeeded(exchange, action.agentId(), null, streamResponse)) {
+                    return;
+                }
+                if ("GET".equals(method) && "output_stream".equals(action.action())) {
+                    writeTaskCompletionOutputStream(exchange, action.agentId(), action.taskId());
+                    return;
+                }
+                if ("GET".equals(method) && "output".equals(action.action())) {
+                    writeTaskCompletionOutputJson(exchange, action.agentId(), action.taskId());
+                    return;
+                }
+                if ("POST".equals(method)) {
+                    if ("keep".equals(action.action())) {
+                        writeJson(exchange, 200, taskSnapshotView(service.keepCompletion(action.agentId(), action.taskId())));
+                        return;
+                    }
+                    if ("pop".equals(action.action())) {
+                        writeJson(exchange, 200, taskSnapshotView(service.popCompletion(action.agentId(), action.taskId())));
+                        return;
+                    }
+                }
+            }
+            if ("GET".equals(method) && ("/".equals(path) || "/hosts".equals(path))) {
+                writeHtml(exchange, 200, HostTilesPage.render(service.coordinatorId(), service.hosts()));
+                return;
+            }
+            writeJson(exchange, 404, Map.of("ok", false, "error", "not_found"));
+        } catch (IllegalArgumentException exception) {
+            writeJson(exchange, 400, Map.of("ok", false, "error", exception.getMessage()));
+        } catch (Exception exception) {
+            writeJson(exchange, 500, Map.of("ok", false, "error", "internal_error"));
+        } finally {
+            exchange.close();
+        }
+    }
+
+    private void writeTaskSnapshotStream(HttpExchange exchange, String agentId) throws IOException {
+        writeTaskSnapshotStream(exchange, List.of(agentId));
+    }
+
+    private Map<String, Object> handleBatchFilePut(HttpExchange exchange, String rawBody) throws Exception {
+        Map<?, ?> body = mapper.readValue(rawBody, Map.class);
+        List<String> agentIds = parseStringList(body.get("agent_ids"));
+        if (agentIds.isEmpty()) {
+            throw new IllegalArgumentException("agent_ids is required");
+        }
+        Map<String, Object> snapshots = new LinkedHashMap<>();
+        List<String> failedAgents = new ArrayList<>();
+        Map<String, String> errors = new LinkedHashMap<>();
+        Map<String, List<String>> remoteAgents = new LinkedHashMap<>();
+        List<String> localAgents = new ArrayList<>();
+        boolean routed = "1".equals(exchange.getRequestHeaders().getFirst("x-pulse-task-routed"));
+        for (String agentId : agentIds) {
+            Optional<String> owner = service.agentCoordinatorId(agentId);
+            if (!routed && owner.isPresent() && !owner.get().equals(service.coordinatorId())) {
+                remoteAgents.computeIfAbsent(owner.get(), ignored -> new ArrayList<>()).add(agentId);
+            } else {
+                localAgents.add(agentId);
+            }
+        }
+        if (!localAgents.isEmpty()) {
+            service.enqueueFilePutBatch(
+                    localAgents,
+                    stringBody(body, "file_name"),
+                    stringBody(body, "content_base64"),
+                    stringBody(body, "content_sha256"),
+                    longBody(body, "content_bytes"),
+                    stringBody(body, "target_dir"),
+                    stringBody(body, "file_role"))
+                    .forEach((agentId, snapshot) -> snapshots.put(agentId, taskSnapshotView(snapshot)));
+        }
+        for (Map.Entry<String, List<String>> entry : remoteAgents.entrySet()) {
+            Map<String, Object> remoteResult = routeBatchFilePut(entry.getKey(), entry.getValue(), body);
+            Object remoteSnapshots = remoteResult.get("snapshots");
+            if (remoteSnapshots instanceof Map<?, ?> snapshotMap) {
+                snapshotMap.forEach((agentId, snapshot) -> snapshots.put(String.valueOf(agentId), snapshot));
+            }
+            failedAgents.addAll(parseStringList(remoteResult.get("failed_agents")));
+            Object remoteErrors = remoteResult.get("errors");
+            if (remoteErrors instanceof Map<?, ?> errorMap) {
+                errorMap.forEach((agentId, error) -> errors.put(String.valueOf(agentId), String.valueOf(error)));
+            }
+        }
+        for (String agentId : agentIds) {
+            if (!snapshots.containsKey(agentId) && !failedAgents.contains(agentId)) {
+                failedAgents.add(agentId);
+                errors.put(agentId, "missing snapshot");
+            }
+        }
+        return Map.of(
+                "ok", failedAgents.isEmpty(),
+                "total", agentIds.size(),
+                "succeeded", agentIds.size() - failedAgents.size(),
+                "failed", failedAgents.size(),
+                "failed_agents", failedAgents,
+                "errors", errors,
+                "snapshots", snapshots);
+    }
+
+    private Map<String, Object> routeBatchFilePut(String coordinatorId, List<String> agentIds, Map<?, ?> originalBody)
+            throws IOException, InterruptedException {
+        URI uri = taskRouteResolver.apply(coordinatorId, URI.create("/api/files/batch_put"));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("agent_ids", agentIds);
+        body.put("file_name", stringBody(originalBody, "file_name"));
+        body.put("content_base64", stringBody(originalBody, "content_base64"));
+        body.put("content_sha256", stringBody(originalBody, "content_sha256"));
+        body.put("content_bytes", longBody(originalBody, "content_bytes"));
+        body.put("target_dir", stringBody(originalBody, "target_dir"));
+        body.put("file_role", stringBody(originalBody, "file_role"));
+        String requestBody = mapper.writeValueAsString(body);
+        HttpRequest request = HttpRequest.newBuilder(uri)
+                .timeout(Duration.ofMillis(positiveLong("PULSE_TASK_ROUTE_TIMEOUT_MS", 5_000)))
+                .header("x-pulse-task-routed", "1")
+                .header("content-type", "application/json; charset=utf-8")
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                .build();
+        HttpResponse<String> response = routeClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            Map<String, String> errors = new LinkedHashMap<>();
+            agentIds.forEach(agentId -> errors.put(agentId, response.body()));
+            return Map.of(
+                    "ok", false,
+                    "total", agentIds.size(),
+                    "succeeded", 0,
+                    "failed", agentIds.size(),
+                    "failed_agents", agentIds,
+                    "errors", errors,
+                    "snapshots", Map.of());
+        }
+        return mapper.readValue(response.body(), Map.class);
+    }
+
+    private void writeTaskSnapshotStream(HttpExchange exchange, List<String> agentIds) throws IOException {
+        if (agentIds.isEmpty()) {
+            throw new IllegalArgumentException("agents query is required");
+        }
+        exchange.getResponseHeaders().set("content-type", "text/event-stream; charset=utf-8");
+        exchange.getResponseHeaders().set("cache-control", "no-cache");
+        exchange.getResponseHeaders().set("connection", "keep-alive");
+        exchange.getResponseHeaders().set("x-accel-buffering", "no");
+        exchange.sendResponseHeaders(200, 0);
+
+        long intervalMs = positiveLong("PULSE_TASK_SSE_INTERVAL_MS", 1_000);
+        long maxStreamMs = positiveLong("PULSE_TASK_SSE_MAX_MS", 15 * 60_000);
+        long deadline = System.currentTimeMillis() + maxStreamMs;
+        int sequence = 0;
+        int idleTicks = 0;
+        Map<String, String> lastPayloads = new java.util.HashMap<>();
+        try (OutputStream output = exchange.getResponseBody()) {
+            writeSse(output, "hello", sequence++, mapper.writeValueAsString(Map.of(
+                    "agent_ids", agentIds,
+                    "agent_count", agentIds.size(),
+                    "server_time_ms", System.currentTimeMillis())));
+            while (!Thread.currentThread().isInterrupted() && System.currentTimeMillis() < deadline) {
+                boolean wroteSnapshot = false;
+                for (String agentId : agentIds) {
+                    String payload = mapper.writeValueAsString(taskSnapshotForHttp(exchange, agentId));
+                    if (!payload.equals(lastPayloads.get(agentId))) {
+                        writeSse(output, "task.snapshot", sequence++, payload);
+                        lastPayloads.put(agentId, payload);
+                        wroteSnapshot = true;
+                    }
+                }
+                if (wroteSnapshot) {
+                    idleTicks = 0;
+                } else if (++idleTicks >= 15) {
+                    writeSse(output, "ping", sequence++, mapper.writeValueAsString(Map.of(
+                            "server_time_ms", System.currentTimeMillis())));
+                    idleTicks = 0;
+                }
+                try {
+                    Thread.sleep(intervalMs);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+    }
+
+    private void writeMetricStream(HttpExchange exchange) throws IOException {
+        exchange.getResponseHeaders().set("content-type", "text/event-stream; charset=utf-8");
+        exchange.getResponseHeaders().set("cache-control", "no-cache");
+        exchange.getResponseHeaders().set("connection", "keep-alive");
+        exchange.getResponseHeaders().set("x-accel-buffering", "no");
+        exchange.sendResponseHeaders(200, 0);
+
+        boolean once = "true".equalsIgnoreCase(queryValue(exchange.getRequestURI(), "once"));
+        long now = System.currentTimeMillis();
+        long intervalMs = Math.max(1, longQuery(exchange.getRequestURI(), "interval_ms", positiveLong("PULSE_METRIC_SSE_INTERVAL_MS", 5_000)));
+        long maxStreamMs = Math.max(1, longQuery(exchange.getRequestURI(), "max_ms", positiveLong("PULSE_METRIC_SSE_MAX_MS", 15 * 60_000)));
+        String lastEventId = Optional.ofNullable(exchange.getRequestHeaders().getFirst("Last-Event-ID"))
+                .orElse(queryValue(exchange.getRequestURI(), "last_event_id"));
+        boolean resumed = lastEventId != null && !lastEventId.isBlank();
+        long compensateFromMs = resumed ? Math.max(lastEventTimestamp(lastEventId), now - 300_000) : now - 30_000;
+        List<SseEvent> replayEvents = resumed ? metricEventsAfter(lastEventId) : List.of();
+        try (OutputStream output = exchange.getResponseBody()) {
+            writeSse(output, new SseEvent(nextMetricEventId(), "hello", mapper.writeValueAsString(Map.of(
+                    "coordinator_id", service.coordinatorId(),
+                    "server_time_ms", now,
+                    "compensate_from_ms", compensateFromMs,
+                    "resumed", resumed,
+                    "last_event_id", lastEventId == null ? "" : lastEventId,
+                    "event_cache_supported", true,
+                    "replayed_events", replayEvents.size(),
+                    "replay_limit", metricEventCacheLimit,
+                    "stream_interval_ms", intervalMs,
+                    "stream_max_ms", maxStreamMs))));
+            for (SseEvent event : replayEvents) {
+                writeSse(output, event);
+            }
+            writeCachedMetricEvent(output, "storage.health", mapper.writeValueAsString(service.metricStorageHealth()));
+            writeCachedMetricEvent(output, "metric.invalidate", mapper.writeValueAsString(Map.of(
+                    "from", compensateFromMs,
+                    "to", now,
+                    "metrics", List.of(
+                            "heartbeat.arrival_gap_ms",
+                            "agent.thread_count",
+                            "disk.io_util_pct",
+                            "disk.saturated_for_ms",
+                            "group.submitted_agent_count"))));
+            if (!once) {
+                long deadline = System.currentTimeMillis() + maxStreamMs;
+                while (!Thread.currentThread().isInterrupted() && System.currentTimeMillis() < deadline) {
+                    sleepQuietly(intervalMs);
+                    long tick = System.currentTimeMillis();
+                    if (tick >= deadline) {
+                        break;
+                    }
+                    writeCachedMetricEvent(output, "metric.invalidate", mapper.writeValueAsString(Map.of(
+                            "from", tick - Math.max(intervalMs, 30_000),
+                            "to", tick,
+                            "metrics", List.of(
+                                    "heartbeat.arrival_gap_ms",
+                                    "agent.thread_count",
+                                    "disk.io_util_pct",
+                                    "disk.saturated_for_ms",
+                                    "group.submitted_agent_count"))));
+                    writeCachedMetricEvent(output, "ping", mapper.writeValueAsString(Map.of("server_time_ms", tick)));
+                }
+            }
+        }
+    }
+
+    private void writeEventBusStream(HttpExchange exchange) throws IOException {
+        exchange.getResponseHeaders().set("content-type", "text/event-stream; charset=utf-8");
+        exchange.getResponseHeaders().set("cache-control", "no-cache");
+        exchange.getResponseHeaders().set("connection", "keep-alive");
+        exchange.getResponseHeaders().set("x-accel-buffering", "no");
+        exchange.sendResponseHeaders(200, 0);
+
+        boolean once = "true".equalsIgnoreCase(queryValue(exchange.getRequestURI(), "once"));
+        long revision = eventBusService.revision();
+        try (OutputStream output = exchange.getResponseBody()) {
+            writeSse(output, new SseEvent(
+                    String.valueOf(revision),
+                    "eventbus.snapshot",
+                    mapper.writeValueAsString(eventBusService.view())));
+            if (once) {
+                return;
+            }
+            long deadline = System.currentTimeMillis()
+                    + positiveLong("PULSE_EVENTBUS_SSE_MAX_MS", 15 * 60_000);
+            while (!Thread.currentThread().isInterrupted()
+                    && System.currentTimeMillis() < deadline) {
+                long nextRevision;
+                try {
+                    nextRevision = eventBusService.awaitRevision(revision, 30_000);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                if (nextRevision > revision) {
+                    revision = nextRevision;
+                    writeSse(output, new SseEvent(
+                            String.valueOf(revision),
+                            "eventbus.snapshot",
+                            mapper.writeValueAsString(eventBusService.view())));
+                } else {
+                    output.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
+                    output.flush();
+                }
+            }
+        }
+    }
+
+    private void writeHostStream(HttpExchange exchange) throws IOException {
+        exchange.getResponseHeaders().set("content-type", "text/event-stream; charset=utf-8");
+        exchange.getResponseHeaders().set("cache-control", "no-cache");
+        exchange.getResponseHeaders().set("connection", "keep-alive");
+        exchange.getResponseHeaders().set("x-accel-buffering", "no");
+        exchange.sendResponseHeaders(200, 0);
+
+        String version = queryValue(exchange.getRequestURI(), "v");
+        if ("3".equals(version)) {
+            writeHostStreamV3(exchange);
+            return;
+        }
+        boolean version2 = "2".equals(version);
+        if (version2) {
+            writeHostStreamV2(exchange);
+            return;
+        }
+        boolean once = "true".equalsIgnoreCase(queryValue(exchange.getRequestURI(), "once"));
+        long minIntervalMs = 1_000 * positiveLong("PULSE_HOST_SSE_MIN_INTERVAL_SECONDS", 5);
+        long revision = service.hostRevision();
+        try (OutputStream output = exchange.getResponseBody()) {
+            List<HostView> previousHosts = service.hosts();
+            writeSse(output, new SseEvent(
+                    String.valueOf(revision),
+                    "hosts.snapshot",
+                    mapper.writeValueAsString(previousHosts)));
+            if (once) {
+                return;
+            }
+            long deadline = System.currentTimeMillis()
+                    + positiveLong("PULSE_HOST_SSE_MAX_MS", 15 * 60_000);
+            while (!Thread.currentThread().isInterrupted()
+                    && System.currentTimeMillis() < deadline) {
+                long nextRevision;
+                try {
+                    nextRevision = service.awaitHostRevision(revision, 30_000);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                if (nextRevision > revision) {
+                    sleepQuietly(minIntervalMs);
+                    revision = service.hostRevision();
+                    List<HostView> currentHosts = service.hosts();
+                    Map<String, Object> delta = hostDelta(mapper, previousHosts, currentHosts);
+                    writeSse(output, new SseEvent(
+                            String.valueOf(revision),
+                            "hosts.delta",
+                            mapper.writeValueAsString(delta)));
+                    previousHosts = currentHosts;
+                } else {
+                    output.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
+                    output.flush();
+                }
+            }
+        }
+    }
+
+    private void writeHostStreamV3(HttpExchange exchange) throws IOException {
+        boolean once = "true".equalsIgnoreCase(queryValue(exchange.getRequestURI(), "once"));
+        List<String> scope = queryList(exchange.getRequestURI(), "clusters");
+        long minIntervalMs = 1_000 * positiveLong("PULSE_HOST_SSE_MIN_INTERVAL_SECONDS", 5);
+        try (OutputStream output = exchange.getResponseBody()) {
+            CoordinatorService.HostSnapshot captured = service.hostSnapshotWithRevision();
+            long revision = captured.revision();
+            HostStreamV3Codec.Session session = HostStreamV3Codec.session(
+                    mapper, revision, scope, captured.hosts());
+            writeSse(output, new SseEvent(
+                    String.valueOf(revision),
+                    "hosts.snapshot",
+                    mapper.writeValueAsString(session.snapshot())));
+            if (once) {
+                return;
+            }
+            long deadline = System.currentTimeMillis()
+                    + positiveLong("PULSE_HOST_SSE_MAX_MS", 15 * 60_000);
+            while (!Thread.currentThread().isInterrupted()
+                    && System.currentTimeMillis() < deadline) {
+                long nextRevision;
+                try {
+                    nextRevision = service.awaitHostRevision(revision, 30_000);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                if (nextRevision > revision) {
+                    sleepQuietly(minIntervalMs);
+                    captured = service.hostSnapshotWithRevision();
+                    revision = captured.revision();
+                    writeSse(output, new SseEvent(
+                            String.valueOf(revision),
+                            "hosts.delta",
+                            mapper.writeValueAsString(session.delta(
+                                    revision, captured.hosts()))));
+                } else {
+                    output.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
+                    output.flush();
+                }
+            }
+        }
+    }
+
+    private void writeHostStreamV2(HttpExchange exchange) throws IOException {
+        boolean once = "true".equalsIgnoreCase(queryValue(exchange.getRequestURI(), "once"));
+        List<String> scope = queryList(exchange.getRequestURI(), "clusters");
+        long minIntervalMs = 1_000 * positiveLong("PULSE_HOST_SSE_MIN_INTERVAL_SECONDS", 5);
+        try (OutputStream output = exchange.getResponseBody()) {
+            CoordinatorService.HostSnapshot captured = service.hostSnapshotWithRevision();
+            long revision = captured.revision();
+            List<HostView> allHosts = captured.hosts();
+            List<String> previousClusters = availableClusters(allHosts);
+            List<ObjectNode> previousHosts = hostSummaryNodes(mapper, scopedHosts(allHosts, scope));
+            writeSse(output, new SseEvent(
+                    String.valueOf(revision),
+                    "hosts.snapshot",
+                    mapper.writeValueAsString(hostSnapshotV2(
+                            revision,
+                            scope,
+                            previousClusters,
+                            previousHosts))));
+            if (once) {
+                return;
+            }
+            long deadline = System.currentTimeMillis()
+                    + positiveLong("PULSE_HOST_SSE_MAX_MS", 15 * 60_000);
+            while (!Thread.currentThread().isInterrupted()
+                    && System.currentTimeMillis() < deadline) {
+                long nextRevision;
+                try {
+                    nextRevision = service.awaitHostRevision(revision, 30_000);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                if (nextRevision > revision) {
+                    sleepQuietly(minIntervalMs);
+                    long baseRevision = revision;
+                    captured = service.hostSnapshotWithRevision();
+                    revision = captured.revision();
+                    List<String> currentClusters = availableClusters(captured.hosts());
+                    List<ObjectNode> currentHosts = hostSummaryNodes(
+                            mapper, scopedHosts(captured.hosts(), scope));
+                    writeSse(output, new SseEvent(
+                            String.valueOf(revision),
+                            "hosts.delta",
+                            mapper.writeValueAsString(hostNodeDeltaV2(
+                                    mapper,
+                                    baseRevision,
+                                    revision,
+                                    previousHosts,
+                                    currentHosts,
+                                    previousClusters.equals(currentClusters)
+                                            ? null
+                                            : currentClusters))));
+                    previousHosts = currentHosts;
+                    previousClusters = currentClusters;
+                } else {
+                    output.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
+                    output.flush();
+                }
+            }
+        }
+    }
+
+    private static Map<String, Object> hostSnapshotV2(
+            long revision,
+            List<String> scope,
+            List<String> availableClusters,
+            List<ObjectNode> hosts) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("schema", "hosts.v2");
+        snapshot.put("revision", revision);
+        snapshot.put("scope", scope);
+        snapshot.put("available_clusters", availableClusters);
+        snapshot.put("hosts", hosts);
+        return snapshot;
+    }
+
+    private static List<HostView> scopedHosts(List<HostView> hosts, List<String> scope) {
+        if (scope.isEmpty()) {
+            return hosts;
+        }
+        Set<String> selected = Set.copyOf(scope);
+        return hosts.stream()
+                .filter(host -> selected.contains(host.cluster()))
+                .toList();
+    }
+
+    private static List<String> availableClusters(List<HostView> hosts) {
+        return hosts.stream()
+                .map(HostView::cluster)
+                .filter(cluster -> cluster != null && !cluster.isBlank())
+                .distinct()
+                .sorted()
+                .toList();
+    }
+
+    static ObjectNode hostSummary(ObjectMapper mapper, HostView host) {
+        ObjectNode summary = mapper.createObjectNode();
+        summary.put("agent_id", host.agentId());
+        summary.put("epoch", host.epoch());
+        summary.put("seq", host.seq());
+        summary.put("ttl_ms", host.ttlMs());
+        summary.put("observed_at_ms", host.observedAtMs());
+        summary.put("expire_at_ms", host.expireAtMs());
+        summary.put("last_observed_age_ms", host.lastObservedAgeMs());
+        summary.put("heartbeat_confirmations", host.heartbeatConfirmations());
+        summary.put("status", host.status());
+        summary.put("source", host.source());
+        summary.put("coordinator_id", host.coordinatorId());
+        summary.put("group_id", host.groupId());
+        summary.put("group_mode", host.groupMode());
+        summary.put("leader_agent_id", host.leaderAgentId());
+        summary.put("leader_url", host.leaderUrl());
+        summary.put("group_size", host.groupSize());
+        summary.put("group_size_limit", host.groupSizeLimit());
+        summary.put("host", host.host());
+        summary.put("ip", host.ip());
+        summary.put("cluster", host.cluster());
+        summary.put("area", host.area());
+        summary.put("zone", host.zone());
+        summary.put("role", host.role());
+        summary.put("load", host.load());
+        return summary;
+    }
+
+    private static List<ObjectNode> hostSummaryNodes(
+            ObjectMapper mapper,
+            List<HostView> hosts) {
+        return hosts.stream()
+                .map(host -> hostSummary(mapper, host))
+                .toList();
+    }
+
+    static Map<String, Object> hostDelta(
+            ObjectMapper mapper,
+            List<HostView> previous,
+            List<HostView> current) {
+        Map<String, JsonNode> previousById = hostNodesById(mapper, previous);
+        Map<String, JsonNode> currentById = hostNodesById(mapper, current);
+        return hostNodeDelta(mapper, previousById, currentById);
+    }
+
+    static Map<String, Object> hostSummaryDeltaV2(
+            ObjectMapper mapper,
+            long baseRevision,
+            long revision,
+            List<HostView> previous,
+            List<HostView> current) {
+        return hostSummaryDeltaV2(
+                mapper, baseRevision, revision, previous, current, null);
+    }
+
+    static Map<String, Object> hostSummaryDeltaV2(
+            ObjectMapper mapper,
+            long baseRevision,
+            long revision,
+            List<HostView> previous,
+            List<HostView> current,
+            List<String> availableClusters) {
+        return hostNodeDeltaV2(
+                mapper,
+                baseRevision,
+                revision,
+                hostSummaryNodes(mapper, previous),
+                hostSummaryNodes(mapper, current),
+                availableClusters);
+    }
+
+    private static Map<String, Object> hostNodeDeltaV2(
+            ObjectMapper mapper,
+            long baseRevision,
+            long revision,
+            List<? extends JsonNode> previous,
+            List<? extends JsonNode> current,
+            List<String> availableClusters) {
+        Map<String, Object> delta = hostNodeDelta(mapper, previous, current);
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("schema", "hosts.v2");
+        envelope.put("base_revision", baseRevision);
+        envelope.put("revision", revision);
+        envelope.put("upserts", delta.get("upserts"));
+        envelope.put("removed", delta.get("removed"));
+        if (availableClusters != null) {
+            envelope.put("available_clusters", availableClusters);
+        }
+        return envelope;
+    }
+
+    private static Map<String, Object> hostNodeDelta(
+            ObjectMapper mapper,
+            List<? extends JsonNode> previous,
+            List<? extends JsonNode> current) {
+        return hostNodeDelta(
+                mapper,
+                nodesByAgentId(previous),
+                nodesByAgentId(current));
+    }
+
+    private static Map<String, Object> hostNodeDelta(
+            ObjectMapper mapper,
+            Map<String, JsonNode> previousById,
+            Map<String, JsonNode> currentById) {
+        List<JsonNode> upserts = new ArrayList<>();
+        for (Map.Entry<String, JsonNode> entry : currentById.entrySet()) {
+            JsonNode before = previousById.get(entry.getKey());
+            if (before == null) {
+                upserts.add(entry.getValue());
+                continue;
+            }
+            ObjectNode patch = mapper.createObjectNode();
+            patch.put("agent_id", entry.getKey());
+            mergePatch(before, entry.getValue(), patch);
+            if (patch.size() > 1) {
+                upserts.add(patch);
+            }
+        }
+        List<String> removed = previousById.keySet().stream()
+                .filter(id -> !currentById.containsKey(id))
+                .toList();
+        return Map.of("upserts", upserts, "removed", removed);
+    }
+
+    private static Map<String, JsonNode> nodesByAgentId(
+            List<? extends JsonNode> hosts) {
+        Map<String, JsonNode> nodes = new LinkedHashMap<>();
+        for (JsonNode host : hosts) {
+            nodes.put(host.path("agent_id").asText(), host);
+        }
+        return nodes;
+    }
+
+    private static Map<String, JsonNode> hostNodesById(
+            ObjectMapper mapper,
+            List<HostView> hosts) {
+        Map<String, JsonNode> nodes = new LinkedHashMap<>();
+        for (HostView host : hosts) {
+            nodes.put(host.agentId(), mapper.valueToTree(host));
+        }
+        return nodes;
+    }
+
+    private static void mergePatch(JsonNode before, JsonNode after, ObjectNode patch) {
+        before.fieldNames().forEachRemaining(field -> {
+            if (!after.has(field)) {
+                patch.putNull(field);
+            }
+        });
+        after.fields().forEachRemaining(entry -> {
+            String field = entry.getKey();
+            JsonNode next = entry.getValue();
+            JsonNode prior = before.get(field);
+            if (next.equals(prior)) {
+                return;
+            }
+            if (prior != null && prior.isObject() && next.isObject()) {
+                ObjectNode nested = patch.objectNode();
+                mergePatch(prior, next, nested);
+                if (!nested.isEmpty()) {
+                    patch.set(field, nested);
+                }
+            } else {
+                patch.set(field, next);
+            }
+        });
+    }
+
+    private static void sleepQuietly(long intervalMs) {
+        try {
+            Thread.sleep(intervalMs);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void writeCachedMetricEvent(OutputStream output, String event, String data) throws IOException {
+        SseEvent sseEvent = new SseEvent(nextMetricEventId(), event, data);
+        cacheMetricEvent(sseEvent);
+        writeSse(output, sseEvent);
+    }
+
+    private String nextMetricEventId() {
+        return System.currentTimeMillis() + "-" + metricEventSequence.incrementAndGet();
+    }
+
+    private void cacheMetricEvent(SseEvent event) {
+        synchronized (metricEventCache) {
+            metricEventCache.addLast(event);
+            while (metricEventCache.size() > metricEventCacheLimit) {
+                metricEventCache.removeFirst();
+            }
+        }
+    }
+
+    private List<SseEvent> metricEventsAfter(String lastEventId) {
+        synchronized (metricEventCache) {
+            List<SseEvent> events = new ArrayList<>();
+            for (SseEvent event : metricEventCache) {
+                if (compareEventId(event.id(), lastEventId) > 0) {
+                    events.add(event);
+                }
+            }
+            return List.copyOf(events);
+        }
+    }
+
+    private static long lastEventTimestamp(String lastEventId) {
+        if (lastEventId == null || lastEventId.isBlank()) {
+            return 0;
+        }
+        int separator = lastEventId.indexOf('-');
+        String timestamp = separator < 0 ? lastEventId : lastEventId.substring(0, separator);
+        try {
+            return Long.parseLong(timestamp);
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
+    }
+
+    private static int compareEventId(String left, String right) {
+        long leftTimestamp = lastEventTimestamp(left);
+        long rightTimestamp = lastEventTimestamp(right);
+        if (leftTimestamp != rightTimestamp) {
+            return Long.compare(leftTimestamp, rightTimestamp);
+        }
+        return Long.compare(eventSequence(left), eventSequence(right));
+    }
+
+    private static long eventSequence(String eventId) {
+        if (eventId == null || eventId.isBlank()) {
+            return 0;
+        }
+        int separator = eventId.indexOf('-');
+        if (separator < 0 || separator == eventId.length() - 1) {
+            return 0;
+        }
+        try {
+            return Long.parseLong(eventId.substring(separator + 1));
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
+    }
+
+    private static void writeSse(OutputStream output, String event, int sequence, String data) throws IOException {
+        writeSse(output, new SseEvent(System.currentTimeMillis() + "-" + sequence, event, data));
+    }
+
+    private static void writeSse(OutputStream output, SseEvent event) throws IOException {
+        String payload = "id: " + event.id() + "\n"
+                + "retry: 3000\n"
+                + "event: " + event.event() + "\n"
+                + "data: " + event.data().replace("\n", "\\n") + "\n\n";
+        output.write(payload.getBytes(StandardCharsets.UTF_8));
+        output.flush();
+    }
+
+    private static List<String> queryList(URI uri, String key) {
+        String query = uri.getRawQuery();
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+        Set<String> values = new LinkedHashSet<>();
+        String prefix = key + "=";
+        for (String part : query.split("&")) {
+            if (!part.startsWith(prefix)) {
+                continue;
+            }
+            String decoded = URLDecoder.decode(part.substring(prefix.length()), StandardCharsets.UTF_8);
+            Arrays.stream(decoded.split(","))
+                    .map(String::trim)
+                    .filter(value -> !value.isBlank())
+                    .forEach(values::add);
+        }
+        return List.copyOf(values);
+    }
+
+    private static MetricQuery metricQuery(URI uri) {
+        return new MetricQuery(
+                requiredQuery(uri, "metric"),
+                queryList(uri, "agents"),
+                longQuery(uri, "start_ms", longQuery(uri, "from", 0)),
+                longQuery(uri, "end_ms", longQuery(uri, "to", Long.MAX_VALUE)),
+                longQuery(uri, "step_ms", longQuery(uri, "step", 10_000)),
+                (int) Math.min(LocalMetricStorage.MAX_SERIES_LIMIT,
+                        longQuery(uri, "series_limit", LocalMetricStorage.DEFAULT_SERIES_LIMIT)),
+                (int) Math.min(LocalMetricStorage.MAX_POINT_LIMIT,
+                        longQuery(uri, "point_limit", LocalMetricStorage.MAX_POINT_LIMIT)),
+                (int) Math.min(LocalMetricStorage.MAX_SERIES_LIMIT,
+                        longQuery(uri, "top_n", longQuery(uri, "topN", 0))),
+                queryValue(uri, "cluster"));
+    }
+
+    private MetricQueryResult queryMetrics(HttpExchange exchange) throws Exception {
+        MetricQuery query = metricQuery(exchange.getRequestURI());
+        MetricQueryResult local = service.queryMetrics(query);
+        if ("1".equals(exchange.getRequestHeaders().getFirst("x-pulse-metric-routed")) || metricPeerUrls.isEmpty()) {
+            return local;
+        }
+        List<MetricQueryResult> results = new ArrayList<>();
+        results.add(local);
+        String rawPath = exchange.getRequestURI().getRawPath();
+        String rawQuery = exchange.getRequestURI().getRawQuery();
+        for (String peerUrl : metricPeerUrls) {
+            try {
+                URI target = URI.create(peerUrl + rawPath + (rawQuery == null || rawQuery.isBlank() ? "" : "?" + rawQuery));
+                HttpRequest request = HttpRequest.newBuilder(target)
+                        .timeout(Duration.ofMillis(positiveLong("PULSE_METRIC_ROUTE_TIMEOUT_MS", 2_000)))
+                        .header("x-pulse-metric-routed", "1")
+                        .GET()
+                        .build();
+                HttpResponse<String> response = routeClient.send(request, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                    results.add(mapper.readValue(response.body(), MetricQueryResult.class));
+                } else {
+                    System.err.printf("metric_route status=bad_response peer=%s code=%d body=%s%n",
+                            peerUrl, response.statusCode(), response.body());
+                }
+            } catch (Exception exception) {
+                System.err.printf("metric_route status=failed peer=%s error=%s%n", peerUrl, exception.getMessage());
+            }
+        }
+        return mergeMetricResults(query, results);
+    }
+
+    private static MetricQueryResult mergeMetricResults(MetricQuery query, List<MetricQueryResult> results) {
+        MetricQueryResult first = results.get(0);
+        Map<Map<String, String>, List<MetricPoint>> byLabels = new java.util.LinkedHashMap<>();
+        boolean truncated = false;
+        long suggestedStepMs = first.suggestedStepMs();
+        for (MetricQueryResult result : results) {
+            truncated = truncated || result.truncated();
+            suggestedStepMs = Math.max(suggestedStepMs, result.suggestedStepMs());
+            for (MetricSeries series : result.series()) {
+                byLabels.computeIfAbsent(series.labels(), ignored -> new ArrayList<>()).addAll(series.points());
+            }
+        }
+        int limit = Math.min(first.seriesLimit(), query.topN() > 0 ? query.topN() : first.seriesLimit());
+        List<MetricSeries> series = byLabels.entrySet().stream()
+                .map(entry -> new MetricSeries(
+                        entry.getKey(),
+                        entry.getValue().stream()
+                                .sorted(java.util.Comparator.comparingLong(MetricPoint::timestampMs))
+                                .toList()))
+                .sorted((left, right) -> stableMetricLabelKey(left).compareTo(stableMetricLabelKey(right)))
+                .toList();
+        if (series.size() > limit) {
+            truncated = true;
+            series = List.copyOf(series.subList(0, limit));
+        }
+        return new MetricQueryResult(
+                "q-merged-" + query.startMs() + "-" + query.endMs() + "-" + Math.abs((query.metric() + query.agentIds() + query.cluster()).hashCode()),
+                query.metric(),
+                query.startMs(),
+                query.endMs(),
+                first.unit(),
+                first.samplePolicy(),
+                truncated,
+                suggestedStepMs,
+                first.seriesLimit(),
+                first.pointLimit(),
+                series);
+    }
+
+    private static String stableMetricLabelKey(MetricSeries series) {
+        return series.labels().entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .map(entry -> entry.getKey() + "=" + entry.getValue())
+                .reduce("", (left, right) -> left + "|" + right);
+    }
+
+    private static MetricEventQuery metricEventQuery(URI uri) {
+        return new MetricEventQuery(
+                longQuery(uri, "start_ms", longQuery(uri, "from", 0)),
+                longQuery(uri, "end_ms", longQuery(uri, "to", Long.MAX_VALUE)),
+                queryValue(uri, "agent"),
+                queryList(uri, "severity"),
+                (int) Math.min(Integer.MAX_VALUE, longQuery(uri, "limit", 500)));
+    }
+
+    private static String requiredQuery(URI uri, String key) {
+        String value = queryValue(uri, key);
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(key + " is required");
+        }
+        return value;
+    }
+
+    private static long longQuery(URI uri, String key, long fallback) {
+        String value = queryValue(uri, key);
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException(key + " must be a number");
+        }
+    }
+
+    private static String queryValue(URI uri, String key) {
+        String query = uri.getRawQuery();
+        if (query == null || query.isBlank()) {
+            return null;
+        }
+        String prefix = key + "=";
+        for (String part : query.split("&")) {
+            if (part.startsWith(prefix)) {
+                return URLDecoder.decode(part.substring(prefix.length()), StandardCharsets.UTF_8);
+            }
+        }
+        return null;
+    }
+
+    private <T> T readJson(HttpExchange exchange, Class<T> type) throws IOException {
+        try (InputStream body = exchange.getRequestBody()) {
+            return mapper.readValue(body, type);
+        }
+    }
+
+    private String readBody(HttpExchange exchange) throws IOException {
+        try (InputStream body = exchange.getRequestBody()) {
+            return new String(body.readAllBytes(), StandardCharsets.UTF_8);
+        }
+    }
+
+    private void writeTaskCompletionOutputJson(HttpExchange exchange, String agentId, String taskId) throws IOException {
+        Optional<TaskResult> result = service.taskCompletion(agentId, taskId);
+        if (result.isEmpty()) {
+            writeJson(exchange, 404, Map.of("ok", false, "error", "not_found"));
+            return;
+        }
+        writeJson(exchange, 200, taskResultView(result.get(), true));
+    }
+
+    private void writeTaskCompletionOutputStream(HttpExchange exchange, String agentId, String taskId) throws IOException {
+        Optional<TaskResult> result = service.taskCompletion(agentId, taskId);
+        if (result.isEmpty()) {
+            writeJson(exchange, 404, Map.of("ok", false, "error", "not_found"));
+            return;
+        }
+        TaskResult taskResult = result.get();
+        String output = taskResult.output() == null ? "" : taskResult.output();
+        int chunkChars = positiveInt("PULSE_TASK_OUTPUT_SSE_CHARS", 32 * 1024);
+        int offset = completionOutputOffset(exchange, output.length());
+        exchange.getResponseHeaders().set("content-type", "text/event-stream; charset=utf-8");
+        exchange.getResponseHeaders().set("cache-control", "no-cache");
+        exchange.getResponseHeaders().set("connection", "keep-alive");
+        exchange.getResponseHeaders().set("x-accel-buffering", "no");
+        exchange.sendResponseHeaders(200, 0);
+        try (OutputStream response = exchange.getResponseBody()) {
+            writeSse(response, new SseEvent(String.valueOf(offset), "completion.output_start", mapper.writeValueAsString(Map.of(
+                    "task_id", taskResult.taskId(),
+                    "agent_id", taskResult.agentId(),
+                    "output_bytes", taskResult.outputBytes(),
+                    "output_chars", output.length(),
+                    "output_sha256", taskResult.outputSha256(),
+                    "offset", offset))));
+            while (offset < output.length()) {
+                int nextOffset = Math.min(output.length(), offset + chunkChars);
+                writeSse(response, new SseEvent(String.valueOf(nextOffset), "completion.output_chunk", mapper.writeValueAsString(Map.of(
+                        "task_id", taskResult.taskId(),
+                        "agent_id", taskResult.agentId(),
+                        "offset", offset,
+                        "next_offset", nextOffset,
+                        "chunk", output.substring(offset, nextOffset),
+                        "done", nextOffset >= output.length()))));
+                offset = nextOffset;
+            }
+            writeSse(response, new SseEvent(String.valueOf(output.length()), "completion.output_end", mapper.writeValueAsString(Map.of(
+                    "task_id", taskResult.taskId(),
+                    "agent_id", taskResult.agentId(),
+                    "output_bytes", taskResult.outputBytes(),
+                    "output_chars", output.length(),
+                    "output_sha256", taskResult.outputSha256(),
+                    "done", true))));
+        }
+    }
+
+    private int completionOutputOffset(HttpExchange exchange, int outputLength) {
+        String raw = Optional.ofNullable(exchange.getRequestHeaders().getFirst("Last-Event-ID"))
+                .orElse(queryValue(exchange.getRequestURI(), "offset"));
+        if (raw == null || raw.isBlank()) {
+            return 0;
+        }
+        try {
+            int offset = Integer.parseInt(raw.trim());
+            return Math.max(0, Math.min(offset, outputLength));
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
+    }
+
+    TaskSnapshotView taskSnapshotView(TaskSnapshot snapshot) {
+        return new TaskSnapshotView(
+                snapshot.agentId(),
+                snapshot.executionQueue(),
+                snapshot.completionQueue().stream()
+                        .map(result -> taskResultView(result, false))
+                        .toList(),
+                snapshot.traces(),
+                snapshot.taskTypes(),
+                snapshot.fileTransfers(),
+                snapshot.outputStreams());
+    }
+
+    Object taskSnapshotForControl(String agentId) {
+        Optional<String> owner = service.agentCoordinatorId(agentId);
+        if (owner.isEmpty() || owner.get().equals(service.coordinatorId())) {
+            return controlTaskSnapshot(agentId, taskSnapshotView(service.taskSnapshot(agentId)));
+        }
+        String encodedAgentId = URLEncoder.encode(agentId, StandardCharsets.UTF_8)
+                .replace("+", "%20");
+        URI target = taskRouteResolver.apply(
+                owner.get(), URI.create("/api/agents/" + encodedAgentId + "/tasks"));
+        try {
+            HttpResponse<String> response = routeClient.send(
+                    HttpRequest.newBuilder(target)
+                            .timeout(Duration.ofMillis(
+                                    positiveLong("PULSE_TASK_ROUTE_TIMEOUT_MS", 5_000)))
+                            .header("x-pulse-task-routed", "1")
+                            .GET()
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                return controlTaskSnapshot(
+                        agentId, mapper.readValue(response.body(), Map.class));
+            }
+        } catch (Exception exception) {
+            System.err.printf(
+                    "control_task_route status=failed agent_id=%s target=%s error=%s%n",
+                    agentId, target, exception.getMessage());
+            throw new IllegalStateException(
+                    "task owner unavailable for " + agentId, exception);
+        }
+        throw new IllegalStateException(
+                "task owner returned a non-success response for " + agentId);
+    }
+
+    private ObjectNode controlTaskSnapshot(String agentId, Object snapshot) {
+        ObjectNode control = mapper.valueToTree(snapshot);
+        JsonNode streams = control.get("output_streams");
+        if (streams != null && streams.isArray()) {
+            for (JsonNode stream : streams) {
+                if (!(stream instanceof ObjectNode item)) {
+                    continue;
+                }
+                String taskId = item.path("task_id").asText("");
+                item.remove("output");
+                item.put("output_stream_url", runningOutputStreamUrl(agentId, taskId));
+            }
+        }
+        return control;
+    }
+
+    private TaskResultView taskResultView(TaskResult result, boolean fullOutput) {
+        String output = result.output() == null ? "" : result.output();
+        boolean inline = fullOutput || output.length() <= taskOutputPreviewChars;
+        String visibleOutput = inline ? output : output.substring(0, Math.min(taskOutputPreviewChars, output.length()));
+        return new TaskResultView(
+                result.taskId(),
+                result.traceId(),
+                result.agentId(),
+                result.taskType(),
+                result.status(),
+                result.exitCode(),
+                result.startedAtMs(),
+                result.finishedAtMs(),
+                result.durationMs(),
+                visibleOutput,
+                result.outputType(),
+                result.outputEncoding(),
+                result.outputSha256(),
+                result.outputBytes(),
+                result.outputLines(),
+                result.runnerError(),
+                inline,
+                !inline,
+                output.length(),
+                taskOutputStreamUrl(result.agentId(), result.taskId()));
+    }
+
+    private static String taskOutputStreamUrl(String agentId, String taskId) {
+        String encodedAgentId = URLEncoder.encode(agentId, StandardCharsets.UTF_8).replace("+", "%20");
+        String encodedTaskId = URLEncoder.encode(taskId, StandardCharsets.UTF_8).replace("+", "%20");
+        return "/api/agents/" + encodedAgentId + "/tasks/completions/" + encodedTaskId + "/output_stream";
+    }
+
+    private static String runningOutputStreamUrl(String agentId, String taskId) {
+        String encodedAgentId = URLEncoder.encode(agentId, StandardCharsets.UTF_8)
+                .replace("+", "%20");
+        String encodedTaskId = URLEncoder.encode(taskId, StandardCharsets.UTF_8)
+                .replace("+", "%20");
+        return "/api/agents/" + encodedAgentId + "/tasks/" + encodedTaskId
+                + "/output_stream";
+    }
+
+    private Object taskSnapshotForHttp(HttpExchange exchange, String agentId) throws IOException {
+        Optional<URI> target = taskSnapshotRouteUri(exchange, agentId);
+        if (target.isEmpty()) {
+            return taskSnapshotView(service.taskSnapshot(agentId));
+        }
+        try {
+            HttpRequest request = HttpRequest.newBuilder(target.get())
+                    .timeout(Duration.ofMillis(positiveLong("PULSE_TASK_ROUTE_TIMEOUT_MS", 5_000)))
+                    .header("x-pulse-task-routed", "1")
+                    .GET()
+                    .build();
+            HttpResponse<String> response = routeClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                return mapper.readValue(response.body(), Map.class);
+            }
+            System.err.printf("task_snapshot_route status=bad_response agent_id=%s target=%s code=%d body=%s%n",
+                    agentId, target.get(), response.statusCode(), response.body());
+            return taskSnapshotView(service.taskSnapshot(agentId));
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IOException("task snapshot route interrupted", exception);
+        } catch (Exception exception) {
+            System.err.printf("task_snapshot_route status=failed agent_id=%s target=%s error=%s%n",
+                    agentId, target.get(), exception.getMessage());
+            return taskSnapshotView(service.taskSnapshot(agentId));
+        }
+    }
+
+    private Optional<URI> taskSnapshotRouteUri(HttpExchange exchange, String agentId) {
+        if ("1".equals(exchange.getRequestHeaders().getFirst("x-pulse-task-routed"))) {
+            return Optional.empty();
+        }
+        Optional<String> owner = service.agentCoordinatorId(agentId);
+        if (owner.isEmpty() || owner.get().equals(service.coordinatorId())) {
+            return Optional.empty();
+        }
+        String encodedAgentId = URLEncoder.encode(agentId, StandardCharsets.UTF_8).replace("+", "%20");
+        URI snapshotUri = URI.create("/api/agents/" + encodedAgentId + "/tasks");
+        return Optional.of(taskRouteResolver.apply(owner.get(), snapshotUri));
+    }
+
+    private boolean proxyTaskRequestIfNeeded(
+            HttpExchange exchange,
+            String agentId,
+            String body,
+            boolean streamResponse) throws IOException, InterruptedException {
+        return proxyTaskRequestIfNeeded(
+                exchange,
+                agentId,
+                body,
+                streamResponse,
+                positiveLong("PULSE_TASK_ROUTE_TIMEOUT_MS", 5_000));
+    }
+
+    private boolean proxyTaskRequestIfNeeded(
+            HttpExchange exchange,
+            String agentId,
+            String body,
+            boolean streamResponse,
+            long routeTimeoutMs) throws IOException, InterruptedException {
+        Optional<URI> target = taskRouteUri(exchange, agentId);
+        if (target.isEmpty()) {
+            return false;
+        }
+        HttpRequest.BodyPublisher publisher = body == null
+                ? HttpRequest.BodyPublishers.noBody()
+                : HttpRequest.BodyPublishers.ofString(body);
+        HttpRequest.Builder builder = HttpRequest.newBuilder(target.get())
+                .timeout(Duration.ofMillis(routeTimeoutMs))
+                .header("x-pulse-task-routed", "1")
+                .method(exchange.getRequestMethod(), publisher);
+        if (body != null) {
+            builder.header("content-type", "application/json; charset=utf-8");
+        }
+        if (streamResponse) {
+            HttpResponse<InputStream> response = routeClient.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
+            response.headers().firstValue("content-type")
+                    .ifPresent(value -> exchange.getResponseHeaders().set("content-type", value));
+            exchange.sendResponseHeaders(response.statusCode(), 0);
+            try (InputStream input = response.body(); OutputStream output = exchange.getResponseBody()) {
+                input.transferTo(output);
+            }
+            return true;
+        }
+        HttpResponse<String> response = routeClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+        response.headers().firstValue("content-type")
+                .ifPresent(value -> exchange.getResponseHeaders().set("content-type", value));
+        byte[] bytes = response.body().getBytes(StandardCharsets.UTF_8);
+        exchange.sendResponseHeaders(response.statusCode(), bytes.length);
+        try (OutputStream output = exchange.getResponseBody()) {
+            output.write(bytes);
+        }
+        return true;
+    }
+
+    private Optional<URI> taskRouteUri(HttpExchange exchange, String agentId) {
+        if ("1".equals(exchange.getRequestHeaders().getFirst("x-pulse-task-routed"))) {
+            return Optional.empty();
+        }
+        Optional<String> owner = service.agentCoordinatorId(agentId);
+        if (owner.isEmpty() || owner.get().equals(service.coordinatorId())) {
+            return Optional.empty();
+        }
+        return Optional.of(taskRouteResolver.apply(owner.get(), exchange.getRequestURI()));
+    }
+
+    static URI defaultTaskRouteUri(String coordinatorId, URI requestUri) {
+        String base = taskRouteBase(coordinatorId);
+        String rawPath = requestUri.getRawPath();
+        String rawQuery = requestUri.getRawQuery();
+        return URI.create(base + rawPath + (rawQuery == null || rawQuery.isBlank() ? "" : "?" + rawQuery));
+    }
+
+    private static String taskRouteBase(String coordinatorId) {
+        String template = System.getenv().getOrDefault("PULSE_TASK_ROUTE_TEMPLATE", "");
+        if (!template.isBlank()) {
+            return String.format(template, coordinatorId);
+        }
+        long port = positiveLong("PULSE_PORT", 9966);
+        return "http://" + routeHost(coordinatorId) + ":" + port;
+    }
+
+    static String routeHost(String coordinatorId) {
+        String value = coordinatorId == null ? "" : coordinatorId.trim();
+        if (value.contains(":") && !(value.startsWith("[") && value.endsWith("]"))) {
+            return "[" + value + "]";
+        }
+        return value;
+    }
+
+    static List<String> peerUrlsFromEnvironment() {
+        String rawPeers = System.getenv().getOrDefault("PULSE_COORDINATOR_PEERS", "");
+        return Arrays.stream(rawPeers.split(","))
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .toList();
+    }
+
+    private static List<String> parseArgs(Object rawArgs) {
+        if (rawArgs == null) {
+            return null;
+        }
+        if (rawArgs instanceof List<?> values) {
+            return values.stream()
+                    .map(String::valueOf)
+                    .toList();
+        }
+        String value = rawArgs.toString();
+        if (value.isBlank()) {
+            return null;
+        }
+        return Arrays.stream(value.trim().split("\\s+"))
+                .filter(part -> !part.isBlank())
+                .toList();
+    }
+
+    private static List<String> parseStringList(Object rawValues) {
+        if (rawValues == null) {
+            return List.of();
+        }
+        if (rawValues instanceof List<?> values) {
+            return values.stream()
+                    .map(String::valueOf)
+                    .map(String::trim)
+                    .filter(value -> !value.isBlank())
+                    .distinct()
+                    .toList();
+        }
+        String value = rawValues.toString();
+        if (value.isBlank()) {
+            return List.of();
+        }
+        return Arrays.stream(value.split(","))
+                .map(String::trim)
+                .filter(part -> !part.isBlank())
+                .distinct()
+                .toList();
+    }
+
+    private static String stringBody(Map<?, ?> body, String key) {
+        Object value = body.get(key);
+        return value == null ? "" : value.toString();
+    }
+
+    private static long longBody(Map<?, ?> body, String key) {
+        Object value = body.get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return value == null || value.toString().isBlank() ? 0 : Long.parseLong(value.toString());
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException(key + " must be a number");
+        }
+    }
+
+    private void writeJson(HttpExchange exchange, int status, Object body) throws IOException {
+        byte[] bytes = mapper.writeValueAsBytes(body);
+        exchange.getResponseHeaders().set("content-type", "application/json; charset=utf-8");
+        exchange.sendResponseHeaders(status, bytes.length);
+        try (OutputStream output = exchange.getResponseBody()) {
+            output.write(bytes);
+        }
+    }
+
+    private void writeHtml(HttpExchange exchange, int status, String body) throws IOException {
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("content-type", "text/html; charset=utf-8");
+        exchange.sendResponseHeaders(status, bytes.length);
+        try (OutputStream output = exchange.getResponseBody()) {
+            output.write(bytes);
+        }
+    }
+
+    private void writeStaticAsset(HttpExchange exchange, String path) throws IOException {
+        String fileName = path.substring("/assets/".length());
+        if (fileName.isBlank() || fileName.contains("/") || fileName.contains("..")) {
+            writeJson(exchange, 404, Map.of("ok", false, "error", "not_found"));
+            return;
+        }
+        String resourcePath = "static/" + fileName;
+        try (InputStream resource = LegacyCoordinatorHttpServer.class.getClassLoader().getResourceAsStream(resourcePath)) {
+            if (resource == null) {
+                writeJson(exchange, 404, Map.of("ok", false, "error", "not_found"));
+                return;
+            }
+            byte[] bytes = resource.readAllBytes();
+            exchange.getResponseHeaders().set("content-type", contentType(fileName));
+            exchange.getResponseHeaders().set("cache-control", "no-cache");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream output = exchange.getResponseBody()) {
+                output.write(bytes);
+            }
+        }
+    }
+
+    private static String contentType(String fileName) {
+        if (fileName.endsWith(".js")) {
+            return "text/javascript; charset=utf-8";
+        }
+        if (fileName.endsWith(".css")) {
+            return "text/css; charset=utf-8";
+        }
+        return "application/octet-stream";
+    }
+
+    private static ThreadPoolExecutor httpExecutor() {
+        int maxThreads = positiveInt("PULSE_HTTP_MAX_THREADS", Math.max(32, Runtime.getRuntime().availableProcessors() * 4));
+        int coreThreads = Math.min(8, maxThreads);
+        int queueSize = positiveInt("PULSE_HTTP_QUEUE_SIZE", 2_048);
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(
+                coreThreads,
+                maxThreads,
+                60,
+                TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(queueSize),
+                new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.allowCoreThreadTimeOut(true);
+        return executor;
+    }
+
+    private static int httpBacklog() {
+        return positiveInt("PULSE_HTTP_BACKLOG", 512);
+    }
+
+    private static int positiveInt(String key, int fallback) {
+        try {
+            int value = Integer.parseInt(System.getenv().getOrDefault(key, String.valueOf(fallback)));
+            return value > 0 ? value : fallback;
+        } catch (NumberFormatException exception) {
+            return fallback;
+        }
+    }
+
+    private static long positiveLong(String key, long fallback) {
+        try {
+            long value = Long.parseLong(System.getenv().getOrDefault(key, String.valueOf(fallback)));
+            return value > 0 ? value : fallback;
+        } catch (NumberFormatException exception) {
+            return fallback;
+        }
+    }
+
+    private static Optional<TaskCompletionAction> completionAction(String path) {
+        String prefix = "/api/agents/";
+        String marker = "/tasks/completions/";
+        if (!path.startsWith(prefix) || !path.contains(marker)) {
+            return Optional.empty();
+        }
+        int markerIndex = path.indexOf(marker);
+        String agentId = path.substring(prefix.length(), markerIndex);
+        String rest = path.substring(markerIndex + marker.length());
+        int separator = rest.lastIndexOf('/');
+        if (agentId.isBlank() || separator <= 0 || separator >= rest.length() - 1) {
+            return Optional.empty();
+        }
+        return Optional.of(new TaskCompletionAction(agentId, rest.substring(0, separator), rest.substring(separator + 1)));
+    }
+
+    private record TaskSnapshotView(
+            String agentId,
+            List<RemoteTask> executionQueue,
+            List<TaskResultView> completionQueue,
+            List<TaskTraceLogEntry> traces,
+            List<String> taskTypes,
+            List<FileTransferStatus> fileTransfers,
+            List<TaskStreamSnapshot> outputStreams) {}
+
+    private record TaskResultView(
+            String taskId,
+            String traceId,
+            String agentId,
+            String taskType,
+            String status,
+            Integer exitCode,
+            long startedAtMs,
+            long finishedAtMs,
+            long durationMs,
+            String output,
+            String outputType,
+            String outputEncoding,
+            String outputSha256,
+            long outputBytes,
+            long outputLines,
+            String runnerError,
+            boolean outputInline,
+            boolean outputPreview,
+            int outputChars,
+            String outputStreamUrl) {}
+
+    private record TaskCompletionAction(String agentId, String taskId, String action) {}
+
+    private record SseEvent(String id, String event, String data) {}
+
+    interface PeerForwarder {
+        void forward(HeartbeatRequest request);
+
+        static PeerForwarder noop() {
+            return request -> {};
+        }
+
+        static PeerForwarder fromEnvironment(String coordinatorId) {
+            List<String> peers = peerUrlsFromEnvironment();
+            if (peers.isEmpty()) {
+                return noop();
+            }
+            Duration timeout = Duration.ofMillis(Long.parseLong(System.getenv().getOrDefault("PULSE_PEER_TIMEOUT_MS", "1000")));
+            return new HttpPeerForwarder(coordinatorId, peers, timeout);
+        }
+    }
+
+    static final class HttpPeerForwarder implements PeerForwarder {
+        private final String coordinatorId;
+        private final List<String> peerUrls;
+        private final Duration timeout;
+        private final HttpClient httpClient = HttpClient.newHttpClient();
+        private final ObjectMapper mapper = JsonSupport.objectMapper();
+
+        HttpPeerForwarder(String coordinatorId, List<String> peerUrls, Duration timeout) {
+            this.coordinatorId = coordinatorId;
+            this.peerUrls = List.copyOf(peerUrls);
+            this.timeout = timeout;
+        }
+
+        @Override
+        public void forward(HeartbeatRequest request) {
+            HeartbeatForwardRequest forwardRequest = toForwardRequest(request);
+            if (forwardRequest.states().isEmpty()) {
+                return;
+            }
+            for (String peerUrl : peerUrls) {
+                HttpRequest httpRequest;
+                try {
+                    httpRequest = HttpRequest.newBuilder(URI.create(peerUrl + "/heartbeat_fwd"))
+                            .timeout(timeout)
+                            .header("content-type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(forwardRequest)))
+                            .build();
+                } catch (Exception exception) {
+                    System.err.printf("heartbeat_fwd status=build_failed peer=%s error=%s%n", peerUrl, exception.getMessage());
+                    continue;
+                }
+                httpClient.sendAsync(httpRequest, HttpResponse.BodyHandlers.ofString())
+                        .thenAccept(response -> {
+                            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                                System.err.printf(
+                                        "heartbeat_fwd status=bad_response peer=%s code=%d body=%s%n",
+                                        peerUrl,
+                                        response.statusCode(),
+                                        response.body());
+                            }
+                        })
+                        .exceptionally(exception -> {
+                            System.err.printf(
+                                    "heartbeat_fwd status=failed peer=%s error=%s%n",
+                                    peerUrl,
+                                    exception.getMessage());
+                            return null;
+                        });
+            }
+        }
+
+        HeartbeatForwardRequest toForwardRequest(HeartbeatRequest request) {
+            if (request.isBatch()) {
+                String source = request.groupId() == null || request.groupId().isBlank() ? "group" : request.groupId();
+                return new HeartbeatForwardRequest(
+                        coordinatorId,
+                        request.agents().stream()
+                                .map(agent -> toForwardState(agent, source))
+                                .filter(state -> !state.messages().isEmpty())
+                                .toList());
+            }
+            AgentHeartbeat heartbeat = request.toSingleAgentHeartbeat();
+            ForwardState state = toForwardState(heartbeat, "direct");
+            return new HeartbeatForwardRequest(
+                    coordinatorId,
+                    state.messages().isEmpty() ? List.of() : List.of(state));
+        }
+
+        private ForwardState toForwardState(AgentHeartbeat heartbeat, String source) {
+            return new ForwardState(
+                    heartbeat.agentId(),
+                    heartbeat.epoch(),
+                    heartbeat.seq(),
+                    heartbeat.ttlMs(),
+                    System.currentTimeMillis(),
+                    source,
+                    heartbeat.messages().stream()
+                            .filter(PulseMessage::isForwardableHeartbeatMessage)
+                            .toList());
+        }
+    }
+}

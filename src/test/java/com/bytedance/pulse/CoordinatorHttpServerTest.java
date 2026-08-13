@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -28,6 +29,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -113,7 +115,8 @@ class CoordinatorHttpServerTest {
         assertTrue(hosts.body().contains("leader_agent_id"));
         assertTrue(hosts.body().contains("group_size_limit"));
 
-        HttpResponse<String> stream = get("/api/hosts/stream?once=true");
+        HttpResponse<String> stream = get(
+                "/api/control/stream?once=true");
         assertEquals(200, stream.statusCode());
         assertTrue(stream.headers().firstValue("content-type").orElse("").contains("text/event-stream"));
         assertTrue(stream.body().contains("event: hosts.snapshot"));
@@ -121,7 +124,7 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
-    void hostStreamV2ScopesCompleteSummaryBeforeSerialization() throws Exception {
+    void legacyHostStreamV2IsRetired() throws Exception {
         postJson("/heartbeat", """
                 {
                   "agent_id":"agent-cdn2",
@@ -159,34 +162,8 @@ class CoordinatorHttpServerTest {
                 }
                 """);
 
-        HttpResponse<String> response = get(
-                "/api/hosts/stream?v=2&clusters=cdn2&once=true");
-
-        assertEquals(200, response.statusCode());
-        JsonNode snapshot = sseData(response.body(), "hosts.snapshot");
-        assertEquals("hosts.v2", snapshot.get("schema").asText());
-        assertTrue(snapshot.get("revision").asLong() > 0);
-        assertEquals(List.of("cdn2"), mapper.convertValue(snapshot.get("scope"), List.class));
-        assertTrue(snapshot.get("available_clusters").toString().contains("cdn2"));
-        assertTrue(snapshot.get("available_clusters").toString().contains("other"));
-        assertEquals(1, snapshot.get("hosts").size());
-        JsonNode host = snapshot.get("hosts").get(0);
-        assertEquals("10.0.0.2", host.get("agent_id").asText());
-        assertEquals(7, host.get("epoch").asLong());
-        assertEquals(11, host.get("seq").asLong());
-        assertEquals("az-a", host.get("zone").asText());
-        assertEquals("worker", host.get("role").asText());
-        assertFalse(host.has("state"));
-        assertEquals(Set.of(
-                "agent_id", "epoch", "seq", "ttl_ms", "observed_at_ms",
-                "expire_at_ms", "last_observed_age_ms",
-                "heartbeat_confirmations", "status", "source",
-                "coordinator_id", "group_id", "group_mode",
-                "leader_agent_id", "leader_url", "group_size",
-                "group_size_limit", "host", "ip", "cluster", "area",
-                "zone", "role", "load"),
-                mapper.convertValue(host, Map.class).keySet());
-        assertFalse(response.body().contains("10.0.0.3"));
+        assertEquals(410, get(
+                "/api/hosts/stream?v=2&clusters=cdn2&once=true").statusCode());
     }
 
     @Test
@@ -229,7 +206,7 @@ class CoordinatorHttpServerTest {
                 """);
 
         HttpResponse<String> response = get(
-                "/api/hosts/stream?v=3&clusters=cdn2&once=true");
+                "/api/control/stream?clusters=cdn2&once=true");
 
         assertEquals(200, response.statusCode());
         JsonNode snapshot = sseData(response.body(), "hosts.snapshot");
@@ -253,19 +230,13 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
-    void hostStreamWithoutVersionRetainsV1ArrayContract() throws Exception {
-        HttpResponse<String> response = get("/api/hosts/stream?once=true");
-
-        JsonNode snapshot = sseData(response.body(), "hosts.snapshot");
-        assertTrue(snapshot.isArray());
+    void hostStreamWithoutVersionIsRetired() throws Exception {
+        assertEquals(410, get("/api/hosts/stream?once=true").statusCode());
     }
 
     @Test
-    void hostStreamUnknownVersionRetainsV1ArrayContract() throws Exception {
-        HttpResponse<String> response = get("/api/hosts/stream?v=99&once=true");
-
-        JsonNode snapshot = sseData(response.body(), "hosts.snapshot");
-        assertTrue(snapshot.isArray());
+    void hostStreamUnknownVersionIsRetired() throws Exception {
+        assertEquals(410, get("/api/hosts/stream?v=99&once=true").statusCode());
     }
 
     @Test
@@ -469,57 +440,130 @@ class CoordinatorHttpServerTest {
         assertTrue(health.has("shard_count"));
         assertTrue(health.has("retention_lag_ms"));
 
-        HttpResponse<String> stream = client.send(
-                HttpRequest.newBuilder(URI.create(baseUrl + "/api/metrics/stream?once=true"))
-                        .timeout(Duration.ofSeconds(5))
-                        .GET()
-                        .build(),
-                HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> stream = get(
+                "/api/control/stream?clusters=__pulse_catalog__&once=true");
 
         assertEquals(200, stream.statusCode());
         assertTrue(stream.headers().firstValue("content-type").orElse("").contains("text/event-stream"));
-        assertTrue(stream.body().contains("event: hello"));
         assertTrue(stream.body().contains("retry: 3000"));
-        assertTrue(stream.body().contains("event_cache_supported"));
         assertTrue(stream.body().contains("event: storage.health"));
         assertTrue(stream.body().contains("event: metric.invalidate"));
-        String firstEventId = stream.body().lines()
-                .filter(line -> line.startsWith("id: "))
-                .findFirst()
-                .orElseThrow()
-                .substring("id: ".length());
-
-        HttpResponse<String> resumed = client.send(
-                HttpRequest.newBuilder(URI.create(baseUrl + "/api/metrics/stream?once=true"))
-                        .timeout(Duration.ofSeconds(5))
-                        .header("Last-Event-ID", firstEventId)
-                        .GET()
-                        .build(),
-                HttpResponse.BodyHandlers.ofString());
-
-        assertEquals(200, resumed.statusCode());
-        assertTrue(resumed.body().contains("\"resumed\":true"));
-        assertTrue(resumed.body().contains("\"last_event_id\":\"" + firstEventId + "\""));
-        assertTrue(resumed.body().contains("\"event_cache_supported\":true"));
-        assertTrue(resumed.body().contains("\"replayed_events\":"));
-        assertTrue(resumed.body().contains("event: storage.health"));
+        JsonNode invalidation = sseData(stream.body(), "metric.invalidate");
+        assertTrue(invalidation.has("from"));
+        assertTrue(invalidation.has("to"));
+        assertFalse(invalidation.has("from_ms"));
+        assertFalse(invalidation.has("to_ms"));
     }
 
     @Test
-    void metricsStreamProducesBoundedPeriodicInvalidations() throws Exception {
-        HttpResponse<String> stream = client.send(
-                HttpRequest.newBuilder(URI.create(baseUrl + "/api/metrics/stream?interval_ms=5&max_ms=25"))
-                        .timeout(Duration.ofSeconds(5))
-                        .GET()
-                        .build(),
-                HttpResponse.BodyHandlers.ofString());
+    void unifiedControlStreamCarriesAllLightweightChannels() throws Exception {
+        HttpResponse<String> stream = get(
+                "/api/control/stream?clusters=__pulse_catalog__&agents=agent-1&once=true");
 
         assertEquals(200, stream.statusCode());
-        long invalidations = stream.body().lines().filter("event: metric.invalidate"::equals).count();
-        assertTrue(invalidations >= 2);
-        assertTrue(stream.body().contains("\"stream_max_ms\":25"));
-        assertTrue(stream.body().contains("\"stream_interval_ms\":5"));
-        assertTrue(stream.body().contains("event: ping"));
+        assertTrue(stream.headers().firstValue("content-type").orElse("")
+                .contains("text/event-stream"));
+        assertTrue(stream.body().contains("event: hosts.snapshot"));
+        assertTrue(stream.body().contains("event: eventbus.snapshot"));
+        assertTrue(stream.body().contains("event: storage.health"));
+        assertTrue(stream.body().contains("event: metric.invalidate"));
+        assertTrue(stream.body().contains("event: task.snapshot"));
+    }
+
+    @Test
+    void legacyControlStreamsAreRetiredAtomically() throws Exception {
+        assertEquals(410, get("/api/metrics/stream").statusCode());
+        assertEquals(410, get("/api/hosts/stream").statusCode());
+        assertEquals(410, get("/api/eventbus/stream").statusCode());
+        assertEquals(410, get("/api/tasks/stream").statusCode());
+        assertEquals(410, get("/api/agents/agent-1/tasks/stream").statusCode());
+    }
+
+    @Test
+    void longLivedStreamsDoNotStarveShortHttpRequests() throws Exception {
+        List<CompletableFuture<HttpResponse<InputStream>>> streams = new ArrayList<>();
+        long baselineP99Ms = storageLatencyP99Ms(20);
+        try {
+            for (int index = 0; index < 500; index++) {
+                streams.add(client.sendAsync(
+                        HttpRequest.newBuilder(URI.create(
+                                        baseUrl + "/api/control/stream?clusters=__pulse_catalog__"))
+                                .GET()
+                                .build(),
+                        HttpResponse.BodyHandlers.ofInputStream()));
+            }
+            for (CompletableFuture<HttpResponse<InputStream>> stream : streams) {
+                assertEquals(200, stream.get(Duration.ofSeconds(10).toMillis(),
+                        java.util.concurrent.TimeUnit.MILLISECONDS).statusCode());
+            }
+
+            long saturatedP99Ms = storageLatencyP99Ms(20);
+            assertTrue(saturatedP99Ms < 100,
+                    "saturated p99 must stay below 100ms: " + saturatedP99Ms);
+            assertTrue(saturatedP99Ms - baselineP99Ms < 50,
+                    "SSE queueing delta must stay below 50ms: baseline="
+                            + baselineP99Ms + " saturated=" + saturatedP99Ms);
+        } finally {
+            for (CompletableFuture<HttpResponse<InputStream>> stream : streams) {
+                if (stream.isDone() && !stream.isCompletedExceptionally()) {
+                    stream.get().body().close();
+                }
+            }
+        }
+    }
+
+    @Test
+    void controlStreamPublishesHostDeltaAfterInitialSnapshot() throws Exception {
+        HttpResponse<InputStream> response = client.send(
+                HttpRequest.newBuilder(URI.create(
+                                baseUrl + "/api/control/stream?clusters=cluster-a"))
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofInputStream());
+        assertEquals(200, response.statusCode());
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                response.body(), java.nio.charset.StandardCharsets.UTF_8))) {
+            CompletableFuture<String> body = CompletableFuture.supplyAsync(() -> {
+                try {
+                    StringBuilder events = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        events.append(line).append('\n');
+                        if (line.equals("event: hosts.delta")) {
+                            return events.toString();
+                        }
+                    }
+                    return events.toString();
+                } catch (IOException exception) {
+                    throw new java.io.UncheckedIOException(exception);
+                }
+            });
+            postAlive("agent-delta", "host-delta", "10.0.0.88");
+            String events = body.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            assertTrue(events.contains("event: hosts.snapshot"), events);
+            assertTrue(events.contains("event: hosts.delta"), events);
+        }
+    }
+
+    private long storageLatencyP99Ms(int samples) throws Exception {
+        List<Long> latencies = new ArrayList<>();
+        for (int index = 0; index < samples; index++) {
+            long startedAt = System.nanoTime();
+            HttpResponse<String> storage = client.send(
+                    HttpRequest.newBuilder(URI.create(baseUrl + "/api/metrics/storage"))
+                            .timeout(Duration.ofMillis(500))
+                            .GET()
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            latencies.add(java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                    System.nanoTime() - startedAt));
+            assertEquals(200, storage.statusCode());
+            assertEquals("ok", mapper.readTree(storage.body()).get("status").asText());
+        }
+        latencies.sort(Long::compareTo);
+        return latencies.get(Math.min(
+                latencies.size() - 1,
+                (int) Math.ceil(latencies.size() * 0.99) - 1));
     }
 
     @Test
@@ -548,7 +592,8 @@ class CoordinatorHttpServerTest {
         assertEquals(200, initial.statusCode());
         assertTrue(initial.body().contains("pulse_message"));
         assertTrue(initial.body().contains("lark_webhook"));
-        HttpResponse<String> stream = get("/api/eventbus/stream?once=true");
+        HttpResponse<String> stream = get(
+                "/api/control/stream?clusters=__pulse_catalog__&once=true");
         assertEquals(200, stream.statusCode());
         assertTrue(stream.headers().firstValue("content-type").orElse("").contains("text/event-stream"));
         assertTrue(stream.body().contains("event: eventbus.snapshot"));
@@ -721,7 +766,9 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("Retention Lag"));
         assertTrue(js.body().contains("read only"));
         assertTrue(js.body().contains("/api/metrics/query_range"));
-        assertTrue(js.body().contains("/api/metrics/stream"));
+        assertTrue(js.body().contains("/api/control/stream"));
+        assertFalse(js.body().contains("/api/metrics/stream"));
+        assertFalse(js.body().contains("/api/hosts/stream"));
         assertTrue(js.body().contains("metrics-echart"));
         assertTrue(js.body().contains("峰值"));
         assertTrue(js.body().contains("必须为 0"));
@@ -914,32 +961,14 @@ class CoordinatorHttpServerTest {
                 {"task_type":"analyze_block_layout_dry_run"}
                 """);
 
-        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/api/agents/agent-1/tasks/stream"))
-                .timeout(Duration.ofSeconds(2))
-                .GET()
-                .build();
-        HttpResponse<java.io.InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        HttpResponse<String> response = get(
+                "/api/control/stream?clusters=__pulse_catalog__&agents=agent-1&once=true");
 
         assertEquals(200, response.statusCode());
         assertTrue(response.headers().firstValue("content-type").orElse("").contains("text/event-stream"));
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.body()))) {
-            StringBuilder firstLines = new StringBuilder();
-            for (int i = 0; i < 20; i++) {
-                String line = reader.readLine();
-                if (line == null) {
-                    break;
-                }
-                firstLines.append(line).append('\n');
-                if (firstLines.toString().contains("analyze_block_layout_dry_run")) {
-                    break;
-                }
-            }
-            String body = firstLines.toString();
-            assertTrue(body.contains("event: hello"));
-            assertTrue(body.contains("event: task.snapshot"));
-            assertTrue(body.contains("\"agent_id\":\"agent-1\""));
-            assertTrue(body.contains("analyze_block_layout_dry_run"));
-        }
+        assertTrue(response.body().contains("event: task.snapshot"));
+        assertTrue(response.body().contains("\"agent_id\":\"agent-1\""));
+        assertTrue(response.body().contains("analyze_block_layout_dry_run"));
     }
 
     @Test
@@ -951,35 +980,15 @@ class CoordinatorHttpServerTest {
                 {"task_type":"prepare_disk_layout_dry_run"}
                 """);
 
-        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/api/tasks/stream?agents=agent-1,agent-2"))
-                .timeout(Duration.ofSeconds(2))
-                .GET()
-                .build();
-        HttpResponse<java.io.InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        HttpResponse<String> response = get(
+                "/api/control/stream?clusters=__pulse_catalog__&agents=agent-1,agent-2&once=true");
 
         assertEquals(200, response.statusCode());
         assertTrue(response.headers().firstValue("content-type").orElse("").contains("text/event-stream"));
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.body()))) {
-            StringBuilder firstLines = new StringBuilder();
-            for (int i = 0; i < 40; i++) {
-                String line = reader.readLine();
-                if (line == null) {
-                    break;
-                }
-                firstLines.append(line).append('\n');
-                String body = firstLines.toString();
-                if (body.contains("\"agent_id\":\"agent-1\"") && body.contains("\"agent_id\":\"agent-2\"")) {
-                    break;
-                }
-            }
-            String body = firstLines.toString();
-            assertTrue(body.contains("event: hello"));
-            assertTrue(body.contains("\"agent_count\":2"));
-            assertTrue(body.contains("\"agent_id\":\"agent-1\""));
-            assertTrue(body.contains("\"agent_id\":\"agent-2\""));
-            assertTrue(body.contains("analyze_block_layout_dry_run"));
-            assertTrue(body.contains("prepare_disk_layout_dry_run"));
-        }
+        assertTrue(response.body().contains("\"agent_id\":\"agent-1\""));
+        assertTrue(response.body().contains("\"agent_id\":\"agent-2\""));
+        assertTrue(response.body().contains("analyze_block_layout_dry_run"));
+        assertTrue(response.body().contains("prepare_disk_layout_dry_run"));
     }
 
     @Test
@@ -1068,6 +1077,76 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
+    void runningTaskOutputUsesDedicatedResumableStream() throws Exception {
+        HttpResponse<String> enqueue = postJson("/api/agents/agent-1/tasks", """
+                {"task_type":"prepare_disk_layout_dry_run"}
+                """);
+        assertEquals(200, enqueue.statusCode());
+
+        HeartbeatResponse heartbeat = mapper.readValue(postJson("/heartbeat", """
+                {"agent_id":"agent-1","epoch":1,"seq":10,"ttl_ms":15000,"messages":[]}
+                """).body(), HeartbeatResponse.class);
+        PulseMessage command = heartbeat.messages().stream()
+                .filter(message -> "cmd.task_execute".equals(message.type()))
+                .findFirst()
+                .orElseThrow();
+        String prefix = "scan 😀\n";
+        String suffix = "done\n";
+        String output = prefix + suffix;
+        PulseMessage stream = new PulseMessage(
+                "stream-agent-1-0",
+                "reply.task_output_append",
+                1,
+                command.messageId(),
+                null,
+                Map.ofEntries(
+                        Map.entry("task_id", command.payload().get("task_id")),
+                        Map.entry("agent_id", "agent-1"),
+                        Map.entry("task_type", command.payload().get("task_type")),
+                        Map.entry("stream_id", "output"),
+                        Map.entry("stream_seq", 0),
+                        Map.entry("stream_offset", 0),
+                        Map.entry("output_encoding", "identity"),
+                        Map.entry("output_type", "text"),
+                        Map.entry("payload", output),
+                        Map.entry("payload_sha256", TaskOutputCodec.sha256(output)),
+                        Map.entry("observed_at_ms", 1_710_000_000_000L)));
+        postJson("/heartbeat", mapper.writeValueAsString(new HeartbeatRequest(
+                null,
+                "agent-1",
+                1L,
+                11L,
+                15_000L,
+                List.of(stream),
+                List.of())));
+
+        HttpResponse<String> control = get(
+                "/api/control/stream?clusters=__pulse_catalog__&agents=agent-1&once=true");
+        JsonNode taskSnapshot = sseData(control.body(), "task.snapshot");
+        JsonNode outputStream = taskSnapshot.get("output_streams").get(0);
+        assertFalse(outputStream.has("output"));
+        String outputStreamUrl = outputStream.get("output_stream_url").asText();
+
+        HttpResponse<String> full = get(outputStreamUrl);
+        JsonNode fullChunk = sseData(full.body(), "task.output_chunk");
+        assertEquals(output, fullChunk.get("chunk").asText());
+        assertEquals(
+                output.getBytes(java.nio.charset.StandardCharsets.UTF_8).length,
+                fullChunk.get("next_offset").asInt());
+
+        int prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        HttpRequest resumedRequest = HttpRequest.newBuilder(URI.create(baseUrl + outputStreamUrl))
+                .header("Last-Event-ID", String.valueOf(prefixBytes))
+                .GET()
+                .build();
+        HttpResponse<String> resumed = client.send(
+                resumedRequest, HttpResponse.BodyHandlers.ofString());
+        JsonNode resumedChunk = sseData(resumed.body(), "task.output_chunk");
+        assertEquals(suffix, resumedChunk.get("chunk").asText());
+        assertEquals(prefixBytes, resumedChunk.get("offset").asInt());
+    }
+
+    @Test
     void taskSnapshotCompactsLargeCompletionOutputAndOutputEndpointReturnsFullOutput() throws Exception {
         HttpResponse<String> enqueue = postJson("/api/agents/agent-1/tasks", """
                 {"task_type":"prepare_disk_layout_dry_run"}
@@ -1081,7 +1160,7 @@ class CoordinatorHttpServerTest {
                 .filter(message -> "cmd.task_execute".equals(message.type()))
                 .findFirst()
                 .orElseThrow();
-        String output = "x".repeat(20_000);
+        String output = "x".repeat(2_000_000);
         PulseMessage result = new PulseMessage(
                 "result-agent-1-11",
                 "reply.task_result",
@@ -1123,6 +1202,60 @@ class CoordinatorHttpServerTest {
         assertEquals(output.length(), completion.get("output_chars").asInt());
         assertEquals(output.getBytes(java.nio.charset.StandardCharsets.UTF_8).length, completion.get("output_bytes").asLong());
         assertTrue(completion.hasNonNull("output_stream_url"));
+
+        List<CompletableFuture<HttpResponse<InputStream>>> outputStreams =
+                new ArrayList<>();
+        List<CompletableFuture<HttpResponse<InputStream>>> controlStreams =
+                new ArrayList<>();
+        long baselineP99Ms = storageLatencyP99Ms(20);
+        try {
+            for (int index = 0; index < 500; index++) {
+                controlStreams.add(client.sendAsync(
+                        HttpRequest.newBuilder(URI.create(
+                                        baseUrl
+                                                + "/api/control/stream"
+                                                + "?clusters=__pulse_catalog__"))
+                                .GET()
+                                .build(),
+                        HttpResponse.BodyHandlers.ofInputStream()));
+            }
+            for (int index = 0; index < 50; index++) {
+                outputStreams.add(client.sendAsync(
+                        HttpRequest.newBuilder(URI.create(
+                                        baseUrl + completion.get("output_stream_url").asText()))
+                                .GET()
+                                .build(),
+                        HttpResponse.BodyHandlers.ofInputStream()));
+            }
+            for (CompletableFuture<HttpResponse<InputStream>> outputStream : outputStreams) {
+                assertEquals(200, outputStream.get(
+                        Duration.ofSeconds(10).toMillis(),
+                        java.util.concurrent.TimeUnit.MILLISECONDS).statusCode());
+            }
+            for (CompletableFuture<HttpResponse<InputStream>> controlStream : controlStreams) {
+                assertEquals(200, controlStream.get(
+                        Duration.ofSeconds(10).toMillis(),
+                        java.util.concurrent.TimeUnit.MILLISECONDS).statusCode());
+            }
+            long saturatedP99Ms = storageLatencyP99Ms(20);
+            assertTrue(saturatedP99Ms < 100,
+                    "500 control + 50 output streams must keep p99 below 100ms: "
+                            + saturatedP99Ms);
+            assertTrue(saturatedP99Ms - baselineP99Ms < 50,
+                    "output stream queueing delta must stay below 50ms: baseline="
+                            + baselineP99Ms + " saturated=" + saturatedP99Ms);
+        } finally {
+            for (CompletableFuture<HttpResponse<InputStream>> outputStream : outputStreams) {
+                if (outputStream.isDone() && !outputStream.isCompletedExceptionally()) {
+                    outputStream.get().body().close();
+                }
+            }
+            for (CompletableFuture<HttpResponse<InputStream>> controlStream : controlStreams) {
+                if (controlStream.isDone() && !controlStream.isCompletedExceptionally()) {
+                    controlStream.get().body().close();
+                }
+            }
+        }
 
         String streamedOutput = readCompletionOutputStream(completion.get("output_stream_url").asText());
         assertEquals(output, streamedOutput);
@@ -1271,28 +1404,11 @@ class CoordinatorHttpServerTest {
             assertTrue(batchBody.get("ok").asBoolean());
             assertEquals("queued", batchBody.get("snapshots").get("agent-routed").get("file_transfers").get(0).get("status").asText());
 
-            HttpRequest streamRequest = HttpRequest.newBuilder(URI.create(baseUrl + "/api/tasks/stream?agents=agent-routed"))
-                    .timeout(Duration.ofSeconds(2))
-                    .GET()
-                    .build();
-            HttpResponse<java.io.InputStream> streamResponse =
-                    client.send(streamRequest, HttpResponse.BodyHandlers.ofInputStream());
+            HttpResponse<String> streamResponse = get(
+                    "/api/control/stream?clusters=__pulse_catalog__&agents=agent-routed&once=true");
             assertEquals(200, streamResponse.statusCode());
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(streamResponse.body()))) {
-                StringBuilder firstLines = new StringBuilder();
-                for (int i = 0; i < 30; i++) {
-                    String line = reader.readLine();
-                    if (line == null) {
-                        break;
-                    }
-                    firstLines.append(line).append('\n');
-                    if (firstLines.toString().contains("hello.txt")) {
-                        break;
-                    }
-                }
-                assertTrue(firstLines.toString().contains("hello.txt"));
-                assertTrue(firstLines.toString().contains("file_transfers"));
-            }
+            assertTrue(streamResponse.body().contains("hello.txt"));
+            assertTrue(streamResponse.body().contains("file_transfers"));
 
             HttpResponse<String> loopProtectedGet = client.send(
                     HttpRequest.newBuilder(URI.create(baseUrl + "/api/agents/agent-routed/tasks"))
@@ -1643,10 +1759,11 @@ class CoordinatorHttpServerTest {
         HttpResponse<java.io.InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
         assertEquals(200, response.statusCode());
         StringBuilder output = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.body()))) {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                response.body(), java.nio.charset.StandardCharsets.UTF_8))) {
             String event = "";
             String data = "";
-            for (int i = 0; i < 200; i++) {
+            while (true) {
                 String line = reader.readLine();
                 if (line == null) {
                     break;
@@ -1667,7 +1784,7 @@ class CoordinatorHttpServerTest {
                 }
             }
         }
-        return output.toString();
+        throw new AssertionError("completion output stream ended without completion.output_end");
     }
 
     private HttpResponse<String> postJson(String path, String body) throws Exception {

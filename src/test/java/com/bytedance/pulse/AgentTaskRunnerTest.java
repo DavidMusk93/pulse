@@ -119,6 +119,92 @@ class AgentTaskRunnerTest {
         assertTrue(!output.contains("pulse output truncated"));
     }
 
+    @Test
+    void drainsFinalRunningOutputBeforeTerminalResult() throws Exception {
+        Path script = taskDir.resolve("prepare-disk-layout.sh");
+        Files.writeString(script, "python3 - <<'PY'\nprint('x' * 40000, end='')\nPY\n");
+        AgentTaskRunner runner = new AgentTaskRunner(
+                "agent-1", fixedClock(), taskDir.toString());
+
+        runner.handleMessages(List.of(command(
+                "task-1",
+                "prepare_disk_layout_dry_run",
+                script.toString(),
+                List.of())));
+
+        List<PulseMessage> firstDeliveries = new java.util.ArrayList<>();
+        java.util.Set<String> observedIds = new java.util.HashSet<>();
+        for (int attempt = 0; attempt < 50; attempt++) {
+            for (PulseMessage reply : runner.drainReplies()) {
+                if (observedIds.add(reply.messageId())) {
+                    firstDeliveries.add(reply);
+                }
+            }
+            if (firstDeliveries.stream()
+                    .anyMatch(reply -> "reply.task_result".equals(reply.type()))) {
+                break;
+            }
+            Thread.sleep(20);
+        }
+
+        int resultIndex = java.util.stream.IntStream.range(0, firstDeliveries.size())
+                .filter(index -> "reply.task_result".equals(
+                        firstDeliveries.get(index).type()))
+                .findFirst()
+                .orElseThrow();
+        List<PulseMessage> outputMessages = firstDeliveries.subList(0, resultIndex)
+                .stream()
+                .filter(reply -> "reply.task_output_append".equals(reply.type()))
+                .toList();
+        assertTrue(outputMessages.size() >= 2, firstDeliveries.toString());
+        assertEquals(
+                "x".repeat(40_000),
+                outputMessages.stream()
+                        .map(reply -> reply.payload().get("payload").toString())
+                        .collect(java.util.stream.Collectors.joining()));
+    }
+
+    @Test
+    void boundedPendingQueueEventuallyDeliversOutputAndTerminalResult() throws Exception {
+        Path script = taskDir.resolve("prepare-disk-layout.sh");
+        Files.writeString(script, "python3 - <<'PY'\nprint('x' * 2000000, end='')\nPY\n");
+        AgentTaskRunner runner = new AgentTaskRunner(
+                "agent-1", fixedClock(), taskDir.toString(), 1, 32);
+
+        runner.handleMessages(List.of(command(
+                "task-1",
+                "prepare_disk_layout_dry_run",
+                script.toString(),
+                List.of())));
+
+        Map<Long, String> outputChunks = new java.util.TreeMap<>();
+        boolean[] terminalObserved = {false};
+        java.util.Set<String> observedIds = new java.util.HashSet<>();
+        for (int attempt = 0; attempt < 500; attempt++) {
+            for (PulseMessage reply : runner.drainReplies()) {
+                if (!observedIds.add(reply.messageId())) {
+                    continue;
+                }
+                if ("reply.task_output_append".equals(reply.type())) {
+                    outputChunks.put(
+                            ((Number) reply.payload().get("stream_seq")).longValue(),
+                            reply.payload().get("payload").toString());
+                } else if ("reply.task_result_chunk".equals(reply.type())) {
+                    terminalObserved[0] = true;
+                } else if ("reply.task_result".equals(reply.type())) {
+                    terminalObserved[0] = true;
+                }
+            }
+            if (terminalObserved[0]) {
+                break;
+            }
+            Thread.sleep(10);
+        }
+
+        assertEquals("x".repeat(2_000_000), String.join("", outputChunks.values()));
+        assertTrue(terminalObserved[0]);
+    }
+
     private static PulseMessage command(String taskId, String taskType, String scriptPath, List<String> args) {
         return new PulseMessage(
                 "cmd-" + taskId,
