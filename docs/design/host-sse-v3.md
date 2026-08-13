@@ -12,6 +12,13 @@ Clients negotiate V3 explicitly:
 GET /api/hosts/stream?v=3&clusters=cdn2
 ```
 
+The collection UI always subscribes to exactly one cluster. It does not expose
+an all-clusters option. Before the first catalog is known, it opens a
+`clusters=__pulse_catalog__` bootstrap stream; that reserved scope matches no
+real Host rows but still returns the global catalog. The UI selects the first
+cluster deterministically, persists later user choices, and reconnects with the
+selected cluster before rendering Host cards.
+
 The Coordinator emits the existing `hosts.snapshot` and `hosts.delta` SSE
 event names. An older Coordinator returns the legacy V1 snapshot for an
 unknown version; the frontend detects that array contract and reconnects once
