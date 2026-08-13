@@ -180,6 +180,47 @@ class SegmentedMetricStorageTest {
     }
 
     @Test
+    void wideRecentQueryUsesMinuteRollupInsteadOfRawShardScan() throws Exception {
+        long day0 = Instant.parse("2026-08-01T00:00:00Z").toEpochMilli();
+        MutableClock clock = new MutableClock(Instant.ofEpochMilli(day0));
+        Path shards = tempDir.resolve("metrics-v2");
+
+        try (SegmentedMetricStorage storage = SegmentedMetricStorage.open(
+                shards,
+                null,
+                32,
+                8,
+                Duration.ofMillis(10),
+                7,
+                Duration.ofHours(1),
+                1024L * 1024 * 1024,
+                30,
+                1024L * 1024 * 1024,
+                clock)) {
+            storage.writeHeartbeat(sample("agent-1", day0 + Duration.ofMinutes(1).toMillis(), 1, 10));
+            storage.writeHeartbeat(sample("agent-1", day0 + Duration.ofMinutes(70).toMillis(), 2, 20));
+            storage.writeHeartbeat(sample("agent-1", day0 + Duration.ofMinutes(130).toMillis(), 3, 30));
+            assertTrue(storage.awaitIdle(Duration.ofSeconds(2)));
+
+            MetricQueryResult result = storage.queryRange(new MetricQuery(
+                    "agent.thread_count",
+                    List.of("agent-1"),
+                    day0,
+                    day0 + Duration.ofHours(2).toMillis(),
+                    10_000,
+                    12,
+                    20_000,
+                    0,
+                    ""));
+
+            assertEquals(60_000, result.suggestedStepMs());
+            assertEquals(List.of(10.0, 20.0),
+                    result.series().get(0).points().stream().map(MetricPoint::value).toList());
+            assertEquals("1m", result.series().get(0).points().get(0).metadata().get("rollup"));
+        }
+    }
+
+    @Test
     void rollupCoversEveryCatalogMetric() throws Exception {
         long day0 = Instant.parse("2026-08-01T00:00:00Z").toEpochMilli();
         MutableClock clock = new MutableClock(Instant.ofEpochMilli(day0));

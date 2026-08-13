@@ -2370,6 +2370,8 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
         agents: nextAgents,
         cluster: nextCluster,
         rangeMinutes: nextRangeMinutes,
+        stepMs: metricQueryStepMs(nextRangeMinutes),
+        pointLimit: metricQueryPointLimit(nextRangeMinutes),
         nowMs: nextNowMs,
         topN: fleetMode ? 12 : undefined,
         seriesLimit: 12
@@ -2698,6 +2700,18 @@ function metricPreset(key: string) {
 
 function metricPresetValue(metric: string) {
   return metricPresets.find(preset => preset.metric === metric)?.key || 'manual';
+}
+
+function metricQueryStepMs(rangeMinutes: number) {
+  if (rangeMinutes >= 360) return 60_000;
+  if (rangeMinutes >= 60) return 60_000;
+  return 10_000;
+}
+
+function metricQueryPointLimit(rangeMinutes: number) {
+  if (rangeMinutes >= 360) return 6_000;
+  if (rangeMinutes >= 60) return 8_000;
+  return 20_000;
 }
 
 function metricAssessment(metric: string, result: MetricQueryResultView | null, storageStatus: string) {

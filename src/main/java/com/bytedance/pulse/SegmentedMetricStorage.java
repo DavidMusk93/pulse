@@ -26,6 +26,8 @@ final class SegmentedMetricStorage implements MetricStorage {
     private static final String SHARD_PREFIX = "metrics-raw-";
     private static final String SHARD_SUFFIX = ".db";
     private static final String CUTOVER_FILE = "legacy-cutover-ms";
+    private static final long WIDE_QUERY_ROLLUP_THRESHOLD_MS = Duration.ofHours(1).toMillis();
+    private static final long ROLLUP_QUERY_STEP_MS = Duration.ofMinutes(1).toMillis();
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE;
     private static final int DEFAULT_ROLLUP_RETENTION_DAYS = 30;
     private static final long DEFAULT_ROLLUP_MAX_BYTES = 64L * 1024 * 1024 * 1024;
@@ -240,12 +242,37 @@ final class SegmentedMetricStorage implements MetricStorage {
         long oldestRawMs = oldestRawDate.atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli();
         boolean legacyCoversQuery =
                 legacyDbPath != null && Files.isRegularFile(legacyDbPath) && query.startMs() <= legacyCutoverMs;
+        if (!legacyCoversQuery && shouldUseRollupForWideQuery(query)) {
+            MetricQueryResult rollup = rollupStorage.query(rollupQuery(query));
+            if (!rollup.series().isEmpty()) {
+                return rollup;
+            }
+        }
         if (!legacyCoversQuery && query.startMs() < oldestRawMs && rollupStorage.shardCount() > 0) {
             return rollupStorage.query(query);
         }
         try (LocalMetricStorage storage = LocalMetricStorage.openFederated(queryPaths(query.startMs(), query.endMs()))) {
             return storage.queryRange(query);
         }
+    }
+
+    private boolean shouldUseRollupForWideQuery(MetricQuery query) {
+        return rollupStorage.shardCount() > 0
+                && query.endMs() > query.startMs()
+                && query.endMs() - query.startMs() >= WIDE_QUERY_ROLLUP_THRESHOLD_MS;
+    }
+
+    private static MetricQuery rollupQuery(MetricQuery query) {
+        return new MetricQuery(
+                query.metric(),
+                query.agentIds(),
+                query.startMs(),
+                query.endMs(),
+                Math.max(ROLLUP_QUERY_STEP_MS, query.stepMs()),
+                query.seriesLimit(),
+                query.pointLimit(),
+                query.topN(),
+                query.cluster());
     }
 
     @Override
