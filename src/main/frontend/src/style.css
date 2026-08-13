@@ -1109,6 +1109,14 @@ body {
   flex-direction: column;
   gap: 18px;
 }
+.clusters.is-scope-pending {
+  cursor: progress;
+  pointer-events: none;
+}
+.clusters.is-scope-pending .cluster-section {
+  opacity: .58;
+  transition: opacity 160ms ease;
+}
 .cluster-section .ant-card-head {
   min-height: 54px;
 }
@@ -2260,7 +2268,8 @@ body {
   .eventbus-pipeline-status,
   .eventbus-flow > span:not(.eventbus-flow-link),
   .metrics-eventbus-card .ant-btn,
-  .eventbus-modal .ant-btn {
+  .eventbus-modal .ant-btn,
+  .clusters.is-scope-pending .cluster-section {
     transition: opacity 160ms ease !important;
     transform: none !important;
   }

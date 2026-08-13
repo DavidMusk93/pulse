@@ -1002,6 +1002,8 @@ function App() {
   const outputLogFrameRef = useRef<number | null>(null);
   const hostRevisionRef = useRef<number | null>(null);
   const hostV3StateRef = useRef<HostStreamV3State<HostView> | null>(null);
+  const hostClustersRef = useRef<HTMLElement | null>(null);
+  const hostScopeRequestRef = useRef(hostClusterScope);
   const activeTargetHost = activeHost || activeCluster?.hosts[0] || null;
   const clusterAgentKey = useMemo(() => (activeCluster?.hosts || []).map(agentId).join(','), [activeCluster?.name, activeCluster?.hosts]);
 
@@ -1276,6 +1278,7 @@ function App() {
   function changeHostClusterScope(selected: string | null) {
     if (selected === hostClusterScope) return;
     storeHostClusterScope(selected);
+    hostScopeRequestRef.current = selected;
     snapshotRevisionRef.current += 1;
     outputRequestRef.current = '';
     closeOutputStream();
@@ -1287,9 +1290,6 @@ function App() {
     setActiveCluster(null);
     setSnapshot(null);
     setClusterSnapshots({});
-    setHosts([]);
-    setAppliedHostClusterScope(null);
-    setLoading(true);
     setHostClusterScope(selected);
   }
 
@@ -1349,6 +1349,7 @@ function App() {
     query.set('clusters', requestedScope);
     const events = new EventSource(`/api/hosts/stream?${query}`);
     let recoveryQueued = false;
+    const isCurrentScopeRequest = () => hostScopeRequestRef.current === hostClusterScope;
     const recover = (message: string) => {
       if (recoveryQueued) return;
       recoveryQueued = true;
@@ -1368,6 +1369,7 @@ function App() {
       setHostStreamVersion(2);
     };
     events.addEventListener('hosts.snapshot', trackedSseListener(event => {
+      if (!isCurrentScopeRequest()) return;
       try {
         const parsed = JSON.parse(event.data);
         const expectedScope = [requestedScope];
@@ -1417,6 +1419,7 @@ function App() {
       }
     }));
     events.addEventListener('hosts.delta', trackedSseListener(event => {
+      if (!isCurrentScopeRequest()) return;
       try {
         const parsed = JSON.parse(event.data);
         if (hostStreamVersion === 3) {
@@ -1470,7 +1473,9 @@ function App() {
         recover(err instanceof Error ? err.message : String(err));
       }
     }));
-    events.onerror = () => setError('Host SSE 正在重连');
+    events.onerror = () => {
+      if (isCurrentScopeRequest()) setError('Host SSE 正在重连');
+    };
     return () => events.close();
   }, [hostClusterScope, hostStreamGeneration, hostStreamVersion]);
 
@@ -1569,12 +1574,16 @@ function App() {
   const attentionClusters = useMemo(() => new Set(groups.filter(([, clusterHosts]) => clusterNeedsAttention(clusterHosts)).map(([cluster]) => cluster)), [groups]);
   const alive = hosts.filter(host => host.status === 'alive').length;
   const avgLoad = hosts.length ? hosts.reduce((sum, host) => sum + averageLoad(host), 0) / hosts.length : 0;
-  const hostScopePending = availableHostClusters.length > 0
-    && (!hostClusterScope || appliedHostClusterScope !== hostClusterScope);
+  const hostScopePending = appliedHostClusterScope !== hostClusterScope;
   const hostClusterScopeOptions = useMemo(
     () => hostClusterOptions(availableHostClusters),
     [availableHostClusters]
   );
+  useLayoutEffect(() => {
+    if (hostClustersRef.current) {
+      hostClustersRef.current.inert = hostScopePending;
+    }
+  }, [hostScopePending]);
   const handleHostClusterScopeChange = useCallback((scope: string | number) => {
     const selected = String(scope);
     changeHostClusterScope(selected);
@@ -1677,7 +1686,7 @@ function App() {
           <Typography.Text className="host-cluster-eyebrow">主机范围</Typography.Text>
           <Typography.Title level={2}>
             集群
-            {hostScopePending && <small>同步中</small>}
+            {hostScopePending && <small role="status" aria-live="polite">同步中</small>}
           </Typography.Title>
         </div>
         <div className="host-cluster-picker">
@@ -1700,7 +1709,12 @@ function App() {
           />
         </div>
       </div>
-      <section id="clusters" className="clusters">
+      <section
+        id="clusters"
+        ref={hostClustersRef}
+        className={`clusters${hostScopePending ? ' is-scope-pending' : ''}`}
+        aria-busy={hostScopePending}
+      >
         {groups.map(([cluster, clusterHosts], index) => <ClusterSection
           key={cluster}
           cluster={cluster}

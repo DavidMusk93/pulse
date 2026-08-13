@@ -21,6 +21,15 @@ selected cluster before rendering Host cards. The selector is a fixed-width,
 searchable single-select with a virtualized option list, so layout and mounted
 DOM remain bounded as the catalog grows.
 
+Changing the selected cluster is an atomic scope swap. The UI keeps the
+currently applied Host collection mounted while the new scoped connection
+waits for its authoritative snapshot. During that interval the stale Host
+region is `inert` and `aria-busy`, while its existing geometry prevents browser
+scroll clamping. The accepted snapshot replaces the Host collection and
+applied scope in one React event batch. Stream recovery and the non-SSE
+fallback follow the same rule; neither clears rows or restores scroll
+imperatively.
+
 The Coordinator emits the existing `hosts.snapshot` and `hosts.delta` SSE
 event names. An older Coordinator returns the legacy V1 snapshot for an
 unknown version; the frontend detects that array contract and reconnects once

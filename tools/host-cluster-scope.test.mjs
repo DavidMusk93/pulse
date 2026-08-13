@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
@@ -42,4 +43,31 @@ test('cluster options remain deterministic for a large catalog', () => {
     label: 'cluster-0999',
     value: 'cluster-0999'
   });
+});
+
+test('scope changes retain host geometry until the next snapshot commits', async () => {
+  const source = await readFile(
+    new URL('../src/main/frontend/src/main.tsx', import.meta.url),
+    'utf8'
+  );
+  const handler = source.match(
+    /function changeHostClusterScope[\s\S]*?\n  }\n\n  async function refreshHosts/
+  )?.[0] || '';
+
+  assert.ok(handler, 'changeHostClusterScope handler is present');
+  assert.doesNotMatch(handler, /setHosts\(\[\]\)/);
+  assert.doesNotMatch(handler, /setLoading\(true\)/);
+  assert.match(handler, /hostScopeRequestRef\.current = selected/);
+  assert.match(
+    source,
+    /const hostScopePending = appliedHostClusterScope !== hostClusterScope/
+  );
+  const snapshotHandler = source.match(
+    /events\.addEventListener\('hosts\.snapshot'[\s\S]*?\n    }\)\);/
+  )?.[0] || '';
+  assert.match(snapshotHandler, /if \(!isCurrentScopeRequest\(\)\) return;/);
+  const hostSection = source.match(/<section\s+[\s\S]*?id="clusters"[\s\S]*?>/)?.[0] || '';
+  assert.match(hostSection, /ref=\{hostClustersRef\}/);
+  assert.match(hostSection, /aria-busy=\{hostScopePending\}/);
+  assert.match(source, /hostClustersRef\.current\.inert = hostScopePending/);
 });
