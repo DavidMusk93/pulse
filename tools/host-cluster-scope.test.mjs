@@ -87,3 +87,46 @@ test('metrics live compensation uses the same range budget as manual refresh', a
   assert.doesNotMatch(compensation, /stepMs: 10_000/);
   assert.doesNotMatch(compensation, /pointLimit: 20_000/);
 });
+
+test('metrics queries require explicit activation before loading or live compensation', async () => {
+  const source = await readFile(
+    new URL('../src/main/frontend/src/main.tsx', import.meta.url),
+    'utf8'
+  );
+  const metricsPanel = source.match(
+    /const MetricsPanel = memo\(function MetricsPanel[\s\S]*?sameMetricHostScope\(previous\.hosts, next\.hosts\)\);/
+  )?.[0] || '';
+
+  assert.ok(metricsPanel, 'MetricsPanel source is present');
+  assert.match(metricsPanel, /const \[activeQueryKey, setActiveQueryKey\] = useState<string \| null>\(null\)/);
+  assert.match(metricsPanel, /const metricsActivated = activeQueryKey === querySelectionKey && result !== null/);
+  assert.doesNotMatch(
+    metricsPanel,
+    /useEffect\(\(\) => \{[\s\S]*?loadMetrics\(metric, visibleAgents, rangeMinutes/
+  );
+  assert.match(
+    metricsPanel,
+    /if \(!metricsActivatedRef\.current\) \{[\s\S]*?pendingQueryRef\.current\?\.key[\s\S]*?mergeInvalidation[\s\S]*?return;[\s\S]*?queryController\.invalidate\(\)/
+  );
+  assert.match(metricsPanel, /if \(!metricsActivated \|\| !invalidatedRange \|\| !metric \|\| !result\) return/);
+  assert.match(metricsPanel, /const queryGenerationRef = useRef\(0\)/);
+  assert.match(metricsPanel, /const compensationSequenceRef = useRef\(0\)/);
+  assert.match(metricsPanel, /const generation = \+\+queryGenerationRef\.current/);
+  assert.match(
+    metricsPanel,
+    /if \(selectionEpochKeyRef\.current === querySelectionKey\) return;[\s\S]*?queryGenerationRef\.current \+= 1;[\s\S]*?setLoading\(false\)/
+  );
+  assert.match(
+    metricsPanel,
+    /if \(queryGenerationRef\.current !== generation \|\| querySelectionKeyRef\.current !== requestKey\) return/
+  );
+  assert.match(metricsPanel, /if \(livePaused \|\| loading \|\| !activeQueryKey\) return/);
+  assert.match(
+    metricsPanel,
+    /if \(compensationSequenceRef\.current !== compensationSequence[\s\S]*?\|\| queryGenerationRef\.current !== generation[\s\S]*?\|\| querySelectionKeyRef\.current !== compensationKey\) return/
+  );
+  assert.match(metricsPanel, /const compensationSequence = \+\+compensationSequenceRef\.current/);
+  assert.match(metricsPanel, /compensationSequenceRef\.current !== compensationSequence/);
+  assert.match(metricsPanel, /return \(\) => events\.close\(\);\n  }, \[queryController\]\);/);
+  assert.match(metricsPanel, /\{metricsActivated \? '刷新时序' : '开始查询'\}/);
+});

@@ -731,7 +731,9 @@ class CoordinatorHttpServerTest {
         assertTrue(js.body().contains("补偿中"));
         assertTrue(js.body().contains("暂停窗口"));
         assertTrue(js.body().contains("跟随最新"));
-        assertTrue(js.body().contains("paused-hidden"));
+        assertTrue(js.body().contains("开始查询"));
+        assertTrue(js.body().contains("选择指标、范围与 Host 后开始查询"));
+        assertFalse(js.body().contains("paused-hidden"));
         assertTrue(js.body().contains("live paused"));
         assertTrue(js.body().contains("query_ms"));
         assertTrue(js.body().contains("render_ms"));

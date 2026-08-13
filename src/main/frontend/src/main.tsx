@@ -2293,6 +2293,7 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const [fleetMode, setFleetMode] = useState(false);
   const [rangeMinutes, setRangeMinutes] = useState(30);
   const [result, setResult] = useState<MetricQueryResultView | null>(null);
+  const [activeQueryKey, setActiveQueryKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [liveStatus, setLiveStatus] = useState('connecting');
@@ -2352,43 +2353,81 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   const activeMetric = catalog.find(item => item.metric === metric);
   const visibleAgents = fleetMode ? [] : selectedAgents.length ? selectedAgents : scopedAgentOptions.slice(0, 3).map(option => option.value);
   const activeCluster = selectedCluster === 'all' ? undefined : selectedCluster;
+  const queryRequest = {
+    metric,
+    agents: visibleAgents,
+    rangeMinutes,
+    cluster: activeCluster,
+    stepMs: metricQueryStepMs(rangeMinutes),
+    pointLimit: metricQueryPointLimit(rangeMinutes),
+    nowMs: fixedRangeEndMs ?? undefined,
+    topN: fleetMode ? 12 : undefined,
+    seriesLimit: 12
+  };
+  const querySelectionKey = JSON.stringify(queryRequest);
+  const metricsActivated = activeQueryKey === querySelectionKey && result !== null;
+  const visibleResult = metricsActivated ? result : null;
+  const metricRef = useRef(metric);
+  const metricsActivatedRef = useRef(metricsActivated);
+  const compensationSequenceRef = useRef(0);
+  const queryGenerationRef = useRef(0);
+  const querySelectionKeyRef = useRef(querySelectionKey);
+  const selectionEpochKeyRef = useRef(querySelectionKey);
+  const pendingQueryRef = useRef<{ key: string; generation: number } | null>(null);
+  const rangePausedRef = useRef(fixedRangeEndMs !== null);
+  metricRef.current = metric;
+  metricsActivatedRef.current = metricsActivated;
+  querySelectionKeyRef.current = querySelectionKey;
+  rangePausedRef.current = fixedRangeEndMs !== null;
   const rangePaused = fixedRangeEndMs !== null;
   const livePaused = rangePaused || !pageVisible;
   const storageStatus = storage?.status || 'unknown';
-  const assessment = metricAssessment(metric, result, storageStatus);
+  const assessment = metricAssessment(metric, visibleResult, storageStatus);
   const selectedAgentKey = selectedAgents.join(',');
   const draftAgentKey = draftAgents.join(',');
   const hostSelectionDirty = draftAgentKey !== selectedAgentKey || (fleetMode && draftAgents.length > 0);
 
-  async function loadMetrics(nextMetric = metric, nextAgents = visibleAgents, nextRangeMinutes = rangeMinutes, nextNowMs = fixedRangeEndMs ?? undefined, nextCluster = activeCluster) {
+  async function loadMetrics() {
     const queryStart = performance.now();
+    compensationSequenceRef.current += 1;
+    const generation = ++queryGenerationRef.current;
+    const requestKey = querySelectionKey;
+    pendingQueryRef.current = { key: requestKey, generation };
+    if (!metricsActivated) {
+      setActiveQueryKey(null);
+      setInvalidatedRange(null);
+    }
     setLoading(true);
     setError('');
+    let commitScheduled = false;
     try {
-      const data = await queryController.queryRange({
-        metric: nextMetric,
-        agents: nextAgents,
-        cluster: nextCluster,
-        rangeMinutes: nextRangeMinutes,
-        stepMs: metricQueryStepMs(nextRangeMinutes),
-        pointLimit: metricQueryPointLimit(nextRangeMinutes),
-        nowMs: nextNowMs,
-        topN: fleetMode ? 12 : undefined,
-        seriesLimit: 12
-      });
+      const data = await queryController.queryRange(queryRequest);
+      if (queryGenerationRef.current !== generation || querySelectionKeyRef.current !== requestKey) return;
       const queryMs = Math.round(performance.now() - queryStart);
       const renderStart = performance.now();
+      commitScheduled = true;
       renderScheduler.schedule(() => {
+        if (queryGenerationRef.current !== generation || querySelectionKeyRef.current !== requestKey) {
+          if (pendingQueryRef.current?.generation === generation) pendingQueryRef.current = null;
+          if (queryGenerationRef.current === generation) setLoading(false);
+          return;
+        }
         setResult(data);
+        setActiveQueryKey(requestKey);
+        pendingQueryRef.current = null;
         setFrontendMetrics({
           queryMs,
           renderMs: Math.round(performance.now() - renderStart)
         });
+        setLoading(false);
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (queryGenerationRef.current === generation && querySelectionKeyRef.current === requestKey) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setLoading(false);
+      if (!commitScheduled && pendingQueryRef.current?.generation === generation) pendingQueryRef.current = null;
+      if (!commitScheduled && queryGenerationRef.current === generation) setLoading(false);
     }
   }
 
@@ -2414,13 +2453,13 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
   }, [selectedAgentKey]);
 
   useEffect(() => {
-    if (!metric) return;
-    if (!pageVisible) {
-      setLiveStatus('paused-hidden');
-      return;
-    }
-    loadMetrics(metric, visibleAgents, rangeMinutes, fixedRangeEndMs ?? undefined, activeCluster);
-  }, [metric, selectedAgents.join(','), rangeMinutes, pageVisible, fixedRangeEndMs, fleetMode, selectedCluster]);
+    if (selectionEpochKeyRef.current === querySelectionKey) return;
+    selectionEpochKeyRef.current = querySelectionKey;
+    compensationSequenceRef.current += 1;
+    queryGenerationRef.current += 1;
+    pendingQueryRef.current = null;
+    setLoading(false);
+  }, [querySelectionKey]);
 
   useEffect(() => {
     const onVisibilityChange = () => setPageVisible(document.visibilityState !== 'hidden');
@@ -2446,11 +2485,18 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
     }));
     events.addEventListener('metric.invalidate', trackedSseListener(event => {
       const invalidation = parseInvalidation(event.data);
-      setLastInvalidateAt(Date.now());
-      if (!invalidation || (invalidation.metrics.length && !invalidation.metrics.includes(metric))) {
+      const activeMetric = metricRef.current;
+      if (!invalidation || (invalidation.metrics.length && !invalidation.metrics.includes(activeMetric))) {
         return;
       }
-      if (rangePaused) {
+      if (!metricsActivatedRef.current) {
+        if (pendingQueryRef.current?.key !== querySelectionKeyRef.current) return;
+        setLastInvalidateAt(Date.now());
+        setInvalidatedRange(current => mergeInvalidation(current, invalidation));
+        return;
+      }
+      setLastInvalidateAt(Date.now());
+      if (rangePausedRef.current) {
         setLiveStatus('paused-range');
         return;
       }
@@ -2459,14 +2505,22 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
     }));
     events.onerror = () => setLiveStatus('reconnecting');
     return () => events.close();
-  }, [metric, queryController, rangePaused]);
+  }, [queryController]);
 
-  useEffect(() => () => renderScheduler.cancel(), [renderScheduler]);
+  useEffect(() => () => {
+    compensationSequenceRef.current += 1;
+    queryGenerationRef.current += 1;
+    pendingQueryRef.current = null;
+    renderScheduler.cancel();
+  }, [renderScheduler]);
 
   useEffect(() => {
-    if (!invalidatedRange || !metric) return;
-    if (livePaused) return;
+    if (!metricsActivated || !invalidatedRange || !metric || !result) return;
+    if (livePaused || loading || !activeQueryKey) return;
     const timer = window.setTimeout(async () => {
+      const compensationSequence = ++compensationSequenceRef.current;
+      const generation = queryGenerationRef.current;
+      const compensationKey = activeQueryKey;
       const now = Date.now();
       const visibleFrom = now - rangeMinutes * 60_000;
       const startMs = Math.max(visibleFrom, invalidatedRange.from);
@@ -2484,17 +2538,29 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
           topN: fleetMode ? 12 : undefined,
           cache: false
         });
-        renderScheduler.schedule(() => setResult(current => SeriesStore.merge(current, patch)));
-        setInvalidatedRange(null);
+        if (compensationSequenceRef.current !== compensationSequence
+            || queryGenerationRef.current !== generation
+            || querySelectionKeyRef.current !== compensationKey) return;
+        renderScheduler.schedule(() => {
+          if (compensationSequenceRef.current !== compensationSequence
+              || queryGenerationRef.current !== generation
+              || querySelectionKeyRef.current !== compensationKey) return;
+          setResult(current => SeriesStore.merge(current, patch));
+          setInvalidatedRange(current => current === invalidatedRange ? null : current);
+        });
       } catch (err) {
-        setLiveStatus('stale');
-        setError(err instanceof Error ? err.message : String(err));
+        if (compensationSequenceRef.current === compensationSequence
+            && queryGenerationRef.current === generation
+            && querySelectionKeyRef.current === compensationKey) {
+          setLiveStatus('stale');
+          setError(err instanceof Error ? err.message : String(err));
+        }
       }
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [invalidatedRange, metric, selectedAgents.join(','), rangeMinutes, livePaused, fleetMode, selectedCluster]);
+  }, [metricsActivated, invalidatedRange, metric, selectedAgents.join(','), rangeMinutes, livePaused, loading, fleetMode, selectedCluster, result, activeQueryKey]);
 
-  const seriesStore = useMemo(() => new SeriesStore(result), [result]);
+  const seriesStore = useMemo(() => new SeriesStore(visibleResult), [visibleResult]);
   const seriesCount = seriesStore.seriesCount();
   const pointCount = seriesStore.pointCount();
   const storageTone = storageStatus === 'ok' ? 'success' : storageStatus === 'disabled' ? 'default' : 'warning';
@@ -2651,7 +2717,14 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
             <Button onClick={() => setFixedRangeEndMs(current => current === null ? Date.now() : null)}>
               {rangePaused ? '跟随最新' : '暂停窗口'}
             </Button>
-            <Button type="primary" loading={loading} onClick={() => loadMetrics()}>刷新时序</Button>
+            <Button
+              type="primary"
+              loading={loading}
+              disabled={!metric || (!fleetMode && !visibleAgents.length)}
+              onClick={() => loadMetrics()}
+            >
+              {metricsActivated ? '刷新时序' : '开始查询'}
+            </Button>
           </Space.Compact>
         </div>
       </div>
@@ -2662,19 +2735,24 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
             <Typography.Text strong>{activeMetric?.title || metric}</Typography.Text>
             <Tag color={assessment.tone}>{assessment.label}</Tag>
             {fleetMode && <Tag color="cyan">全局 TopN</Tag>}
-            <Tag>{activeMetric?.unit || result?.unit || '-'}</Tag>
+            <Tag>{activeMetric?.unit || visibleResult?.unit || '-'}</Tag>
             <Tag>{seriesCount} series</Tag>
             <Tag>{pointCount} points</Tag>
             <Tag>query_ms {frontendMetrics.queryMs}</Tag>
             <Tag>render_ms {frontendMetrics.renderMs}</Tag>
-            {result?.truncated && <Tag color="warning">已截断，建议 step {result.suggested_step_ms ?? result.suggestedStepMs}ms</Tag>}
+            {visibleResult?.truncated && <Tag color="warning">已截断，建议 step {visibleResult.suggested_step_ms ?? visibleResult.suggestedStepMs}ms</Tag>}
             {invalidatedRange && <Tag color="gold">补偿中 {formatSeenTime(invalidatedRange.to)}</Tag>}
             {lastInvalidateAt && <Tag color="blue">live {formatSeenTime(lastInvalidateAt)}</Tag>}
             {rangePaused && <Tag color="purple">窗口固定 {formatSeenTime(fixedRangeEndMs ?? undefined)}</Tag>}
           </Space>
-          <Typography.Text type="secondary">{result ? `已更新 ${formatSeenTime(result.to ?? undefined)}` : '尚未查询'}</Typography.Text>
+          <Typography.Text type="secondary">{visibleResult ? `已更新 ${formatSeenTime(visibleResult.to ?? undefined)}` : '尚未查询'}</Typography.Text>
         </div>
-        {seriesCount ? <MetricInsightChart metric={metric} result={result} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无时序数据" />}
+        {seriesCount
+          ? <MetricInsightChart metric={metric} result={visibleResult} />
+          : <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={metricsActivated ? '暂无时序数据' : '选择指标、范围与 Host 后开始查询'}
+            />}
       </div>
     </div>
   </Card>;
