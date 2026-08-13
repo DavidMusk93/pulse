@@ -2478,8 +2478,8 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
           cluster: activeCluster,
           startMs,
           endMs,
-          stepMs: 10_000,
-          pointLimit: 20_000,
+          stepMs: metricQueryStepMs(rangeMinutes),
+          pointLimit: metricQueryPointLimit(rangeMinutes),
           seriesLimit: 12,
           topN: fleetMode ? 12 : undefined,
           cache: false

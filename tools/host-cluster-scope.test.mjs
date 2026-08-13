@@ -71,3 +71,19 @@ test('scope changes retain host geometry until the next snapshot commits', async
   assert.match(hostSection, /aria-busy=\{hostScopePending\}/);
   assert.match(source, /hostClustersRef\.current\.inert = hostScopePending/);
 });
+
+test('metrics live compensation uses the same range budget as manual refresh', async () => {
+  const source = await readFile(
+    new URL('../src/main/frontend/src/main.tsx', import.meta.url),
+    'utf8'
+  );
+  const compensation = source.match(
+    /const patch = await queryController\.queryRange\(\{[\s\S]*?cache: false[\s\S]*?\}\);/
+  )?.[0] || '';
+
+  assert.ok(compensation, 'metrics live compensation query is present');
+  assert.match(compensation, /stepMs: metricQueryStepMs\(rangeMinutes\)/);
+  assert.match(compensation, /pointLimit: metricQueryPointLimit\(rangeMinutes\)/);
+  assert.doesNotMatch(compensation, /stepMs: 10_000/);
+  assert.doesNotMatch(compensation, /pointLimit: 20_000/);
+});
