@@ -52,7 +52,16 @@ Every generated event contains:
 - `severity`, `status`, `observed_at_ms`, `summary`;
 - structured attributes.
 
-Firing events enter the pending-delivery map. Each matching `route_id::sink_id` acknowledges the event independently. The event is removed immediately after every enabled matching target succeeds; a failed target remains pending and retries without redelivering to targets that already acknowledged it. Resolved events remove an event that has not yet been delivered. Every transition is also written to `host_event`.
+Firing events enter the pending-delivery map only when at least one currently
+enabled Route and Sink forms a valid `route_id::sink_id` target. Events without
+an effective subscriber are recorded to `host_event` for observability and then
+discarded; they are never retained for a future configuration. Configuration
+changes and state reloads apply the same invariant and remove events that no
+longer have a target. Each matching target acknowledges the event independently.
+The event is removed immediately after every enabled matching target succeeds;
+a failed target remains pending and retries without redelivering to targets that
+already acknowledged it. Resolved events remove an event that has not yet been
+delivered. Every transition is also written to `host_event`.
 
 ### Route and gate
 

@@ -159,7 +159,8 @@ final class EventBusService implements AutoCloseable {
                 if ("resolved".equals(event.status())) {
                     activeEvents.remove(eventKey);
                     deliveryAcks.remove(eventKey);
-                } else if ("firing".equals(event.status())) {
+                } else if ("firing".equals(event.status())
+                        && !deliveryTargets(event).isEmpty()) {
                     activeEvents.put(eventKey, event);
                     deliveryAcks.remove(eventKey);
                 }
@@ -255,6 +256,7 @@ final class EventBusService implements AutoCloseable {
         Set<String> validStatusKeys = statusKeys(config);
         routeStatus.keySet().removeIf(key -> !validStatusKeys.contains(key));
         deliveryAcks.values().forEach(acks -> acks.removeIf(key -> !validStatusKeys.contains(key)));
+        pruneUnsubscribedEvents();
         pruneDeliveredEvents();
         persist();
         return view();
@@ -493,6 +495,15 @@ final class EventBusService implements AutoCloseable {
         deliveryAcks.keySet().removeAll(completed);
     }
 
+    private void pruneUnsubscribedEvents() {
+        Set<String> unsubscribed = activeEvents.entrySet().stream()
+                .filter(entry -> deliveryTargets(entry.getValue()).isEmpty())
+                .map(Map.Entry::getKey)
+                .collect(java.util.stream.Collectors.toSet());
+        activeEvents.keySet().removeAll(unsubscribed);
+        deliveryAcks.keySet().removeAll(unsubscribed);
+    }
+
     private Set<String> deliveryTargets(EventPlugin.Event event) {
         Set<String> targets = new HashSet<>();
         Map<String, EventSinkDefinition> configuredSinks = sinks(config);
@@ -559,6 +570,7 @@ final class EventBusService implements AutoCloseable {
         deliveryAcks.clear();
         state.deliveryAcks().forEach(
                 (eventKey, acks) -> deliveryAcks.put(eventKey, new HashSet<>(acks)));
+        pruneUnsubscribedEvents();
     }
 
     private synchronized void persist() throws Exception {

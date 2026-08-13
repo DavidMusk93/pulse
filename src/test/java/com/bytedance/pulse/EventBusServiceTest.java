@@ -214,7 +214,7 @@ class EventBusServiceTest {
             eventBus.ingestMessages("agent-doubao", clock.millis(), List.of(
                     eventMessage("incident-doubao", "firing", "doubao", clock.millis())));
 
-            assertEquals(2, eventBus.view().activeEvents().size());
+            assertEquals(1, eventBus.view().activeEvents().size());
             assertEquals(1, eventBus.view().pendingByRoute().get("route-a"));
 
             eventBus.dispatchDue();
@@ -223,10 +223,7 @@ class EventBusServiceTest {
             assertEquals(List.of("cdn2"), sinkPlugin.deliveries.get(0).events().stream()
                     .map(event -> event.attributes().get("cluster").toString())
                     .toList());
-            assertEquals(1, eventBus.view().activeEvents().size());
-            assertEquals(
-                    "doubao",
-                    eventBus.view().activeEvents().get(0).attributes().get("cluster"));
+            assertTrue(eventBus.view().activeEvents().isEmpty());
             assertEquals(0, eventBus.view().pendingByRoute().get("route-a"));
 
             EventRouteDefinition route = eventBus.view().config().routes().get(0);
@@ -248,10 +245,60 @@ class EventBusServiceTest {
             clock.advance(300_000);
             eventBus.dispatchDue();
 
-            assertEquals(2, sinkPlugin.deliveries.size());
-            assertEquals(
-                    "doubao",
-                    sinkPlugin.deliveries.get(1).events().get(0).attributes().get("cluster"));
+            assertEquals(1, sinkPlugin.deliveries.size());
+            assertTrue(eventBus.view().activeEvents().isEmpty());
+        }
+    }
+
+    @Test
+    void configChangeDiscardsEventsThatNoLongerHaveDeliveryTargets() throws Exception {
+        MutableClock clock = new MutableClock(1_710_000_010_000L);
+        RecordingSink sinkPlugin = new RecordingSink();
+        try (EventBusService eventBus = new EventBusService(
+                tempDir.resolve("discard-unsubscribed-eventbus.json"),
+                clock,
+                event -> {},
+                false,
+                List.of(sinkPlugin))) {
+            EventBusConfig defaults = eventBus.view().config();
+            EventSinkDefinition sink = new EventSinkDefinition(
+                    "sink-a", "Recording", RecordingSink.TYPE, true, Map.of());
+            EventRouteDefinition route = new EventRouteDefinition(
+                    "route-a",
+                    "CDN alerts",
+                    true,
+                    List.of("disk-io-saturation"),
+                    List.of("disk.io_saturation"),
+                    List.of("cdn2"),
+                    List.of("sink-a"),
+                    PeriodicDigestGatePlugin.TYPE,
+                    Map.of("interval_seconds", 300));
+            eventBus.update(new EventBusConfig(
+                    1,
+                    defaults.eventTypes(),
+                    defaults.sources(),
+                    List.of(sink),
+                    List.of(route)));
+            eventBus.ingestMessages("agent-cdn", clock.millis(), List.of(
+                    eventMessage("incident-cdn", "firing", "cdn2", clock.millis())));
+            assertEquals(1, eventBus.view().activeEvents().size());
+
+            eventBus.update(new EventBusConfig(
+                    1,
+                    defaults.eventTypes(),
+                    defaults.sources(),
+                    List.of(sink),
+                    List.of(new EventRouteDefinition(
+                            route.id(),
+                            route.name(),
+                            route.enabled(),
+                            route.sourceIds(),
+                            route.eventTypes(),
+                            List.of("doubao"),
+                            route.sinkIds(),
+                            route.gateType(),
+                            route.gateConfig()))));
+
             assertTrue(eventBus.view().activeEvents().isEmpty());
         }
     }
@@ -350,8 +397,9 @@ class EventBusServiceTest {
     @Test
     void activeIncidentsSurviveCoordinatorRestart() throws Exception {
         Path statePath = tempDir.resolve("restart-eventbus.json");
+        RecordingSink sinkPlugin = new RecordingSink();
         try (EventBusService eventBus = new EventBusService(
-                statePath, Clock.systemUTC(), event -> {}, false)) {
+                statePath, Clock.systemUTC(), event -> {}, false, List.of(sinkPlugin))) {
             EventBusConfig defaults = eventBus.view().config();
             eventBus.update(new EventBusConfig(
                     1,
@@ -367,8 +415,18 @@ class EventBusServiceTest {
                                     "subject_field", "subject",
                                     "summary_field", "summary",
                                     "status_field", "status"))),
-                    List.of(),
-                    List.of()));
+                    List.of(new EventSinkDefinition(
+                            "sink-a", "Recording", RecordingSink.TYPE, true, Map.of())),
+                    List.of(new EventRouteDefinition(
+                            "route-a",
+                            "External alerts",
+                            true,
+                            List.of("external"),
+                            List.of("disk.io_saturation"),
+                            List.of(),
+                            List.of("sink-a"),
+                            PeriodicDigestGatePlugin.TYPE,
+                            Map.of("interval_seconds", 300)))));
             eventBus.publish("external", "secret", Map.of(
                     "subject", "disk-a",
                     "summary", "saturated",
@@ -378,7 +436,7 @@ class EventBusServiceTest {
         }
 
         try (EventBusService reloaded = new EventBusService(
-                statePath, Clock.systemUTC(), event -> {}, false)) {
+                statePath, Clock.systemUTC(), event -> {}, false, List.of(sinkPlugin))) {
             assertEquals(1, reloaded.view().activeEvents().size());
             assertEquals("incident-a", reloaded.view().activeEvents().get(0).incidentId());
         }

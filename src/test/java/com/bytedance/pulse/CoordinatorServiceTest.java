@@ -203,7 +203,7 @@ class CoordinatorServiceTest {
     }
 
     @Test
-    void forwardedHeartbeatEventEntersEventBus() throws Exception {
+    void forwardedHeartbeatEventWithoutSubscriberIsRecordedButNotRetained() throws Exception {
         MutableClock mutableClock = new MutableClock(Instant.ofEpochMilli(1_710_000_005_000L));
         try (LocalMetricStorage storage = LocalMetricStorage.open(tempDir.resolve("forward-events.db"));
                 EventBusService eventBus = new EventBusService(
@@ -234,7 +234,7 @@ class CoordinatorServiceTest {
                                     eventMessage("firing", mutableClock.millis()))))));
 
             assertTrue(response.ok());
-            assertEquals(1, eventBus.view().activeEvents().size());
+            assertTrue(eventBus.view().activeEvents().isEmpty());
             List<HostEvent> events = storage.queryEvents(new MetricEventQuery(
                     mutableClock.millis() - 1,
                     mutableClock.millis() + 1,
