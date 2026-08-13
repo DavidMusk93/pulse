@@ -329,9 +329,9 @@ const SseTrafficCard = memo(function SseTrafficCard() {
     <span className="sse-traffic-title">SSE 流量</span>
     <strong className="sse-traffic-value">{formatTraffic(traffic.bytesPerSecond)}<small>/s</small></strong>
     <div className="sse-traffic-meta">
-      <span>Control V4</span>
-      <span>{traffic.eventsPerSecond.toFixed(1)} events/s</span>
-      <span>累计 {formatTraffic(traffic.totalBytes)}</span>
+      <span><small>通道</small><b>Control V4</b></span>
+      <span><small>事件</small><b>{traffic.eventsPerSecond.toFixed(1)}/s</b></span>
+      <span><small>累计</small><b>{formatTraffic(traffic.totalBytes)}</b></span>
     </div>
   </Card>;
 });
@@ -1997,9 +1997,11 @@ function EventBusPanel({
                 {error || (state === 'pending' ? '等待发布门禁' : state === 'delivered' ? '最近一次推送成功' : '等待事件')}
               </small>
             </div>
-            <span><strong>{pending}</strong><small>待推送</small></span>
-            <span><strong>{lastDelivered}</strong><small>最近推送</small></span>
-            <time>{lastSuccessAt ? new Date(lastSuccessAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}</time>
+            <div className="eventbus-pipeline-status-meta">
+              <span><small>待推送</small><strong>{pending}</strong></span>
+              <span><small>最近推送</small><strong>{lastDelivered}</strong></span>
+              <time>{lastSuccessAt ? new Date(lastSuccessAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}</time>
+            </div>
           </div>)}
       </div>}
     </div>

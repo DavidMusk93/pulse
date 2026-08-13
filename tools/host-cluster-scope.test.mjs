@@ -138,3 +138,39 @@ test('metrics queries require explicit activation before loading or live compens
   assert.doesNotMatch(metricsPanel, /new EventSource\('\/api\/metrics\/stream'\)/);
   assert.match(metricsPanel, /\{metricsActivated \? '刷新时序' : '开始查询'\}/);
 });
+
+test('summary cards keep text visible and avoid empty pipeline rows', async () => {
+  const source = await readFile(
+    new URL('../src/main/frontend/src/main.tsx', import.meta.url),
+    'utf8'
+  );
+  const styles = await readFile(
+    new URL('../src/main/frontend/src/style.css', import.meta.url),
+    'utf8'
+  );
+
+  const sseCard = source.match(
+    /const SseTrafficCard = memo\(function SseTrafficCard[\s\S]*?\n}\);/
+  )?.[0] || '';
+  const sseMetaStyles = styles.match(
+    /\.sse-traffic-meta \{[\s\S]*?\.sse-traffic-meta b \{[\s\S]*?\n\}/
+  )?.[0] || '';
+  const eventbusStyles = styles.match(
+    /\.eventbus-pipeline-statuses \{[\s\S]*?\.eventbus-pipeline-status time \{[\s\S]*?\n\}/
+  )?.[0] || '';
+
+  assert.match(sseCard, /<small>通道<\/small><b>Control V4<\/b>/);
+  assert.match(sseCard, /<small>事件<\/small><b>\{traffic\.eventsPerSecond\.toFixed\(1\)\}\/s<\/b>/);
+  assert.match(sseCard, /<small>累计<\/small><b>\{formatTraffic\(traffic\.totalBytes\)\}<\/b>/);
+  assert.match(sseMetaStyles, /grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(sseMetaStyles, /overflow-wrap: anywhere/);
+  assert.doesNotMatch(sseMetaStyles, /text-overflow:\s*ellipsis/);
+
+  assert.match(
+    eventbusStyles,
+    /grid-template-columns: repeat\(auto-fit, minmax\(min\(100%, 290px\), 420px\)\)/
+  );
+  assert.match(eventbusStyles, /justify-content: start/);
+  assert.match(eventbusStyles, /overflow-wrap: anywhere/);
+  assert.doesNotMatch(eventbusStyles, /text-overflow:\s*ellipsis/);
+});
