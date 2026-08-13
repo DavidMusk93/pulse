@@ -1,11 +1,21 @@
-# Hosts SSE V3 Core Codec
+# Hosts SSE V3
 
 ## Scope
 
-V3 is a connection-local JSON codec experiment. It does not change the HTTP
-endpoint, V1, V2, or the frontend. The fixed contract is intended to reduce
-wire bytes while remaining inspectable and allowing a client to clone each
-changed entity at most once per delta.
+V3 is an opt-in, connection-local JSON stream. It reduces wire bytes while
+remaining inspectable and allows the client to clone each changed entity at
+most once per delta. V1 and V2 remain available without contract changes.
+
+Clients negotiate V3 explicitly:
+
+```text
+GET /api/hosts/stream?v=3&clusters=cdn2
+```
+
+The Coordinator emits the existing `hosts.snapshot` and `hosts.delta` SSE
+event names. An older Coordinator returns the legacy V1 snapshot for an
+unknown version; the frontend detects that array contract and reconnects once
+with `v=2`.
 
 The codec factory is:
 
@@ -175,4 +185,8 @@ For an accepted delta it:
 5. Encodes complete additions and deterministic sparse field groups.
 6. Advances dictionaries, active rows, catalog, and revision together.
 
-This core experiment deliberately has no HTTP or frontend integration.
+The frontend decoder keeps connection-local dictionaries, entity tombstones,
+rows, scope, catalog, and revision in one state object. It validates a complete
+delta before publishing the new state. Empty or off-scope deltas advance the
+revision without replacing the visible Host collection; changed deltas retain
+unchanged Host object references so memoized Host tiles do not rerender.

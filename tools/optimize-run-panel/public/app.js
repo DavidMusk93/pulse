@@ -191,18 +191,20 @@ function renderGates(metrics) {
 
 function renderEvidence() {
   const activeFiles = state?.experiment?.files || [];
+  const integrationFiles = state?.integration?.files || [];
   const kept = [...(state?.run?.experiments || [])].reverse()
     .find(experiment => experiment.outcome === 'kept');
-  const files = activeFiles.length ? activeFiles : (kept?.changes || []).map(change => ({
-    status: 'kept',
-    path: change.file
-  }));
+  const files = activeFiles.length
+    ? activeFiles
+    : integrationFiles.length
+      ? integrationFiles.map(path => ({ status: 'integrate', path }))
+      : (kept?.changes || []).map(change => ({ status: 'kept', path: change.file }));
   const output = state?.runner?.output || [];
   return `
     <section class="evidence-grid">
       <article class="panel evidence-panel">
         <header class="section-heading compact">
-          <div><span class="eyebrow">WORKTREE</span><h2>本轮改动</h2></div>
+          <div><span class="eyebrow">EVIDENCE</span><h2>实验与集成改动</h2></div>
           <span class="count">${files.length} files</span>
         </header>
         <div class="file-list">

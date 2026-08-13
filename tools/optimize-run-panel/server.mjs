@@ -60,6 +60,7 @@ let revision = 0;
 let notifyTimer = null;
 let lastFingerprint = '';
 let currentSnapshot = null;
+let snapshotDirty = true;
 
 function yaml(path) {
   if (!existsSync(path)) return null;
@@ -81,18 +82,28 @@ function yaml(path) {
 
 function git(args, cwd = repo) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
-  return result.status === 0 ? result.stdout.trim() : '';
+  return result.status === 0 ? result.stdout.trimEnd() : '';
+}
+
+function gitStatus(cwd) {
+  const entries = git(['status', '--porcelain=v1', '-z'], cwd).split('\0');
+  const files = [];
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index];
+    if (!entry) continue;
+    const rawStatus = entry.slice(0, 2);
+    files.push({
+      status: rawStatus.trim() || '?',
+      path: entry.slice(3)
+    });
+    if (rawStatus.includes('R') || rawStatus.includes('C')) index++;
+  }
+  return files;
 }
 
 function worktreeFiles() {
   if (!hasExperimentWorktree || !existsSync(worktree)) return [];
-  return git(['status', '--short'], worktree)
-    .split('\n')
-    .filter(Boolean)
-    .map(line => ({
-      status: line.slice(0, 2).trim() || '?',
-      path: line.slice(3)
-    }))
+  return gitStatus(worktree)
     .filter(file => !file.path.startsWith('.trae/'));
 }
 
@@ -106,11 +117,26 @@ function phase(files, log) {
   return 'baseline_ready';
 }
 
+function integrationFiles(log) {
+  const kept = [...(log?.experiments || [])]
+    .reverse()
+    .find(experiment => experiment.outcome === 'kept' && experiment.commit);
+  if (!kept) return [];
+  const committed = git(['diff', '--name-only', `${kept.commit}..HEAD`], repo)
+    .split('\n')
+    .filter(Boolean);
+  const local = gitStatus(repo)
+    .map(file => file.path)
+    .filter(path => path && !path.startsWith('.trae/'));
+  return [...new Set([...committed, ...local])].sort();
+}
+
 function readSnapshot() {
   const spec = yaml(join(runRoot, 'spec.yaml')) || {};
   const log = yaml(join(runRoot, 'experiment-log.yaml')) || {};
   const result = hasExperimentWorktree ? yaml(join(worktree, 'result.yaml')) : null;
   const files = worktreeFiles();
+  const integratedFiles = integrationFiles(log);
   const head = git(['rev-parse', 'HEAD'], worktree);
   const activeRunner = compatibleRunner(runner, log.run_id, head)
     ? { ...runner }
@@ -119,8 +145,10 @@ function readSnapshot() {
     isolation: {
       local_only: bind === '127.0.0.1',
       bind,
-      production_api_changed: false,
-      production_assets_changed: false,
+      production_api_changed: integratedFiles.some(path =>
+        path === 'src/main/java/com/bytedance/pulse/CoordinatorHttpServer.java'),
+      production_assets_changed: integratedFiles.some(path =>
+        path.startsWith('src/main/resources/static/')),
       deployed: false
     },
     run: {
@@ -147,13 +175,18 @@ function readSnapshot() {
       files,
       result
     },
+    integration: {
+      files: integratedFiles
+    },
     runner: activeRunner
   };
 }
 
 function snapshot() {
+  if (currentSnapshot && !snapshotDirty) return currentSnapshot;
   const next = readSnapshot();
   const fingerprint = semanticFingerprint(next);
+  snapshotDirty = false;
   if (!currentSnapshot || fingerprint !== lastFingerprint) {
     lastFingerprint = fingerprint;
     currentSnapshot = {
@@ -175,7 +208,8 @@ function writeJson(response, status, value) {
   response.end(body);
 }
 
-function broadcast() {
+function broadcast(markDirty = false) {
+  if (markDirty) snapshotDirty = true;
   const previousRevision = currentSnapshot?.revision;
   const value = snapshot();
   if (previousRevision === value.revision) return;
@@ -187,6 +221,7 @@ function broadcast() {
 
 function scheduleBroadcast() {
   clearTimeout(notifyTimer);
+  snapshotDirty = true;
   notifyTimer = setTimeout(broadcast, 120);
 }
 
@@ -225,7 +260,7 @@ function runBenchmark(response) {
   runner.output = [];
   runner.metrics = null;
   runner.error = null;
-  broadcast();
+  broadcast(true);
   const child = spawn(process.execPath, [evaluator], {
     cwd: worktree,
     env: process.env,
@@ -237,7 +272,7 @@ function runBenchmark(response) {
     runner.status = 'failed';
     runner.error = error.message;
     runner.finishedAt = new Date().toISOString();
-    broadcast();
+    broadcast(true);
   });
   child.on('close', code => {
     runner.status = code === 0 && runner.metrics ? 'completed' : 'failed';
@@ -245,7 +280,7 @@ function runBenchmark(response) {
     runner.finishedAt = new Date().toISOString();
     mkdirSync(stateRoot, { recursive: true });
     writeFileSync(latestResultPath, `${JSON.stringify(runner, null, 2)}\n`);
-    broadcast();
+    broadcast(true);
   });
   writeJson(response, 202, { status: 'started', pid: child.pid });
 }

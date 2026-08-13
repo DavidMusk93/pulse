@@ -190,8 +190,79 @@ class CoordinatorHttpServerTest {
     }
 
     @Test
+    void hostStreamV3ScopesColumnsAndKeepsGlobalCatalog() throws Exception {
+        postJson("/heartbeat", """
+                {
+                  "agent_id":"agent-cdn2",
+                  "epoch":7,
+                  "seq":11,
+                  "ttl_ms":30000,
+                  "messages":[{
+                    "message_id":"agent-cdn2-11",
+                    "type":"state.heartbeat",
+                    "version":1,
+                    "payload":{
+                      "host":"host-cdn2",
+                      "ip":"10.0.0.2",
+                      "cluster":"cdn2",
+                      "area":"hl",
+                      "zone":"az-a",
+                      "role":"worker",
+                      "load":"0.42"
+                    }
+                  }]
+                }
+                """);
+        postJson("/heartbeat", """
+                {
+                  "agent_id":"agent-other",
+                  "epoch":8,
+                  "seq":12,
+                  "ttl_ms":30000,
+                  "messages":[{
+                    "message_id":"agent-other-12",
+                    "type":"state.heartbeat",
+                    "version":1,
+                    "payload":{"host":"host-other","ip":"10.0.0.3","cluster":"other"}
+                  }]
+                }
+                """);
+
+        HttpResponse<String> response = get(
+                "/api/hosts/stream?v=3&clusters=cdn2&once=true");
+
+        assertEquals(200, response.statusCode());
+        JsonNode snapshot = sseData(response.body(), "hosts.snapshot");
+        assertEquals("hosts.v3", snapshot.get("schema").asText());
+        assertTrue(snapshot.get("revision").asLong() > 0);
+        assertEquals(List.of("cdn2"), mapper.convertValue(snapshot.get("scope"), List.class));
+        assertEquals(
+                List.of("cdn2", "other"),
+                mapper.convertValue(snapshot.get("catalog"), List.class));
+        assertEquals(
+                HostStreamV3Codec.FIELDS,
+                mapper.convertValue(snapshot.at("/dictionaries/fields"), List.class));
+        assertEquals(
+                List.of("10.0.0.2"),
+                mapper.convertValue(snapshot.at("/dictionaries/entities"), List.class));
+        assertEquals(24, snapshot.get("columns").size());
+        assertTrue(
+                !snapshot.at("/dictionaries").has("values")
+                        || snapshot.at("/dictionaries/values").isArray());
+        assertFalse(response.body().contains("10.0.0.3"));
+    }
+
+    @Test
     void hostStreamWithoutVersionRetainsV1ArrayContract() throws Exception {
         HttpResponse<String> response = get("/api/hosts/stream?once=true");
+
+        JsonNode snapshot = sseData(response.body(), "hosts.snapshot");
+        assertTrue(snapshot.isArray());
+    }
+
+    @Test
+    void hostStreamUnknownVersionRetainsV1ArrayContract() throws Exception {
+        HttpResponse<String> response = get("/api/hosts/stream?v=99&once=true");
 
         JsonNode snapshot = sseData(response.body(), "hosts.snapshot");
         assertTrue(snapshot.isArray());

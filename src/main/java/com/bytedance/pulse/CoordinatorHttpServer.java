@@ -626,7 +626,12 @@ public class CoordinatorHttpServer {
         exchange.getResponseHeaders().set("x-accel-buffering", "no");
         exchange.sendResponseHeaders(200, 0);
 
-        boolean version2 = "2".equals(queryValue(exchange.getRequestURI(), "v"));
+        String version = queryValue(exchange.getRequestURI(), "v");
+        if ("3".equals(version)) {
+            writeHostStreamV3(exchange);
+            return;
+        }
+        boolean version2 = "2".equals(version);
         if (version2) {
             writeHostStreamV2(exchange);
             return;
@@ -664,6 +669,50 @@ public class CoordinatorHttpServer {
                             "hosts.delta",
                             mapper.writeValueAsString(delta)));
                     previousHosts = currentHosts;
+                } else {
+                    output.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
+                    output.flush();
+                }
+            }
+        }
+    }
+
+    private void writeHostStreamV3(HttpExchange exchange) throws IOException {
+        boolean once = "true".equalsIgnoreCase(queryValue(exchange.getRequestURI(), "once"));
+        List<String> scope = queryList(exchange.getRequestURI(), "clusters");
+        long minIntervalMs = 1_000 * positiveLong("PULSE_HOST_SSE_MIN_INTERVAL_SECONDS", 5);
+        try (OutputStream output = exchange.getResponseBody()) {
+            CoordinatorService.HostSnapshot captured = service.hostSnapshotWithRevision();
+            long revision = captured.revision();
+            HostStreamV3Codec.Session session = HostStreamV3Codec.session(
+                    mapper, revision, scope, captured.hosts());
+            writeSse(output, new SseEvent(
+                    String.valueOf(revision),
+                    "hosts.snapshot",
+                    mapper.writeValueAsString(session.snapshot())));
+            if (once) {
+                return;
+            }
+            long deadline = System.currentTimeMillis()
+                    + positiveLong("PULSE_HOST_SSE_MAX_MS", 15 * 60_000);
+            while (!Thread.currentThread().isInterrupted()
+                    && System.currentTimeMillis() < deadline) {
+                long nextRevision;
+                try {
+                    nextRevision = service.awaitHostRevision(revision, 30_000);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                if (nextRevision > revision) {
+                    sleepQuietly(minIntervalMs);
+                    captured = service.hostSnapshotWithRevision();
+                    revision = captured.revision();
+                    writeSse(output, new SseEvent(
+                            String.valueOf(revision),
+                            "hosts.delta",
+                            mapper.writeValueAsString(session.delta(
+                                    revision, captured.hosts()))));
                 } else {
                     output.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
                     output.flush();

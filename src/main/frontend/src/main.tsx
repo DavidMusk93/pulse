@@ -59,6 +59,11 @@ import {
   type EventPluginDescriptor
 } from './metrics';
 import { trackOnlySseEvent, trackedSseListener, useSseTraffic } from './sseTraffic';
+import {
+  applyHostDeltaV3,
+  decodeHostSnapshotV3,
+  type HostStreamV3State
+} from './hostStreamV3';
 import 'antd/dist/reset.css';
 import './style.css';
 
@@ -348,12 +353,17 @@ function formatTraffic(bytes: number) {
   return `${Math.round(bytes)} B`;
 }
 
-const SseTrafficCard = memo(function SseTrafficCard() {
+const SseTrafficCard = memo(function SseTrafficCard({
+  hostStreamVersion
+}: {
+  hostStreamVersion: 2 | 3;
+}) {
   const traffic = useSseTraffic();
   return <Card className="sse-traffic-card">
     <span className="sse-traffic-title">SSE 流量</span>
     <strong className="sse-traffic-value">{formatTraffic(traffic.bytesPerSecond)}<small>/s</small></strong>
     <div className="sse-traffic-meta">
+      <span>Host V{hostStreamVersion}</span>
       <span>{traffic.eventsPerSecond.toFixed(1)} events/s</span>
       <span>累计 {formatTraffic(traffic.totalBytes)}</span>
     </div>
@@ -949,6 +959,7 @@ function App() {
   const [appliedHostClusterScope, setAppliedHostClusterScope] = useState<string | null>(null);
   const [availableHostClusters, setAvailableHostClusters] = useState<string[]>([]);
   const [hostStreamGeneration, setHostStreamGeneration] = useState(0);
+  const [hostStreamVersion, setHostStreamVersion] = useState<2 | 3>(3);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [activeHost, setActiveHost] = useState<HostView | null>(null);
@@ -970,6 +981,7 @@ function App() {
   const outputLogRef = useRef<OutputLog | null>(null);
   const outputLogFrameRef = useRef<number | null>(null);
   const hostRevisionRef = useRef<number | null>(null);
+  const hostV3StateRef = useRef<HostStreamV3State<HostView> | null>(null);
   const activeTargetHost = activeHost || activeCluster?.hosts[0] || null;
   const clusterAgentKey = useMemo(() => (activeCluster?.hosts || []).map(agentId).join(','), [activeCluster?.name, activeCluster?.hosts]);
 
@@ -1276,7 +1288,8 @@ function App() {
       return;
     }
     hostRevisionRef.current = null;
-    const query = new URLSearchParams({ v: '2' });
+    hostV3StateRef.current = null;
+    const query = new URLSearchParams({ v: String(hostStreamVersion) });
     if (hostClusterScope !== 'all') {
       query.set('clusters', hostClusterScope);
     }
@@ -1287,23 +1300,48 @@ function App() {
       recoveryQueued = true;
       events.close();
       hostRevisionRef.current = null;
+      hostV3StateRef.current = null;
       setAppliedHostClusterScope(null);
       setError(message);
       setHostStreamGeneration(generation => generation + 1);
     };
+    const fallbackToV2 = () => {
+      events.close();
+      hostRevisionRef.current = null;
+      hostV3StateRef.current = null;
+      setAppliedHostClusterScope(null);
+      setError('Coordinator 暂不支持 Host SSE V3，已回退 V2');
+      setHostStreamVersion(2);
+    };
     events.addEventListener('hosts.snapshot', trackedSseListener(event => {
       try {
-        const snapshot = JSON.parse(event.data) as HostSnapshotV2;
+        const parsed = JSON.parse(event.data);
         const expectedScope = hostClusterScope === 'all' ? [] : [hostClusterScope];
-        if (snapshot.schema !== 'hosts.v2' || !Number.isFinite(snapshot.revision)) {
-          throw new Error('Host SSE snapshot contract mismatch');
+        if (hostStreamVersion === 3) {
+          if (Array.isArray(parsed) || parsed?.schema === 'hosts.v2') {
+            fallbackToV2();
+            return;
+          }
+          const snapshot = decodeHostSnapshotV3<HostView>(parsed);
+          if (JSON.stringify(snapshot.scope) !== JSON.stringify(expectedScope)) {
+            throw new Error('Host SSE V3 snapshot scope mismatch');
+          }
+          hostV3StateRef.current = snapshot;
+          hostRevisionRef.current = snapshot.revision;
+          setAvailableHostClusters(snapshot.catalog);
+          applyHosts(snapshot.hosts);
+        } else {
+          const snapshot = parsed as HostSnapshotV2;
+          if (snapshot.schema !== 'hosts.v2' || !Number.isFinite(snapshot.revision)) {
+            throw new Error('Host SSE V2 snapshot contract mismatch');
+          }
+          if (JSON.stringify(snapshot.scope || []) !== JSON.stringify(expectedScope)) {
+            throw new Error('Host SSE V2 snapshot scope mismatch');
+          }
+          hostRevisionRef.current = snapshot.revision;
+          setAvailableHostClusters(snapshot.available_clusters || []);
+          applyHosts(snapshot.hosts || []);
         }
-        if (JSON.stringify(snapshot.scope || []) !== JSON.stringify(expectedScope)) {
-          throw new Error('Host SSE snapshot scope mismatch');
-        }
-        hostRevisionRef.current = snapshot.revision;
-        setAvailableHostClusters(snapshot.available_clusters || []);
-        applyHosts(snapshot.hosts || []);
         setAppliedHostClusterScope(hostClusterScope);
         setError('');
         setLoading(false);
@@ -1313,7 +1351,24 @@ function App() {
     }));
     events.addEventListener('hosts.delta', trackedSseListener(event => {
       try {
-        const delta = JSON.parse(event.data) as HostDelta;
+        const parsed = JSON.parse(event.data);
+        if (hostStreamVersion === 3) {
+          const previous = hostV3StateRef.current;
+          if (!previous) throw new Error('Host SSE V3 delta arrived before snapshot');
+          const next = applyHostDeltaV3(previous, parsed);
+          hostV3StateRef.current = next;
+          hostRevisionRef.current = next.revision;
+          if (next.catalog !== previous.catalog) {
+            setAvailableHostClusters(next.catalog);
+          }
+          if (next.hosts !== previous.hosts) {
+            recordLoadSamples(next.hosts);
+            setHosts(next.hosts);
+          }
+          setError('');
+          return;
+        }
+        const delta = parsed as HostDelta;
         if (
           delta.schema !== 'hosts.v2'
           || hostRevisionRef.current === null
@@ -1340,7 +1395,7 @@ function App() {
     }));
     events.onerror = () => setError('Host SSE 正在重连');
     return () => events.close();
-  }, [hostClusterScope, hostStreamGeneration]);
+  }, [hostClusterScope, hostStreamGeneration, hostStreamVersion]);
 
   useEffect(() => () => closeOutputStream(), []);
 
@@ -1544,7 +1599,7 @@ function App() {
           <Card><Statistic title="主机" value={hosts.length} suffix="台" loading={loading}/></Card>
           <Card><Statistic title="在线率" value={hosts.length ? Math.round(alive * 100 / hosts.length) : 0} suffix="%"/></Card>
           <Card><Statistic title="5min AVG" value={formatLoad(avgLoad)}/></Card>
-          <SseTrafficCard />
+          <SseTrafficCard hostStreamVersion={hostStreamVersion} />
         </div>
       </section>
 
