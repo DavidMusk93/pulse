@@ -1,6 +1,20 @@
+import {
+  reconcileLogDelta,
+  reconcileLogSnapshot,
+  visibleLineRange
+} from '/log-model.mjs';
+
 const app = document.querySelector('#app');
 const encoder = new TextEncoder();
 let state = null;
+let logLines = [];
+let logQuery = '';
+let logRenderFrame = 0;
+let logSyncGeneration = 0;
+let logExecutionId = null;
+
+const logLineHeight = 20;
+const logOverscan = 8;
 
 const gateLabels = {
   reconstruction_match: '精确重建',
@@ -199,7 +213,6 @@ function renderEvidence() {
     : integrationFiles.length
       ? integrationFiles.map(path => ({ status: 'integrate', path }))
       : (kept?.changes || []).map(change => ({ status: 'kept', path: change.file }));
-  const output = state?.runner?.output || [];
   return `
     <section class="evidence-grid">
       <article class="panel evidence-panel">
@@ -214,11 +227,138 @@ function renderEvidence() {
       <article class="panel evidence-panel">
         <header class="section-heading compact">
           <div><span class="eyebrow">RUN LOG</span><h2>本地执行日志</h2></div>
-          <span class="count">${output.length} lines</span>
+          <span class="count" id="log-line-count">${logLines.length} lines</span>
         </header>
-        <pre class="run-log">${output.length ? escape(output.join('\n')) : escape(kept?.learnings || '等待本地 Benchmark...')} </pre>
+        <div class="log-toolbar">
+          <label>
+            <span>搜索</span>
+            <input id="log-search" type="search" value="${escape(logQuery)}" placeholder="搜索完整日志">
+          </label>
+          <span id="log-match-count">0 matches</span>
+          <button id="copy-log" ${logLines.length ? '' : 'disabled'}>复制全部</button>
+        </div>
+        <div class="run-log" id="run-log" role="log" tabindex="0" aria-label="完整本地执行日志">
+          <div class="log-empty" id="log-empty">尚未运行本地 Benchmark</div>
+          <div class="log-spacer" id="log-spacer">
+            <div class="log-window" id="log-window"></div>
+          </div>
+        </div>
       </article>
     </section>`;
+}
+
+function matchingLineIndexes() {
+  const query = logQuery.trim().toLocaleLowerCase();
+  if (!query) return [];
+  const matches = [];
+  logLines.forEach((line, index) => {
+    if (line.toLocaleLowerCase().includes(query)) matches.push(index);
+  });
+  return matches;
+}
+
+function renderLogWindow() {
+  const viewport = document.querySelector('#run-log');
+  const spacer = document.querySelector('#log-spacer');
+  const windowElement = document.querySelector('#log-window');
+  const empty = document.querySelector('#log-empty');
+  if (!viewport || !spacer || !windowElement || !empty) return;
+  empty.hidden = logLines.length > 0;
+  spacer.hidden = logLines.length === 0;
+  if (!logLines.length) return;
+
+  const range = visibleLineRange({
+    lineCount: logLines.length,
+    scrollTop: viewport.scrollTop,
+    viewportHeight: viewport.clientHeight,
+    lineHeight: logLineHeight,
+    overscan: logOverscan
+  });
+  const query = logQuery.trim().toLocaleLowerCase();
+  spacer.style.height = `${range.totalHeight}px`;
+  windowElement.style.transform = `translateY(${range.offsetTop}px)`;
+  windowElement.innerHTML = logLines.slice(range.start, range.end)
+    .map((line, offset) => {
+      const index = range.start + offset;
+      const matched = query && line.toLocaleLowerCase().includes(query);
+      return `<div class="log-line${matched ? ' match' : ''}">
+        <span>${index + 1}</span><code>${escape(line)}</code>
+      </div>`;
+    })
+    .join('');
+}
+
+function bindLogViewer() {
+  const viewport = document.querySelector('#run-log');
+  const search = document.querySelector('#log-search');
+  const matchCount = document.querySelector('#log-match-count');
+  const copy = document.querySelector('#copy-log');
+  viewport?.addEventListener('scroll', () => {
+    cancelAnimationFrame(logRenderFrame);
+    logRenderFrame = requestAnimationFrame(renderLogWindow);
+  });
+  search?.addEventListener('input', event => {
+    logQuery = event.currentTarget.value;
+    const matches = matchingLineIndexes();
+    matchCount.textContent = `${matches.length} matches`;
+    if (matches.length && viewport) {
+      viewport.scrollTop = matches[0] * logLineHeight;
+    }
+    renderLogWindow();
+  });
+  copy?.addEventListener('click', async () => {
+    await navigator.clipboard.writeText(logLines.join('\n'));
+    copy.textContent = '已复制';
+    setTimeout(() => {
+      copy.textContent = '复制全部';
+    }, 900);
+  });
+  matchCount.textContent = `${matchingLineIndexes().length} matches`;
+  renderLogWindow();
+}
+
+function appendLogLines(lines, totalLines, executionId) {
+  if (!Array.isArray(lines) || !lines.length) return;
+  if (executionId !== logExecutionId) {
+    logExecutionId = executionId;
+    logLines = [];
+    syncAuthoritativeLog(executionId).catch(() => {});
+    return;
+  }
+  const reconciliation = reconcileLogDelta(logLines, lines, totalLines);
+  if (reconciliation.status === 'gap') {
+    syncAuthoritativeLog(executionId).catch(() => {});
+    return;
+  }
+  if (reconciliation.status === 'duplicate') return;
+  const viewport = document.querySelector('#run-log');
+  const pinnedToBottom = viewport
+    ? viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < logLineHeight * 2
+    : false;
+  logLines = reconciliation.lines;
+  const count = document.querySelector('#log-line-count');
+  if (count) count.textContent = `${logLines.length} lines`;
+  const matches = document.querySelector('#log-match-count');
+  if (matches) matches.textContent = `${matchingLineIndexes().length} matches`;
+  renderLogWindow();
+  if (pinnedToBottom && viewport) {
+    viewport.scrollTop = viewport.scrollHeight;
+    renderLogWindow();
+  }
+}
+
+async function syncAuthoritativeLog(expectedExecutionId) {
+  const generation = ++logSyncGeneration;
+  const response = await fetch('/api/log');
+  if (!response.ok) throw new Error(`日志恢复失败: ${response.status}`);
+  const payload = await response.json();
+  if (
+    generation !== logSyncGeneration
+    || payload.execution_id !== expectedExecutionId
+    || !Array.isArray(payload.lines)
+  ) return;
+  logLines = reconcileLogSnapshot(logLines, payload.lines);
+  render();
 }
 
 function render() {
@@ -294,12 +434,30 @@ function render() {
       window.alert(`Benchmark 启动失败: ${error.message}`);
     }
   });
+  bindLogViewer();
 }
 
 const events = new EventSource('/api/stream');
 events.addEventListener('run.snapshot', event => {
   state = JSON.parse(event.data);
+  const executionId = state.runner?.execution_id || null;
+  const executionChanged = executionId !== logExecutionId;
+  if (executionChanged) {
+    logExecutionId = executionId;
+    logLines = [];
+  }
   render();
+  const expectedLineCount = Number(state.runner?.line_count || 0);
+  if (executionChanged || logLines.length !== expectedLineCount) {
+    syncAuthoritativeLog(executionId).catch(error => {
+      const empty = document.querySelector('#log-empty');
+      if (empty) empty.textContent = error.message;
+    });
+  }
+});
+events.addEventListener('run.log', event => {
+  const update = JSON.parse(event.data);
+  appendLogLines(update.lines, update.total_lines, update.execution_id);
 });
 events.onerror = () => {
   document.documentElement.dataset.stream = 'reconnecting';

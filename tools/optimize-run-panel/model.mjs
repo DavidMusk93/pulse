@@ -5,7 +5,9 @@ export function compatibleRunner(runner, runId, head) {
     runner
     && runner.run_id === runId
     && runner.source_head === head
-    && (runner.status === 'running' || runner.status === 'completed')
+    && (runner.status === 'running'
+      || runner.status === 'completed'
+      || runner.status === 'failed')
   );
 }
 

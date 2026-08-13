@@ -22,10 +22,22 @@ The panel persists ad-hoc benchmark state by `run_id` and source commit under
 `.tmp/data/optimize-run-panel/`. An older run or commit can never override the
 current experiment log's `best` metrics.
 
+Benchmark output follows the lossless Run UI contract:
+
+- stdout and stderr chunks are reassembled into complete logical lines;
+- no tail, preview, byte, or line-count truncation is allowed;
+- live lines arrive through `run.log` SSE deltas;
+- reconnect recovery loads the complete log once from `/api/log`;
+- only the visible line window is mounted in the DOM;
+- logical lines never soft-wrap and overflow scrolls inside the code block;
+- search and copy operate on the complete line collection.
+
 Verification:
 
 ```bash
-node --test tools/optimize-run-panel/model.test.mjs
+node --test \
+  tools/optimize-run-panel/model.test.mjs \
+  tools/optimize-run-panel/log-model.test.mjs
 node --check tools/optimize-run-panel/server.mjs
 node --check tools/optimize-run-panel/public/app.js
 ```

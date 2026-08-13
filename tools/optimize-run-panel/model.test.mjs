@@ -41,6 +41,17 @@ test('a benchmark from the same run and head is visible', () => {
   }), runner.metrics);
 });
 
+test('failed benchmark state remains visible for diagnostics', () => {
+  const runner = {
+    run_id: 'current-run',
+    source_head: 'new-head',
+    status: 'failed',
+    execution_id: 'failed-execution'
+  };
+
+  assert.equal(compatibleRunner(runner, 'current-run', 'new-head'), true);
+});
+
 test('gate checks are interpreted from the optimization spec', () => {
   assert.equal(gatePassed('== 1', 1), true);
   assert.equal(gatePassed('== 0', 0), true);

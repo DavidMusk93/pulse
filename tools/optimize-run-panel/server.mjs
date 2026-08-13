@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   createReadStream,
   existsSync,
@@ -14,6 +15,7 @@ import http from 'node:http';
 import { extname, join, relative, resolve } from 'node:path';
 import process from 'node:process';
 import { compatibleRunner, semanticFingerprint } from './model.mjs';
+import { createUtf8LogStream } from './log-stream.mjs';
 
 const repo = resolve(process.env.OPTIMIZE_REPO_ROOT || process.cwd());
 const bind = process.env.OPTIMIZE_RUN_UI_BIND || '127.0.0.1';
@@ -29,6 +31,7 @@ const worktree = resolve(
   process.env.OPTIMIZE_WORKTREE || '.'
 );
 const staticRoot = resolve(repo, 'tools/optimize-run-panel/public');
+const logModelPath = resolve(repo, 'tools/optimize-run-panel/log-model.mjs');
 const evaluator = join(worktree, relative(repo, runRoot), 'evaluate.mjs');
 const stateRoot = resolve(repo, '.tmp/data/optimize-run-panel');
 const specAtStart = yaml(join(runRoot, 'spec.yaml')) || {};
@@ -38,6 +41,8 @@ const stateFileName = runId.replaceAll(/[^a-zA-Z0-9._-]/g, '_');
 const latestResultPath = join(stateRoot, `${stateFileName}.json`);
 const clients = new Set();
 const runner = {
+  log_schema: 2,
+  execution_id: null,
   status: 'idle',
   startedAt: null,
   finishedAt: null,
@@ -49,7 +54,7 @@ if (existsSync(latestResultPath)) {
   try {
     const persisted = JSON.parse(readFileSync(latestResultPath, 'utf8'));
     const head = git(['rev-parse', 'HEAD'], worktree);
-    if (compatibleRunner(persisted, runId, head)) {
+    if (persisted.log_schema === 2 && compatibleRunner(persisted, runId, head)) {
       Object.assign(runner, persisted);
     }
   } catch {
@@ -138,9 +143,11 @@ function readSnapshot() {
   const files = worktreeFiles();
   const integratedFiles = integrationFiles(log);
   const head = git(['rev-parse', 'HEAD'], worktree);
-  const activeRunner = compatibleRunner(runner, log.run_id, head)
+  const activeRunnerWithOutput = compatibleRunner(runner, log.run_id, head)
     ? { ...runner }
     : { status: 'idle', metrics: null, output: [], error: null };
+  const { output: activeOutput = [], ...activeRunner } = activeRunnerWithOutput;
+  activeRunner.line_count = activeOutput.length;
   return {
     isolation: {
       local_only: bind === '127.0.0.1',
@@ -225,10 +232,20 @@ function scheduleBroadcast() {
   notifyTimer = setTimeout(broadcast, 120);
 }
 
-function appendOutput(stream, chunk) {
-  const lines = chunk.toString('utf8').split(/\r?\n/).filter(Boolean);
-  runner.output.push(...lines);
-  runner.output = runner.output.slice(-80);
+function broadcastLog(stream, lines) {
+  if (!lines.length) return;
+  const event = `event: run.log\ndata: ${JSON.stringify({
+    stream,
+    execution_id: runner.execution_id,
+    lines,
+    total_lines: runner.output.length
+  })}\n\n`;
+  for (const response of clients) {
+    response.write(event);
+  }
+}
+
+function inspectMetrics(lines) {
   for (let index = lines.length - 1; index >= 0; index--) {
     try {
       const value = JSON.parse(lines[index]);
@@ -240,7 +257,12 @@ function appendOutput(stream, chunk) {
       // Build output and diagnostics remain visible as plain log lines.
     }
   }
-  scheduleBroadcast();
+}
+
+function appendOutput(stream, lines) {
+  runner.output.push(...lines);
+  inspectMetrics(lines);
+  broadcastLog(stream, lines);
 }
 
 function runBenchmark(response) {
@@ -253,6 +275,8 @@ function runBenchmark(response) {
     return;
   }
   runner.status = 'running';
+  runner.log_schema = 2;
+  runner.execution_id = randomUUID();
   runner.run_id = runId;
   runner.source_head = git(['rev-parse', 'HEAD'], worktree);
   runner.startedAt = new Date().toISOString();
@@ -261,13 +285,19 @@ function runBenchmark(response) {
   runner.metrics = null;
   runner.error = null;
   broadcast(true);
-  const child = spawn(process.execPath, [evaluator], {
+  const child = spawn('/bin/sh', [
+    '-c',
+    'exec "$@" 2>&1',
+    'pulse-optimize-evaluator',
+    process.execPath,
+    evaluator
+  ], {
     cwd: worktree,
     env: process.env,
-    stdio: ['ignore', 'pipe', 'pipe']
+    stdio: ['ignore', 'pipe', 'ignore']
   });
-  child.stdout.on('data', chunk => appendOutput('stdout', chunk));
-  child.stderr.on('data', chunk => appendOutput('stderr', chunk));
+  const logStream = createUtf8LogStream(lines => appendOutput('combined', lines));
+  child.stdout.on('data', chunk => logStream.write(chunk));
   child.on('error', error => {
     runner.status = 'failed';
     runner.error = error.message;
@@ -275,6 +305,7 @@ function runBenchmark(response) {
     broadcast(true);
   });
   child.on('close', code => {
+    logStream.end();
     runner.status = code === 0 && runner.metrics ? 'completed' : 'failed';
     runner.error = code === 0 ? null : `Evaluator exited with code ${code}`;
     runner.finishedAt = new Date().toISOString();
@@ -287,8 +318,11 @@ function runBenchmark(response) {
 
 function staticFile(pathname, response) {
   const normalized = pathname === '/' ? '/index.html' : pathname;
-  const path = resolve(staticRoot, `.${normalized}`);
-  if (!path.startsWith(staticRoot) || !existsSync(path) || statSync(path).isDirectory()) {
+  const path = normalized === '/log-model.mjs'
+    ? logModelPath
+    : resolve(staticRoot, `.${normalized}`);
+  const allowed = path === logModelPath || path.startsWith(staticRoot);
+  if (!allowed || !existsSync(path) || statSync(path).isDirectory()) {
     response.writeHead(404);
     response.end('Not found');
     return;
@@ -296,6 +330,7 @@ function staticFile(pathname, response) {
   const types = {
     '.html': 'text/html; charset=utf-8',
     '.js': 'text/javascript; charset=utf-8',
+    '.mjs': 'text/javascript; charset=utf-8',
     '.css': 'text/css; charset=utf-8'
   };
   response.writeHead(200, {
@@ -309,6 +344,16 @@ const server = http.createServer((request, response) => {
   const url = new URL(request.url, `http://${request.headers.host || `${bind}:${port}`}`);
   if (request.method === 'GET' && url.pathname === '/api/run') {
     writeJson(response, 200, snapshot());
+    return;
+  }
+  if (request.method === 'GET' && url.pathname === '/api/log') {
+    writeJson(response, 200, {
+      run_id: runner.run_id || runId,
+      source_head: runner.source_head || null,
+      log_schema: runner.log_schema,
+      execution_id: runner.execution_id,
+      lines: runner.output
+    });
     return;
   }
   if (request.method === 'GET' && url.pathname === '/api/stream') {
