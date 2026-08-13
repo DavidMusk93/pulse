@@ -1680,15 +1680,25 @@ function App() {
             {hostScopePending && <small>同步中</small>}
           </Typography.Title>
         </div>
-        <Segmented
-          className="host-cluster-selector"
-          size="small"
-          value={hostClusterScope || undefined}
-          options={hostClusterScopeOptions}
-          onChange={handleHostClusterScopeChange}
-          disabled={hostScopePending || !hostClusterScopeOptions.length}
-          aria-label="主机集群范围"
-        />
+        <div className="host-cluster-picker">
+          <span>{availableHostClusters.length} 个集群</span>
+          <Select
+            className="host-cluster-selector"
+            size="middle"
+            value={hostClusterScope || undefined}
+            options={hostClusterScopeOptions}
+            showSearch
+            virtual
+            optionFilterProp="label"
+            listHeight={320}
+            popupMatchSelectWidth={280}
+            placeholder="选择集群"
+            notFoundContent="未找到集群"
+            onChange={handleHostClusterScopeChange}
+            disabled={hostScopePending || !hostClusterScopeOptions.length}
+            aria-label="主机集群范围"
+          />
+        </div>
       </div>
       <section id="clusters" className="clusters">
         {groups.map(([cluster, clusterHosts], index) => <ClusterSection

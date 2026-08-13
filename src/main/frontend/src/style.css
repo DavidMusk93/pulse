@@ -1076,23 +1076,33 @@ body {
   font-weight: 650;
   letter-spacing: .04em;
 }
-.host-cluster-selector.ant-segmented {
-  max-width: min(62vw, 760px);
-  overflow-x: auto;
-  padding: 3px;
-  border: 1px solid rgba(0, 0, 0, .06);
-  border-radius: 12px;
-  background: rgba(232, 232, 237, .72);
-  scrollbar-width: none;
+.host-cluster-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
-.host-cluster-selector.ant-segmented::-webkit-scrollbar {
-  display: none;
-}
-.host-cluster-selector .ant-segmented-item {
+.host-cluster-picker > span {
+  color: #86868b;
+  font-size: 11px;
+  font-weight: 600;
   white-space: nowrap;
 }
-.host-cluster-selector .ant-segmented-item-selected {
-  box-shadow: 0 1px 4px rgba(0, 0, 0, .10);
+.host-cluster-selector.ant-select {
+  width: 240px;
+}
+.host-cluster-selector .ant-select-selector {
+  border-color: rgba(0, 0, 0, .08) !important;
+  border-radius: 12px !important;
+  background: rgba(255, 255, 255, .78) !important;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, .06) !important;
+  backdrop-filter: blur(18px) saturate(150%);
+}
+.host-cluster-selector.ant-select-focused .ant-select-selector {
+  border-color: rgba(37, 99, 235, .4) !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .08) !important;
+}
+.host-cluster-selector .ant-select-selection-item {
+  font-weight: 620;
 }
 .clusters {
   display: flex;
@@ -2220,8 +2230,11 @@ body {
     align-items: stretch;
     flex-direction: column;
   }
-  .host-cluster-selector.ant-segmented {
-    max-width: 100%;
+  .host-cluster-picker {
+    justify-content: space-between;
+  }
+  .host-cluster-selector.ant-select {
+    width: min(100%, 320px);
   }
   .cluster-section .ant-card-extra {
     max-width: 100%;

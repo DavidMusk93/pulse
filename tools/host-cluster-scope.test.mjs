@@ -25,3 +25,21 @@ test('cluster options never include an all-clusters choice', () => {
     { label: 'doubao', value: 'doubao' }
   ]);
 });
+
+test('cluster options remain deterministic for a large catalog', () => {
+  const catalog = Array.from(
+    { length: 1_000 },
+    (_, index) => `cluster-${String(999 - index).padStart(4, '0')}`
+  );
+  const options = hostClusterOptions(catalog);
+
+  assert.equal(options.length, 1_000);
+  assert.deepEqual(options[0], {
+    label: 'cluster-0000',
+    value: 'cluster-0000'
+  });
+  assert.deepEqual(options.at(-1), {
+    label: 'cluster-0999',
+    value: 'cluster-0999'
+  });
+});
