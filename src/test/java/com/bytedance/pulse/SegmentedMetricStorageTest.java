@@ -221,6 +221,105 @@ class SegmentedMetricStorageTest {
     }
 
     @Test
+    void thirtyMinuteFleetTopNQueryUsesMinuteRollup() throws Exception {
+        long day0 = Instant.parse("2026-08-01T00:00:00Z").toEpochMilli();
+        MutableClock clock = new MutableClock(Instant.ofEpochMilli(day0));
+        Path shards = tempDir.resolve("metrics-v2");
+
+        try (SegmentedMetricStorage storage = SegmentedMetricStorage.open(
+                shards,
+                null,
+                32,
+                8,
+                Duration.ofMillis(10),
+                7,
+                Duration.ofHours(1),
+                1024L * 1024 * 1024,
+                30,
+                1024L * 1024 * 1024,
+                clock)) {
+            storage.writeHeartbeat(sample("agent-1", day0 + Duration.ofMinutes(1).toMillis(), 1, 10));
+            storage.writeHeartbeat(sample("agent-2", day0 + Duration.ofMinutes(2).toMillis(), 1, 20));
+            storage.writeHeartbeat(sample("agent-1", day0 + Duration.ofMinutes(31).toMillis(), 2, 30));
+            assertTrue(storage.awaitIdle(Duration.ofSeconds(2)));
+
+            MetricQueryResult result = storage.queryRange(new MetricQuery(
+                    "agent.thread_count",
+                    List.of(),
+                    day0,
+                    day0 + Duration.ofMinutes(30).toMillis(),
+                    10_000,
+                    12,
+                    20_000,
+                    12,
+                    ""));
+
+            assertEquals(60_000, result.suggestedStepMs());
+            assertEquals(2, result.series().size());
+            assertTrue(result.series().stream()
+                    .flatMap(series -> series.points().stream())
+                    .allMatch(point -> "1m".equals(point.metadata().get("rollup"))));
+
+            MetricQueryResult shorterResult = storage.queryRange(new MetricQuery(
+                    "agent.thread_count",
+                    List.of(),
+                    day0,
+                    day0 + Duration.ofMinutes(29).toMillis(),
+                    10_000,
+                    12,
+                    20_000,
+                    12,
+                    ""));
+            assertEquals(10_000, shorterResult.suggestedStepMs());
+            assertTrue(shorterResult.series().stream()
+                    .flatMap(series -> series.points().stream())
+                    .noneMatch(point -> point.metadata().containsKey("rollup")));
+        }
+    }
+
+    @Test
+    void thirtyMinuteSingleAgentQueryKeepsRawDetail() throws Exception {
+        long day0 = Instant.parse("2026-08-01T00:00:00Z").toEpochMilli();
+        MutableClock clock = new MutableClock(Instant.ofEpochMilli(day0));
+        Path shards = tempDir.resolve("metrics-v2");
+
+        try (SegmentedMetricStorage storage = SegmentedMetricStorage.open(
+                shards,
+                null,
+                32,
+                8,
+                Duration.ofMillis(10),
+                7,
+                Duration.ofHours(1),
+                1024L * 1024 * 1024,
+                30,
+                1024L * 1024 * 1024,
+                clock)) {
+            storage.writeHeartbeat(sample("agent-1", day0 + Duration.ofMinutes(1).toMillis(), 1, 10));
+            storage.writeHeartbeat(sample("agent-1", day0 + Duration.ofMinutes(2).toMillis(), 2, 20));
+            storage.writeHeartbeat(sample("agent-1", day0 + Duration.ofMinutes(31).toMillis(), 3, 30));
+            assertTrue(storage.awaitIdle(Duration.ofSeconds(2)));
+
+            MetricQueryResult result = storage.queryRange(new MetricQuery(
+                    "agent.thread_count",
+                    List.of("agent-1"),
+                    day0,
+                    day0 + Duration.ofMinutes(30).toMillis(),
+                    10_000,
+                    12,
+                    20_000,
+                    12,
+                    ""));
+
+            assertEquals(10_000, result.suggestedStepMs());
+            assertEquals(List.of(10.0, 20.0),
+                    result.series().get(0).points().stream().map(MetricPoint::value).toList());
+            assertTrue(result.series().get(0).points().stream()
+                    .noneMatch(point -> point.metadata().containsKey("rollup")));
+        }
+    }
+
+    @Test
     void rollupCoversEveryCatalogMetric() throws Exception {
         long day0 = Instant.parse("2026-08-01T00:00:00Z").toEpochMilli();
         MutableClock clock = new MutableClock(Instant.ofEpochMilli(day0));

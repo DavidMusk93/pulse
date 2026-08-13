@@ -27,6 +27,7 @@ final class SegmentedMetricStorage implements MetricStorage {
     private static final String SHARD_SUFFIX = ".db";
     private static final String CUTOVER_FILE = "legacy-cutover-ms";
     private static final long WIDE_QUERY_ROLLUP_THRESHOLD_MS = Duration.ofHours(1).toMillis();
+    private static final long FLEET_QUERY_ROLLUP_THRESHOLD_MS = Duration.ofMinutes(30).toMillis();
     private static final long ROLLUP_QUERY_STEP_MS = Duration.ofMinutes(1).toMillis();
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE;
     private static final int DEFAULT_ROLLUP_RETENTION_DAYS = 30;
@@ -259,7 +260,14 @@ final class SegmentedMetricStorage implements MetricStorage {
     private boolean shouldUseRollupForWideQuery(MetricQuery query) {
         return rollupStorage.shardCount() > 0
                 && query.endMs() > query.startMs()
-                && query.endMs() - query.startMs() >= WIDE_QUERY_ROLLUP_THRESHOLD_MS;
+                && (query.endMs() - query.startMs() >= WIDE_QUERY_ROLLUP_THRESHOLD_MS
+                        || shouldUseRollupForFleetQuery(query));
+    }
+
+    private static boolean shouldUseRollupForFleetQuery(MetricQuery query) {
+        return query.agentIds().isEmpty()
+                && query.topN() > 0
+                && query.endMs() - query.startMs() >= FLEET_QUERY_ROLLUP_THRESHOLD_MS;
     }
 
     private static MetricQuery rollupQuery(MetricQuery query) {
