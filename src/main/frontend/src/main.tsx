@@ -1973,12 +1973,27 @@ function EventBusPanel({
           {streamState === 'connected' ? 'SSE 已连接' : streamState === 'unsupported' ? '静态快照' : 'SSE 重连中'}
         </Tag>
       </div>
-      <div className="eventbus-flow" aria-label="事件 Pipeline">
-        <span><ApiOutlined /><b>Source</b><em>{view?.config.sources.length || 0} producers</em></span>
-        <span className="eventbus-flow-link"><ArrowRightOutlined /><small>PulseMessage</small></span>
-        <span><ThunderboltOutlined /><b>Pipeline</b><em>{view?.config.routes.length || 0} routes · {view?.config.event_types.length || 0} contracts</em></span>
-        <span className="eventbus-flow-link"><ArrowRightOutlined /><small>Delivery</small></span>
-        <span><SendOutlined /><b>Sink</b><em>{view?.config.sinks.length || 0} targets</em></span>
+      <div className="eventbus-flow-stack">
+        <div className="eventbus-flow" aria-label="事件 Pipeline">
+          <span><ApiOutlined /><b>Source</b><em>{view?.config.sources.length || 0} producers</em></span>
+          <span className="eventbus-flow-link"><ArrowRightOutlined /><small>PulseMessage</small></span>
+          <span><ThunderboltOutlined /><b>Pipeline</b><em>{view?.config.routes.length || 0} routes · {view?.config.event_types.length || 0} contracts</em></span>
+          <span className="eventbus-flow-link"><ArrowRightOutlined /><small>Delivery</small></span>
+          <span><SendOutlined /><b>Sink</b><em>{view?.config.sinks.length || 0} targets</em></span>
+        </div>
+        {pipelineViews.length > 0 && <div className="eventbus-pipeline-statuses" aria-live="polite">
+          {pipelineViews.map(({ route, pending, lastSuccessAt, lastDelivered, error, state }) =>
+            <div className={`eventbus-pipeline-status is-${state}`} key={route.id}>
+              <span className="eventbus-pipeline-status-dot" aria-hidden="true" />
+              <b>{route.name || route.id}</b>
+              <small className={error ? 'eventbus-pipeline-error' : undefined} title={error || undefined}>
+                {error || (state === 'pending' ? '等待发布门禁' : state === 'delivered' ? '最近一次推送成功' : '等待事件')}
+              </small>
+              <span><small>待推送</small><strong>{pending}</strong></span>
+              <span><small>最近推送</small><strong>{lastDelivered}</strong></span>
+              <time>{lastSuccessAt ? new Date(lastSuccessAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}</time>
+            </div>)}
+        </div>}
       </div>
       <div className="eventbus-summary-actions">
         <div className="eventbus-live-count">
@@ -1987,23 +2002,6 @@ function EventBusPanel({
         </div>
         <Button type="primary" icon={<SettingOutlined />} onClick={openEditor}>管理事件流</Button>
       </div>
-      {pipelineViews.length > 0 && <div className="eventbus-pipeline-statuses" aria-live="polite">
-        {pipelineViews.map(({ route, pending, lastSuccessAt, lastDelivered, error, state }) =>
-          <div className={`eventbus-pipeline-status is-${state}`} key={route.id}>
-            <span className="eventbus-pipeline-status-dot" aria-hidden="true" />
-            <div>
-              <b>{route.name || route.id}</b>
-              <small className={error ? 'eventbus-pipeline-error' : undefined} title={error || undefined}>
-                {error || (state === 'pending' ? '等待发布门禁' : state === 'delivered' ? '最近一次推送成功' : '等待事件')}
-              </small>
-            </div>
-            <div className="eventbus-pipeline-status-meta">
-              <span><small>待推送</small><strong>{pending}</strong></span>
-              <span><small>最近推送</small><strong>{lastDelivered}</strong></span>
-              <time>{lastSuccessAt ? new Date(lastSuccessAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}</time>
-            </div>
-          </div>)}
-      </div>}
     </div>
     <Modal
       className="eventbus-modal"

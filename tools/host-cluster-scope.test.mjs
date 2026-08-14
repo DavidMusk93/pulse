@@ -170,11 +170,14 @@ test('summary cards keep text visible and avoid empty pipeline rows', async () =
   assert.doesNotMatch(sseMetaStyles, /text-overflow:\s*ellipsis/);
 
   assert.match(eventbusFlowStyles, /display: flex/);
+  assert.match(styles, /\.eventbus-flow-stack \{[\s\S]*?justify-items: center/);
   assert.match(eventbusFlowStyles, /grid-template-columns: 18px max-content/);
   assert.match(eventbusFlowStyles, /white-space: nowrap/);
   assert.doesNotMatch(eventbusFlowStyles, /overflow-wrap:\s*anywhere/);
-  assert.match(eventbusStyles, /grid-template-columns: 1fr/);
-  assert.match(eventbusStyles, /grid-template-columns: 8px minmax\(180px, max-content\) auto/);
-  assert.match(eventbusStyles, /overflow-wrap: anywhere/);
+  assert.match(eventbusStyles, /display: flex/);
+  assert.match(eventbusStyles, /justify-content: center/);
+  assert.match(eventbusStyles, /width: max-content/);
+  assert.match(eventbusStyles, /border-radius: 999px/);
+  assert.match(eventbusStyles, /white-space: nowrap/);
   assert.doesNotMatch(eventbusStyles, /text-overflow:\s*ellipsis/);
 });

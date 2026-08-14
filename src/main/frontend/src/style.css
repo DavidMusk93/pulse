@@ -363,10 +363,10 @@ body {
 }
 .metrics-eventbus-card {
   display: grid;
-  grid-template-columns: minmax(270px, .8fr) minmax(420px, 1.45fr) auto;
+  grid-template-columns: minmax(270px, .82fr) minmax(520px, 1.5fr) auto;
   gap: 10px 18px;
   align-items: center;
-  padding: 14px 16px;
+  padding: 14px 16px 13px;
   border: 1px solid rgba(255, 255, 255, .66);
   border-radius: 18px;
   background: rgba(255, 255, 255, .68);
@@ -415,6 +415,12 @@ body {
   color: #c9342f;
   background: rgba(255, 59, 48, .12);
 }
+.eventbus-flow-stack {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  justify-items: center;
+}
 .eventbus-flow {
   display: flex;
   justify-content: center;
@@ -444,12 +450,14 @@ body {
   color: #6e6e73;
 }
 .eventbus-flow b {
+  grid-column: 2;
   color: #1d1d1f;
   font-size: 12px;
   line-height: 1.2;
   white-space: nowrap;
 }
 .eventbus-flow em {
+  grid-column: 2;
   color: #86868b;
   font-size: 10.5px;
   font-style: normal;
@@ -482,22 +490,23 @@ body {
   justify-content: flex-end;
 }
 .eventbus-pipeline-statuses {
-  display: grid;
-  grid-template-columns: 1fr;
-  grid-column: 1 / -1;
-  grid-row: 2;
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-  padding-top: 2px;
+  justify-content: center;
+  max-width: 100%;
 }
 .eventbus-pipeline-status {
-  display: grid;
-  grid-template-columns: 8px minmax(180px, max-content) auto;
-  gap: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
   align-items: center;
-  min-height: 58px;
-  padding: 10px 12px;
+  width: max-content;
+  max-width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
   border: 1px solid rgba(148, 163, 184, .14);
-  border-radius: 13px;
+  border-radius: 999px;
   background: rgba(248, 248, 250, .72);
   transition: background-color 180ms ease, border-color 180ms ease, opacity 180ms ease;
 }
@@ -509,6 +518,7 @@ body {
   background: rgba(52, 199, 89, .045);
 }
 .eventbus-pipeline-status-dot {
+  flex: 0 0 auto;
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -519,19 +529,21 @@ body {
 .eventbus-pipeline-status.is-failed .eventbus-pipeline-status-dot { background: #ff3b30; }
 .eventbus-pipeline-status > div,
 .eventbus-pipeline-status > span {
-  display: grid;
+  display: inline-grid;
   min-width: 0;
 }
 .eventbus-pipeline-status b {
+  flex: 0 1 auto;
   color: #1d1d1f;
   font-size: 12px;
   font-weight: 680;
   line-height: 1.25;
   letter-spacing: -.01em;
+  white-space: nowrap;
 }
 .eventbus-pipeline-status strong {
   color: #1d1d1f;
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -542,25 +554,18 @@ body {
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 .eventbus-pipeline-status .eventbus-pipeline-error {
   color: #b42318;
   font-weight: 560;
 }
-.eventbus-pipeline-status-meta {
-  display: flex !important;
-  flex-wrap: wrap;
-  gap: 10px 14px;
-  align-items: center;
-}
-.eventbus-pipeline-status-meta span {
-  display: grid;
-  gap: 1px;
-  min-width: 54px;
+.eventbus-pipeline-status > span {
+  grid-template-columns: max-content max-content;
+  gap: 4px;
+  align-items: baseline;
 }
 .eventbus-pipeline-status time {
-  align-self: center;
   margin-left: 2px;
 }
 .eventbus-live-count {
@@ -2222,12 +2227,6 @@ body {
   }
   .eventbus-contract-note {
     grid-template-columns: 1fr;
-  }
-  .eventbus-pipeline-status {
-    grid-template-columns: 8px minmax(0, 1fr);
-  }
-  .eventbus-pipeline-status-meta {
-    grid-column: 2;
   }
   .eventbus-field-wide {
     grid-column: auto;
