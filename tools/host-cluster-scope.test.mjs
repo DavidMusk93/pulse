@@ -158,6 +158,9 @@ test('summary cards keep text visible and avoid empty pipeline rows', async () =
   const eventbusStyles = styles.match(
     /\.eventbus-pipeline-statuses \{[\s\S]*?\.eventbus-pipeline-status time \{[\s\S]*?\n\}/
   )?.[0] || '';
+  const eventbusFlowStyles = styles.match(
+    /\.eventbus-flow \{[\s\S]*?\.eventbus-flow em \{[\s\S]*?\n\}/
+  )?.[0] || '';
 
   assert.match(sseCard, /<small>通道<\/small><b>Control V4<\/b>/);
   assert.match(sseCard, /<small>事件<\/small><b>\{traffic\.eventsPerSecond\.toFixed\(1\)\}\/s<\/b>/);
@@ -166,11 +169,12 @@ test('summary cards keep text visible and avoid empty pipeline rows', async () =
   assert.match(sseMetaStyles, /overflow-wrap: anywhere/);
   assert.doesNotMatch(sseMetaStyles, /text-overflow:\s*ellipsis/);
 
-  assert.match(
-    eventbusStyles,
-    /grid-template-columns: repeat\(auto-fit, minmax\(min\(100%, 290px\), 420px\)\)/
-  );
-  assert.match(eventbusStyles, /justify-content: start/);
+  assert.match(eventbusFlowStyles, /display: flex/);
+  assert.match(eventbusFlowStyles, /grid-template-columns: 18px max-content/);
+  assert.match(eventbusFlowStyles, /white-space: nowrap/);
+  assert.doesNotMatch(eventbusFlowStyles, /overflow-wrap:\s*anywhere/);
+  assert.match(eventbusStyles, /grid-template-columns: 1fr/);
+  assert.match(eventbusStyles, /grid-template-columns: 8px minmax\(180px, max-content\) auto/);
   assert.match(eventbusStyles, /overflow-wrap: anywhere/);
   assert.doesNotMatch(eventbusStyles, /text-overflow:\s*ellipsis/);
 });

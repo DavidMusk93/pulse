@@ -363,9 +363,9 @@ body {
 }
 .metrics-eventbus-card {
   display: grid;
-  grid-template-columns: minmax(260px, .78fr) minmax(340px, 1.22fr) minmax(190px, auto);
-  gap: 12px 16px;
-  align-items: start;
+  grid-template-columns: minmax(270px, .8fr) minmax(420px, 1.45fr) auto;
+  gap: 10px 18px;
+  align-items: center;
   padding: 14px 16px;
   border: 1px solid rgba(255, 255, 255, .66);
   border-radius: 18px;
@@ -416,21 +416,22 @@ body {
   background: rgba(255, 59, 48, .12);
 }
 .eventbus-flow {
-  display: grid;
-  grid-template-columns: minmax(90px, 1fr) minmax(44px, .4fr) minmax(148px, 1.25fr) minmax(44px, .4fr) minmax(90px, 1fr);
-  gap: 6px;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
   align-items: center;
   min-width: 0;
 }
 .eventbus-flow > span:not(.eventbus-flow-link) {
   display: grid;
-  grid-template-columns: 18px 1fr;
-  gap: 1px 7px;
+  grid-template-columns: 18px max-content;
+  gap: 1px 8px;
   align-items: center;
+  width: max-content;
   min-width: 0;
-  padding: 7px 9px;
+  padding: 8px 12px;
   border: 1px solid rgba(148, 163, 184, .14);
-  border-radius: 12px;
+  border-radius: 14px;
   background: rgba(248, 248, 250, .8);
   transition: transform 180ms cubic-bezier(.2, .8, .2, 1), background-color 180ms ease;
 }
@@ -444,15 +445,16 @@ body {
 }
 .eventbus-flow b {
   color: #1d1d1f;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.2;
+  white-space: nowrap;
 }
 .eventbus-flow em {
   color: #86868b;
-  font-size: 10px;
+  font-size: 10.5px;
   font-style: normal;
   line-height: 1.2;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 .eventbus-flow-link {
   display: grid;
@@ -481,19 +483,19 @@ body {
 }
 .eventbus-pipeline-statuses {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 420px));
+  grid-template-columns: 1fr;
   grid-column: 1 / -1;
   grid-row: 2;
-  gap: 7px;
-  justify-content: start;
+  gap: 6px;
   padding-top: 2px;
 }
 .eventbus-pipeline-status {
   display: grid;
-  grid-template-columns: 8px minmax(0, 1fr);
-  gap: 8px 10px;
-  align-items: start;
-  padding: 9px 10px;
+  grid-template-columns: 8px minmax(180px, max-content) auto;
+  gap: 12px;
+  align-items: center;
+  min-height: 58px;
+  padding: 10px 12px;
   border: 1px solid rgba(148, 163, 184, .14);
   border-radius: 13px;
   background: rgba(248, 248, 250, .72);
@@ -548,10 +550,9 @@ body {
 }
 .eventbus-pipeline-status-meta {
   display: flex !important;
-  grid-column: 2;
   flex-wrap: wrap;
-  gap: 8px 12px;
-  align-items: end;
+  gap: 10px 14px;
+  align-items: center;
 }
 .eventbus-pipeline-status-meta span {
   display: grid;
@@ -559,8 +560,8 @@ body {
   min-width: 54px;
 }
 .eventbus-pipeline-status time {
-  align-self: end;
-  margin-left: auto;
+  align-self: center;
+  margin-left: 2px;
 }
 .eventbus-live-count {
   display: grid;
@@ -2224,6 +2225,9 @@ body {
   }
   .eventbus-pipeline-status {
     grid-template-columns: 8px minmax(0, 1fr);
+  }
+  .eventbus-pipeline-status-meta {
+    grid-column: 2;
   }
   .eventbus-field-wide {
     grid-column: auto;
