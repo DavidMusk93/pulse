@@ -17,6 +17,18 @@
 
 - Online coordinator pages (e.g., `http://[fdbd:dc05:11:634::45]:9966/`) require SSH v23 proxy; direct browser access is not possible.
 - For UI verification, use remote `curl` scripts via SSH instead of `browser_navigate`.
+- For UI visual verification, create an SSH local tunnel to the Coordinator and use the built-in browser against `127.0.0.1`; do not treat remote `curl`, static asset markers, or HTTP 200 as visual acceptance evidence.
+
+## UI Development Gate
+
+- UI development must optimize for visible user experience: aesthetics, clarity, spatial economy, and user confidence are first-class product requirements.
+- The goal is "what the user sees is what the user gets"; implementation is not complete until the actual rendered interface has been inspected at a production-like viewport.
+- Excellent user experience is the product's core competitiveness; technically impressive internals do not compensate for an ugly, confusing, or wasteful UI.
+- Before shipping any user-visible UI change, perform built-in-browser validation after the change is built and, for production Coordinator work, after canary deployment.
+- Capture concrete visual evidence from the browser: screenshot when available; otherwise DOM geometry, computed styles, wrap/overflow checks, and viewport dimensions.
+- Reject layouts with hidden text, accidental wrapping, overlap, orphaned controls, excessive blank space, weak visual hierarchy, or status information detached from the element it explains.
+- If direct browser access to a Coordinator URL fails, use SSH local forwarding and open the forwarded `127.0.0.1` URL in the built-in browser.
+- Operation logs for UI production changes must include the browser validation method and the visual acceptance evidence or the exact limitation that prevented screenshot capture.
 
 ## TLB Operations
 
