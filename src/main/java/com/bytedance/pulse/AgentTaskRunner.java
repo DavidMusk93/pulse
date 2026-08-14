@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class AgentTaskRunner {
     private static final int RESULT_INLINE_CHARS = 48 * 1024;
@@ -24,6 +25,10 @@ public class AgentTaskRunner {
     private static final int MAX_STREAM_CHUNKS_PER_DRAIN = 32;
     private static final int REPLY_REPLAY_SENDS = 3;
     private static final int DEFAULT_PENDING_REPLY_MAX = 512;
+    private static final int DEFAULT_PENDING_REPLY_BYTES_MAX = 4 * 1024 * 1024;
+    private static final int DEFAULT_CAPTURED_OUTPUT_CHARS_MAX = 256 * 1024;
+    private static final int DEFAULT_STREAM_QUEUE_BYTES_MAX = 8 * 1024 * 1024;
+    private static final int DEFAULT_FILE_BYTES_MAX = 1024 * 1024;
     private final String agentId;
     private final Clock clock;
     private final String taskDir;
@@ -34,10 +39,15 @@ public class AgentTaskRunner {
     private final ExecutorService executor;
     private final ConcurrentLinkedQueue<PendingReply> pendingReplies = new ConcurrentLinkedQueue<>();
     private final AtomicInteger pendingReplyCount = new AtomicInteger();
+    private final AtomicLong pendingReplyBytes = new AtomicLong();
     private final Set<String> acceptedTasks = ConcurrentHashMap.newKeySet();
     private final Map<String, RunningTask> runningTasks = new ConcurrentHashMap<>();
     private final Map<String, ReceivedFile> receivedFiles = new ConcurrentHashMap<>();
     private final int maxPendingReplies;
+    private final int maxPendingReplyBytes;
+    private final int maxCapturedOutputChars;
+    private final int maxStreamQueueBytes;
+    private final int maxFileBytes;
 
     public AgentTaskRunner(String agentId, Clock clock) {
         this(
@@ -45,7 +55,11 @@ public class AgentTaskRunner {
                 clock,
                 System.getenv().getOrDefault("PULSE_TASK_DIR", "/data24/otf/pulse/tasks"),
                 Math.max(1, Integer.parseInt(System.getenv().getOrDefault("PULSE_TASK_MAX_CONCURRENCY", "1"))),
-                envInt("PULSE_AGENT_PENDING_REPLY_MAX", DEFAULT_PENDING_REPLY_MAX));
+                envInt("PULSE_AGENT_PENDING_REPLY_MAX", DEFAULT_PENDING_REPLY_MAX),
+                envInt("PULSE_AGENT_PENDING_REPLY_BYTES_MAX", DEFAULT_PENDING_REPLY_BYTES_MAX),
+                envInt("PULSE_AGENT_CAPTURED_OUTPUT_CHARS_MAX", DEFAULT_CAPTURED_OUTPUT_CHARS_MAX),
+                envInt("PULSE_AGENT_STREAM_QUEUE_BYTES_MAX", DEFAULT_STREAM_QUEUE_BYTES_MAX),
+                envInt("PULSE_AGENT_FILE_BYTES_MAX", DEFAULT_FILE_BYTES_MAX));
     }
 
     AgentTaskRunner(String agentId, Clock clock, String taskDir) {
@@ -53,10 +67,36 @@ public class AgentTaskRunner {
     }
 
     AgentTaskRunner(String agentId, Clock clock, String taskDir, int concurrency, int maxPendingReplies) {
+        this(
+                agentId,
+                clock,
+                taskDir,
+                concurrency,
+                maxPendingReplies,
+                DEFAULT_PENDING_REPLY_BYTES_MAX,
+                DEFAULT_CAPTURED_OUTPUT_CHARS_MAX,
+                DEFAULT_STREAM_QUEUE_BYTES_MAX,
+                DEFAULT_FILE_BYTES_MAX);
+    }
+
+    AgentTaskRunner(
+            String agentId,
+            Clock clock,
+            String taskDir,
+            int concurrency,
+            int maxPendingReplies,
+            int maxPendingReplyBytes,
+            int maxCapturedOutputChars,
+            int maxStreamQueueBytes,
+            int maxFileBytes) {
         this.agentId = agentId;
         this.clock = clock;
         this.taskDir = taskDir;
         this.maxPendingReplies = Math.max(32, maxPendingReplies);
+        this.maxPendingReplyBytes = Math.max(64 * 1024, maxPendingReplyBytes);
+        this.maxCapturedOutputChars = Math.max(8 * 1024, maxCapturedOutputChars);
+        this.maxStreamQueueBytes = Math.max(STREAM_CHUNK_CHARS, maxStreamQueueBytes);
+        this.maxFileBytes = Math.max(4 * 1024, maxFileBytes);
         String defaultWorkDir = Path.of(taskDir).getParent() == null
                 ? "/data24/otf/pulse/agent"
                 : Path.of(taskDir).getParent().resolve("agent").toString();
@@ -96,6 +136,7 @@ public class AgentTaskRunner {
                 break;
             }
             pendingReplyCount.decrementAndGet();
+            pendingReplyBytes.addAndGet(-reply.estimatedBytes());
             replies.add(reply.message());
             if (reply.remainingSends() > 1) {
                 enqueuePending(new PendingReply(reply.message(), reply.remainingSends() - 1));
@@ -125,7 +166,17 @@ public class AgentTaskRunner {
                 throw new IllegalArgumentException("file_id is required");
             }
             String safeName = safeFileName(fileName);
-            byte[] content = Base64.getDecoder().decode(stringValue(payload, "content"));
+            if (expectedBytes > maxFileBytes) {
+                throw new IllegalArgumentException("file size exceeds agent limit");
+            }
+            String encoded = stringValue(payload, "content");
+            if (encoded.length() > maxBase64Chars(maxFileBytes)) {
+                throw new IllegalArgumentException("encoded file exceeds agent limit");
+            }
+            byte[] content = Base64.getDecoder().decode(encoded);
+            if (content.length > maxFileBytes) {
+                throw new IllegalArgumentException("file size exceeds agent limit");
+            }
             if (expectedBytes >= 0 && content.length != expectedBytes) {
                 throw new IllegalArgumentException("content byte size mismatch");
             }
@@ -170,7 +221,8 @@ public class AgentTaskRunner {
             return;
         }
         long acceptedAt = clock.millis();
-        runningTasks.put(taskId, new RunningTask(taskId, traceId, "shell_script", "accepted", acceptedAt, null));
+        runningTasks.put(taskId, new RunningTask(
+                taskId, traceId, "shell_script", "accepted", acceptedAt, null, maxStreamQueueBytes));
         enqueuePending(new PendingReply(new PulseMessage(
                 "reply-task-accepted-" + agentId + "-" + taskId,
                 "reply.task_accepted",
@@ -209,7 +261,8 @@ public class AgentTaskRunner {
             return;
         }
         long acceptedAt = clock.millis();
-        runningTasks.put(taskId, new RunningTask(taskId, traceId, taskType, "accepted", acceptedAt, null));
+        runningTasks.put(taskId, new RunningTask(
+                taskId, traceId, taskType, "accepted", acceptedAt, null, maxStreamQueueBytes));
         enqueuePending(new PendingReply(new PulseMessage(
                 "reply-task-accepted-" + agentId + "-" + taskId,
                 "reply.task_accepted",
@@ -241,7 +294,7 @@ public class AgentTaskRunner {
         long started = clock.millis();
         runningTasks.computeIfPresent(taskId, (ignored, task) -> task.withRunning(started));
         Process process = null;
-        CapturedOutput output = new CapturedOutput();
+        CapturedOutput output = new CapturedOutput(maxCapturedOutputChars);
         Thread outputReader = null;
         try {
             if (!Files.isRegularFile(scriptPath)) {
@@ -653,16 +706,71 @@ public class AgentTaskRunner {
     }
 
     private boolean enqueuePending(PendingReply reply) {
+        long estimatedBytes = estimateReplyBytes(reply.message());
         while (true) {
             int current = pendingReplyCount.get();
             if (current >= maxPendingReplies) {
                 return false;
             }
             if (pendingReplyCount.compareAndSet(current, current + 1)) {
+                long nextBytes = pendingReplyBytes.addAndGet(estimatedBytes);
+                if (nextBytes > maxPendingReplyBytes) {
+                    pendingReplyBytes.addAndGet(-estimatedBytes);
+                    pendingReplyCount.decrementAndGet();
+                    return false;
+                }
                 pendingReplies.add(reply);
                 return true;
             }
         }
+    }
+
+    private static int maxBase64Chars(int maxBytes) {
+        return ((maxBytes + 2) / 3) * 4 + 16;
+    }
+
+    private static long estimateReplyBytes(PulseMessage message) {
+        if (message == null) {
+            return 0;
+        }
+        long total = 128;
+        total += stringBytes(message.messageId());
+        total += stringBytes(message.type());
+        total += stringBytes(message.replyTo());
+        total += estimateObjectBytes(message.payload());
+        return Math.max(128, total);
+    }
+
+    private static long estimateObjectBytes(Object value) {
+        if (value == null) {
+            return 0;
+        }
+        if (value instanceof String string) {
+            return stringBytes(string);
+        }
+        if (value instanceof Number || value instanceof Boolean) {
+            return 16;
+        }
+        if (value instanceof Map<?, ?> map) {
+            long total = 64;
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                total += estimateObjectBytes(entry.getKey());
+                total += estimateObjectBytes(entry.getValue());
+            }
+            return total;
+        }
+        if (value instanceof Iterable<?> iterable) {
+            long total = 32;
+            for (Object item : iterable) {
+                total += estimateObjectBytes(item);
+            }
+            return total;
+        }
+        return stringBytes(value.toString());
+    }
+
+    private static long stringBytes(String value) {
+        return value == null ? 0 : value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
     }
 
     private static int envInt(String key, int fallback) {
@@ -677,14 +785,21 @@ public class AgentTaskRunner {
         }
     }
 
-    private record PendingReply(PulseMessage message, int remainingSends) {}
+    private record PendingReply(PulseMessage message, int remainingSends) {
+        long estimatedBytes() {
+            return estimateReplyBytes(message);
+        }
+    }
 
     private record ReceivedFile(String fileId, String taskId, Path path, String sha256, long bytes, boolean executable) {}
 
     static final class CapturedOutput {
         private final StringBuilder value;
+        private final int maxChars;
+        private long droppedChars;
 
-        CapturedOutput() {
+        CapturedOutput(int maxChars) {
+            this.maxChars = maxChars;
             this.value = new StringBuilder(8 * 1024);
         }
 
@@ -693,10 +808,25 @@ public class AgentTaskRunner {
                 return;
             }
             value.append(chunk);
+            trim();
         }
 
         synchronized String snapshot() {
-            return value.toString();
+            if (droppedChars <= 0) {
+                return value.toString();
+            }
+            return "[pulse output truncated: dropped " + droppedChars
+                    + " chars, kept last " + value.length() + " chars]\n"
+                    + value;
+        }
+
+        private void trim() {
+            int overflow = value.length() - maxChars;
+            if (overflow <= 0) {
+                return;
+            }
+            value.delete(0, overflow);
+            droppedChars += overflow;
         }
     }
 
@@ -707,7 +837,10 @@ public class AgentTaskRunner {
         private final String status;
         private final long acceptedAtMs;
         private final Long startedAtMs;
+        private final int maxOutputQueueBytes;
         private final SpscArrayQueue<OutputChunk> outputQueue = new SpscArrayQueue<>(1024);
+        private long queuedOutputBytes;
+        private long droppedOutputBytes;
         private long streamSeq;
         private long streamOffset;
         private long streamBytes;
@@ -719,17 +852,42 @@ public class AgentTaskRunner {
                 new java.util.ArrayDeque<>();
         private boolean finishing;
 
-        private RunningTask(String taskId, String traceId, String taskType, String status, long acceptedAtMs, Long startedAtMs) {
+        private RunningTask(
+                String taskId,
+                String traceId,
+                String taskType,
+                String status,
+                long acceptedAtMs,
+                Long startedAtMs,
+                int maxOutputQueueBytes) {
             this.taskId = taskId;
             this.traceId = traceId;
             this.taskType = taskType;
             this.status = status;
             this.acceptedAtMs = acceptedAtMs;
             this.startedAtMs = startedAtMs;
+            this.maxOutputQueueBytes = maxOutputQueueBytes;
         }
 
         RunningTask withRunning(long startedAtMs) {
-            return new RunningTask(taskId, traceId, taskType, "running", acceptedAtMs, startedAtMs);
+            RunningTask copy = new RunningTask(
+                    taskId,
+                    traceId,
+                    taskType,
+                    "running",
+                    acceptedAtMs,
+                    startedAtMs,
+                    maxOutputQueueBytes);
+            copy.queuedOutputBytes = queuedOutputBytes;
+            copy.droppedOutputBytes = droppedOutputBytes;
+            copy.streamSeq = streamSeq;
+            copy.streamOffset = streamOffset;
+            copy.streamBytes = streamBytes;
+            copy.streamLines = streamLines;
+            copy.streamChunks = streamChunks;
+            copy.lastOutputAtMs = lastOutputAtMs;
+            copy.backpressureActive = backpressureActive;
+            return copy;
         }
 
         long acceptedAtMs() {
@@ -753,9 +911,17 @@ public class AgentTaskRunner {
             streamLines += chunk.payloadLines();
             streamChunks++;
             lastOutputAtMs = observedAtMs;
-            if (!outputQueue.offer(chunk)) {
+            if (queuedOutputBytes + bytes.length > maxOutputQueueBytes) {
+                droppedOutputBytes += bytes.length;
                 backpressureActive = true;
+                return;
             }
+            if (!outputQueue.offer(chunk)) {
+                droppedOutputBytes += bytes.length;
+                backpressureActive = true;
+                return;
+            }
+            queuedOutputBytes += bytes.length;
         }
 
         OutputChunk peekOutput() {
@@ -763,7 +929,10 @@ public class AgentTaskRunner {
         }
 
         void removeOutput() {
-            outputQueue.poll();
+            OutputChunk removed = outputQueue.poll();
+            if (removed != null) {
+                queuedOutputBytes = Math.max(0, queuedOutputBytes - removed.payloadBytes());
+            }
         }
 
         synchronized void finish(List<PulseMessage> replies) {
@@ -802,7 +971,8 @@ public class AgentTaskRunner {
             payload.put("stream_lines", streamLines);
             payload.put("last_output_at_ms", lastOutputAtMs == null ? "" : lastOutputAtMs);
             payload.put("spooled_bytes", 0);
-            payload.put("pending_bytes", outputQueue.size());
+            payload.put("pending_bytes", queuedOutputBytes);
+            payload.put("dropped_output_bytes", droppedOutputBytes);
             payload.put("backpressure_active", backpressureActive);
             return payload;
         }

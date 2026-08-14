@@ -87,6 +87,27 @@ class AgentTaskRunnerTest {
     }
 
     @Test
+    void rejectsFilePayloadAboveAgentLimit() throws Exception {
+        byte[] bytes = "x".repeat(4097).getBytes(StandardCharsets.UTF_8);
+        AgentTaskRunner runner = new AgentTaskRunner(
+                "agent-1",
+                fixedClock(),
+                taskDir.toString(),
+                1,
+                128,
+                1024 * 1024,
+                256 * 1024,
+                1024 * 1024,
+                1024);
+
+        runner.handleMessages(List.of(filePut("file-oversized", "task-shell", "script.sh", bytes)));
+
+        PulseMessage fileReply = awaitReply(runner, "reply.file_received");
+        assertEquals("rejected", fileReply.payload().get("status"));
+        assertEquals("file size exceeds agent limit", fileReply.payload().get("runner_error"));
+    }
+
+    @Test
     void stagedShellScriptDoesNotInjectDryRunWhenArgsAreEmpty() throws Exception {
         String script = "printf 'ARG_COUNT:%s\\n' \"$#\"\n";
         byte[] bytes = script.getBytes(StandardCharsets.UTF_8);
@@ -117,6 +138,37 @@ class AgentTaskRunnerTest {
         assertEquals("completed", result.payload().get("status"));
         assertTrue(output.contains("x".repeat(10_000)));
         assertTrue(!output.contains("pulse output truncated"));
+    }
+
+    @Test
+    void truncatesFinalOutputWithoutFailingTask() throws Exception {
+        Path script = taskDir.resolve("prepare-disk-layout.sh");
+        Files.writeString(script, "python3 - <<'PY'\nprint('a' * 30000, end='')\nPY\n");
+        AgentTaskRunner runner = new AgentTaskRunner(
+                "agent-1",
+                fixedClock(),
+                taskDir.toString(),
+                1,
+                128,
+                1024 * 1024,
+                8192,
+                1024 * 1024,
+                1024 * 1024);
+
+        runner.handleMessages(List.of(command(
+                "task-1",
+                "prepare_disk_layout_dry_run",
+                script.toString(),
+                List.of())));
+
+        PulseMessage result = awaitResult(runner);
+        String output = TaskOutputCodec.decode(
+                result.payload().get("output").toString(),
+                result.payload().get("output_encoding").toString());
+        assertEquals("completed", result.payload().get("status"));
+        assertTrue(output.startsWith("[pulse output truncated: dropped "));
+        assertTrue(output.endsWith("a".repeat(8192)));
+        assertTrue(output.length() < 10_000);
     }
 
     @Test
