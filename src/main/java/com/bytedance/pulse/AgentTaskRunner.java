@@ -325,17 +325,23 @@ public class AgentTaskRunner {
             awaitOutputReader(outputReader, process);
             int exitCode = process.exitValue();
             String finalOutput = output.snapshot();
+            boolean outputLoss = output.truncated() || taskOutputDropped(taskId);
+            String outputError = outputLoss
+                    ? appendError(
+                            exitCode == 0 ? "" : "exit_code=" + exitCode,
+                            "agent output exceeded memory limit; partial output was streamed")
+                    : exitCode == 0 ? "" : "exit_code=" + exitCode;
             finishTask(taskId, resultMessages(
                     replyTo,
                     taskId,
                     traceId,
                     taskType,
-                    exitCode == 0 ? "completed" : "failed",
+                    exitCode == 0 && !outputLoss ? "completed" : "failed",
                     exitCode,
                     started,
                     finishedAt,
                     finalOutput,
-                    exitCode == 0 ? "" : "exit_code=" + exitCode));
+                    outputError));
         } catch (Exception exception) {
             if (process != null) {
                 process.destroyForcibly();
@@ -418,6 +424,11 @@ public class AgentTaskRunner {
             return;
         }
         task.finish(terminalReplies);
+    }
+
+    private boolean taskOutputDropped(String taskId) {
+        RunningTask task = runningTasks.get(taskId);
+        return task != null && task.hasOutputLoss();
     }
 
     private void drainTaskReplies(RunningTask task, int outputLimit) {
@@ -828,6 +839,10 @@ public class AgentTaskRunner {
             value.delete(0, overflow);
             droppedChars += overflow;
         }
+
+        synchronized boolean truncated() {
+            return droppedChars > 0;
+        }
     }
 
     private static final class RunningTask {
@@ -848,6 +863,7 @@ public class AgentTaskRunner {
         private long streamChunks;
         private Long lastOutputAtMs;
         private boolean backpressureActive;
+        private boolean outputSuppressed;
         private final java.util.ArrayDeque<PulseMessage> terminalReplies =
                 new java.util.ArrayDeque<>();
         private boolean finishing;
@@ -887,6 +903,7 @@ public class AgentTaskRunner {
             copy.streamChunks = streamChunks;
             copy.lastOutputAtMs = lastOutputAtMs;
             copy.backpressureActive = backpressureActive;
+            copy.outputSuppressed = outputSuppressed;
             return copy;
         }
 
@@ -904,6 +921,11 @@ public class AgentTaskRunner {
 
         void enqueueOutput(String payload, long observedAtMs) {
             byte[] bytes = payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            if (outputSuppressed) {
+                droppedOutputBytes += bytes.length;
+                backpressureActive = true;
+                return;
+            }
             long seq = streamSeq++;
             OutputChunk chunk = new OutputChunk(seq, streamOffset, payload, bytes.length, lineCount(payload), observedAtMs);
             streamOffset += bytes.length;
@@ -913,11 +935,13 @@ public class AgentTaskRunner {
             lastOutputAtMs = observedAtMs;
             if (queuedOutputBytes + bytes.length > maxOutputQueueBytes) {
                 droppedOutputBytes += bytes.length;
+                outputSuppressed = true;
                 backpressureActive = true;
                 return;
             }
             if (!outputQueue.offer(chunk)) {
                 droppedOutputBytes += bytes.length;
+                outputSuppressed = true;
                 backpressureActive = true;
                 return;
             }
@@ -950,6 +974,10 @@ public class AgentTaskRunner {
 
         boolean isFinished() {
             return finishing && outputQueue.peek() == null && terminalReplies.isEmpty();
+        }
+
+        boolean hasOutputLoss() {
+            return droppedOutputBytes > 0;
         }
 
         void markBackpressure() {

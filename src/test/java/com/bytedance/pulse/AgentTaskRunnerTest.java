@@ -165,10 +165,55 @@ class AgentTaskRunnerTest {
         String output = TaskOutputCodec.decode(
                 result.payload().get("output").toString(),
                 result.payload().get("output_encoding").toString());
-        assertEquals("completed", result.payload().get("status"));
+        assertEquals("failed", result.payload().get("status"));
+        assertEquals(
+                "agent output exceeded memory limit; partial output was streamed",
+                result.payload().get("runner_error"));
         assertTrue(output.startsWith("[pulse output truncated: dropped "));
         assertTrue(output.endsWith("a".repeat(8192)));
         assertTrue(output.length() < 10_000);
+    }
+
+    @Test
+    void reportsFailureWhenLiveOutputExceedsQueueBudget() throws Exception {
+        Path script = taskDir.resolve("prepare-disk-layout.sh");
+        Files.writeString(script, "python3 - <<'PY'\nprint('b' * 200000, end='')\nPY\n");
+        AgentTaskRunner runner = new AgentTaskRunner(
+                "agent-1",
+                fixedClock(),
+                taskDir.toString(),
+                1,
+                128,
+                1024 * 1024,
+                256 * 1024,
+                64 * 1024,
+                1024 * 1024);
+
+        runner.handleMessages(List.of(command(
+                "task-1",
+                "prepare_disk_layout_dry_run",
+                script.toString(),
+                List.of())));
+
+        PulseMessage result = null;
+        for (int attempt = 0; attempt < 100; attempt++) {
+            for (PulseMessage reply : runner.drainReplies()) {
+                if ("reply.task_result".equals(reply.type())) {
+                    result = reply;
+                    break;
+                }
+            }
+            if (result != null) {
+                break;
+            }
+            Thread.sleep(10);
+        }
+
+        assertTrue(result != null);
+        assertEquals("failed", result.payload().get("status"));
+        assertEquals(
+                "agent output exceeded memory limit; partial output was streamed",
+                result.payload().get("runner_error"));
     }
 
     @Test
