@@ -259,7 +259,11 @@ PULSE_TASK_DIR=${install_root}/tasks
 PULSE_TIDE_DISCOVERY_INTERVAL_MS=60000
 PULSE_HEARTBEAT_SUCCESS_LOG_EVERY=12
 PULSE_AGENT_PENDING_REPLY_MAX=512
-PULSE_AGENT_JAVA_OPTS=-XX:+UseSerialGC -XX:ActiveProcessorCount=2 -XX:CICompilerCount=2
+PULSE_AGENT_PENDING_REPLY_BYTES_MAX=4194304
+PULSE_AGENT_CAPTURED_OUTPUT_CHARS_MAX=262144
+PULSE_AGENT_STREAM_QUEUE_BYTES_MAX=8388608
+PULSE_AGENT_FILE_BYTES_MAX=1048576
+PULSE_AGENT_JAVA_OPTS=-Xms16m -Xmx128m -XX:MaxMetaspaceSize=64m -XX:CompressedClassSpaceSize=16m -XX:ReservedCodeCacheSize=32m -XX:MaxDirectMemorySize=32m -Xss256k -XX:+UseSerialGC -XX:ActiveProcessorCount=2 -XX:CICompilerCount=2 -XX:+ExitOnOutOfMemoryError -Djava.awt.headless=true
 ENV
 
 cat > "$install_root/etc/pulse-coordinator.env" <<ENV
