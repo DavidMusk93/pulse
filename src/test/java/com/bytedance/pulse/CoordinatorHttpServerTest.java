@@ -1869,6 +1869,75 @@ class CoordinatorHttpServerTest {
         throw new IllegalArgumentException("missing SSE event " + eventName);
     }
 
+    @Test
+    void hostsEndpointSupportsClusterFilterAndCompactCardView() throws Exception {
+        postJson("/heartbeat", """
+                {
+                  "agent_id": "agent-a",
+                  "epoch": 1,
+                  "seq": 10,
+                  "ttl_ms": 15000,
+                  "messages": [
+                    {
+                      "message_id": "msg-agent-a-10",
+                      "type": "state.heartbeat",
+                      "version": 1,
+                      "payload": {
+                        "host": "host-a",
+                        "ip": "10.0.0.10",
+                        "cluster": "cluster-a",
+                        "area": "CN",
+                        "role": "edge",
+                        "load": "12.50,10.00,8.00",
+                        "agent_rss_kb": 40960,
+                        "agent_thread_count": 32,
+                        "agent_collect_ms": 14,
+                        "agent_send_ms": 6,
+                        "disks": [
+                          {"device": "nvme0n1", "io_util_pct": 12.4, "saturated": false},
+                          {"device": "nvme1n1", "io_util_pct": 98.2, "saturated": true}
+                        ],
+                        "tide_workers": [
+                          {"pid": 1234, "port1": 8080, "component_version": "v2.1.0", "cpu_percent": 42.5, "user_cpu_percent": 31.0, "sys_cpu_percent": 11.5, "rss_kb": 1048576, "mem_percent": 4.2, "threads": 64}
+                        ]
+                      }
+                    }
+                  ]
+                }
+                """);
+        postJson("/heartbeat", """
+                {
+                  "agent_id": "agent-b",
+                  "epoch": 1,
+                  "seq": 11,
+                  "ttl_ms": 15000,
+                  "messages": [
+                    {
+                      "message_id": "msg-agent-b-11",
+                      "type": "state.heartbeat",
+                      "version": 1,
+                      "payload": {"host": "host-b", "ip": "10.0.0.11", "cluster": "cluster-b", "area": "US", "role": "edge", "load": "1.00"}
+                    }
+                  ]
+                }
+                """);
+
+        HttpResponse<String> cardResponse = get("/api/hosts?clusters=cluster-a&view=card");
+        assertEquals(200, cardResponse.statusCode());
+        JsonNode cardRoot = mapper.readTree(cardResponse.body());
+        assertTrue(cardRoot.isArray());
+        assertEquals(1, cardRoot.size());
+        JsonNode cardHost = cardRoot.get(0);
+        assertEquals("10.0.0.10", cardHost.path("agent_id").asText());
+        assertEquals(40960L, cardHost.path("agent_rss_kb").asLong());
+        assertEquals(32L, cardHost.path("agent_thread_count").asLong());
+        assertEquals(2, cardHost.path("disks").path("count").asInt());
+        assertEquals("nvme1n1", cardHost.path("disks").path("hottest_device").asText());
+        assertEquals(1, cardHost.path("disks").path("saturated").asInt());
+        assertEquals(1, cardHost.path("tide_workers").size());
+        assertEquals(1234L, cardHost.path("tide_workers").get(0).path("pid").asLong());
+    }
+
     private static HttpServer heartbeatStub(AtomicInteger hits) throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/heartbeat", exchange -> {

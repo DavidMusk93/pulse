@@ -145,6 +145,7 @@ const palette = [205, 188, 168, 146, 126, 95, 48, 215, 200, 178];
 const loadWindows = new Map<string, { windowStart: number; displayAvg: number; sampledAtMs: number }>();
 const clusterCollapseStorageKey = 'pulse.cluster-collapse.v1';
 const hostClusterScopeStorageKey = 'pulse.host-cluster-scope.v1';
+const hostCardRefreshMs = 30_000;
 
 const taskLabels: Record<string, string> = {
   prepare_disk_layout_dry_run: '磁盘布局',
@@ -835,6 +836,49 @@ function clusterNeedsAttention(hosts: HostView[]) {
   return clusterAttentionHosts(hosts).length > 0;
 }
 
+function clusterTopology(hosts: HostView[]) {
+  let leaders = 0;
+  let followers = 0;
+  let direct = 0;
+  let loadSum = 0;
+  let loadMax = 0;
+  let diskHot = 0;
+  let runtimeCount = 0;
+  const groups = new Set<string>();
+  const areas = new Set<string>();
+  const roles = new Set<string>();
+  hosts.forEach(host => {
+    const mode = host.group_mode || host.groupMode;
+    if (mode === 'leader') leaders += 1;
+    else if (mode === 'follower') followers += 1;
+    else direct += 1;
+    const group = host.group_id || host.groupId;
+    if (group && mode !== 'direct') groups.add(group);
+    const load = averageLoad(host);
+    loadSum += load;
+    loadMax = Math.max(loadMax, load);
+    if (host.area && host.area !== 'unknown') areas.add(host.area);
+    if (host.role && host.role !== 'unknown') roles.add(host.role);
+    if (host.state) {
+      runtimeCount += 1;
+      const disk = hostDiskSummary(host);
+      if (disk.saturatedCount > 0 || disk.maxIo >= 95) diskHot += 1;
+    }
+  });
+  return {
+    leaders,
+    followers,
+    direct,
+    groups: groups.size,
+    avgLoad: hosts.length ? loadSum / hosts.length : 0,
+    maxLoad: loadMax,
+    areas: [...areas].sort(),
+    roles: [...roles].sort(),
+    diskHot,
+    runtimeCount
+  };
+}
+
 function workerValue(worker: any, key: string, fallback = '-') {
   const value = worker?.[key];
   return value === undefined || value === null || value === '' ? fallback : String(value);
@@ -847,7 +891,129 @@ function hostDebugValue(host: HostView, snakeKey: keyof HostView, camelKey: keyo
 
 function formatRssMb(worker: any) {
   const value = Number.parseFloat(workerValue(worker, 'rss_kb', '0'));
-  return Number.isFinite(value) && value > 0 ? `${(value / 1024).toFixed(1)}MB` : '-';
+  if (!Number.isFinite(value) || value <= 0) return '-';
+  const mb = value / 1024;
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)}GB` : `${mb.toFixed(1)}MB`;
+}
+
+function shortIpv6(value?: string) {
+  const clean = normalizeAddress(value);
+  if (clean === '-') return '-';
+  const parts = clean.split(':').filter(Boolean);
+  if (parts.length <= 3) return clean;
+  return `::${parts.slice(-2).join(':')}`;
+}
+
+function shortSource(value?: string) {
+  if (!value || value === '-') return '-';
+  if (value === 'direct') return 'direct';
+  const segments = String(value).split('/');
+  return segments.length > 1 ? segments.slice(-2).join('/') : String(value);
+}
+
+function formatTtlSeconds(ttlMs?: number) {
+  const n = Number(ttlMs);
+  if (!Number.isFinite(n) || n <= 0) return '-';
+  return `${Math.round(n / 1000)}s`;
+}
+
+function formatSeqCompact(seq?: number) {
+  const n = Number(seq);
+  if (!Number.isFinite(n) || n <= 0) return '-';
+  return Intl.NumberFormat('en-US').format(n);
+}
+
+function formatCompactCount(value?: number) {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n)) return '0';
+  if (Math.abs(n) >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(n) >= 10_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(Math.round(n));
+}
+
+function loadStrokeColor(avg: number) {
+  if (avg >= 260) return '#e11d48';
+  if (avg >= 180) return '#d97706';
+  if (avg >= 110) return '#2563eb';
+  return '#059669';
+}
+
+function hostDiskSummary(host: HostView) {
+  const raw = host.state?.disks;
+  if (raw && !Array.isArray(raw) && typeof raw === 'object') {
+    return {
+      count: Number(raw.count || 0),
+      maxIo: Number(raw.max_io_util_pct || 0),
+      hottestDevice: String(raw.hottest_device || '-'),
+      saturatedCount: Number(raw.saturated || 0)
+    };
+  }
+  const disks = Array.isArray(raw) ? raw : [];
+  if (!disks.length) {
+    return { count: 0, maxIo: 0, hottestDevice: '-', saturatedCount: 0 };
+  }
+  let maxIo = -1;
+  let hottestDevice = '-';
+  let saturatedCount = 0;
+  for (const disk of disks) {
+    const io = Number(disk?.io_util_pct ?? 0);
+    const satMs = Number(disk?.saturated_for_ms ?? 0);
+    if (Number.isFinite(io) && io > maxIo) {
+      maxIo = io;
+      hottestDevice = String(disk?.device || '-');
+    }
+    if ((Number.isFinite(satMs) && satMs > 0) || (Number.isFinite(io) && io >= 95)) {
+      saturatedCount += 1;
+    }
+  }
+  return {
+    count: disks.length,
+    maxIo: maxIo >= 0 ? maxIo : 0,
+    hottestDevice,
+    saturatedCount
+  };
+}
+
+function hostAgentRuntime(host: HostView) {
+  const state = host.state;
+  const rssKb = Number(state?.agent_rss_kb ?? 0);
+  const threads = Number(state?.agent_thread_count ?? 0);
+  const collectMs = state?.agent_collect_ms;
+  const sendMs = state?.agent_send_ms;
+  const leaderCollectMs = state?.leader_collect_ms;
+  return {
+    hasState: Boolean(state),
+    rssLabel: rssKb > 0 ? `${(rssKb / 1024).toFixed(0)}MB` : '-',
+    threadsLabel: threads > 0 ? `${threads}T` : '-',
+    collectLabel: collectMs !== undefined && collectMs !== null ? `${collectMs}ms` : '-',
+    sendLabel: sendMs !== undefined && sendMs !== null ? `${sendMs}ms` : '-',
+    leaderCollectLabel: leaderCollectMs !== undefined && leaderCollectMs !== null ? `${leaderCollectMs}ms` : null
+  };
+}
+
+const hydratedHostCache = new WeakMap<HostView, { state: Record<string, any> | undefined; host: HostView }>();
+
+function withHydratedHostState(
+  hosts: HostView[],
+  stateMap: Map<string, Record<string, any>>
+): HostView[] {
+  if (!stateMap.size) return hosts;
+  let mutated = false;
+  const mapped = hosts.map(host => {
+    if (host.state) return host;
+    const state = stateMap.get(agentId(host));
+    if (!state) return host;
+    mutated = true;
+    const cached = hydratedHostCache.get(host);
+    if (cached && cached.state === state) {
+      return cached.host;
+    }
+    const hydrated: HostView = { ...host, state };
+    hydratedHostCache.set(host, { state, host: hydrated });
+    return hydrated;
+  });
+  return mutated ? mapped : hosts;
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -967,6 +1133,7 @@ function App() {
   const hostV3StateRef = useRef<HostStreamV3State<HostView> | null>(null);
   const hostClustersRef = useRef<HTMLElement | null>(null);
   const hostScopeRequestRef = useRef(hostClusterScope);
+  const [hostCardStates, setHostCardStates] = useState<Map<string, Record<string, any>>>(() => new Map());
   const activeTargetHost = activeHost || activeCluster?.hosts[0] || null;
   const clusterAgentKey = useMemo(() => (activeCluster?.hosts || []).map(agentId).join(','), [activeCluster?.name, activeCluster?.hosts]);
 
@@ -1429,6 +1596,36 @@ function App() {
   useEffect(() => () => closeOutputStream(), []);
 
   useEffect(() => {
+    setHostCardStates(current => current.size ? new Map() : current);
+    const scope = appliedHostClusterScope;
+    if (!scope || !('EventSource' in window)) return;
+    const controller = new AbortController();
+    let timer: number | undefined;
+    const load = async () => {
+      if (document.visibilityState === 'hidden') return;
+      try {
+        const cards = await fetchJson<Array<Record<string, any>>>(
+          `/api/hosts?clusters=${encodeURIComponent(scope)}&view=card`,
+          { signal: controller.signal }
+        );
+        if (controller.signal.aborted) return;
+        setHostCardStates(new Map(cards.filter(card => card?.agent_id).map(card => [String(card.agent_id), card])));
+      } catch {
+        // Card runtime is best-effort; heartbeat summary from SSE remains authoritative.
+      }
+    };
+    void load();
+    timer = window.setInterval(load, hostCardRefreshMs);
+    const onVisible = () => { if (document.visibilityState === 'visible') void load(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [appliedHostClusterScope]);
+
+  useEffect(() => {
     if (!activeTargetHost || activeCluster) return;
     if (!('EventSource' in window)) {
       const revision = snapshotRevisionRef.current;
@@ -1507,7 +1704,8 @@ function App() {
     };
   }, [activeCluster?.name, clusterAgentKey, batchSummary?.updatedAt]);
 
-  const groups = useMemo(() => groupByCluster(hosts), [hosts]);
+  const displayHosts = useMemo(() => withHydratedHostState(hosts, hostCardStates), [hosts, hostCardStates]);
+  const groups = useMemo(() => groupByCluster(displayHosts), [displayHosts]);
   const attentionClusters = useMemo(() => new Set(groups.filter(([, clusterHosts]) => clusterNeedsAttention(clusterHosts)).map(([cluster]) => cluster)), [groups]);
   const alive = hosts.filter(host => host.status === 'alive').length;
   const avgLoad = hosts.length ? hosts.reduce((sum, host) => sum + averageLoad(host), 0) / hosts.length : 0;
@@ -1584,28 +1782,42 @@ function App() {
 
   return <ConfigProvider autoInsertSpaceInButton={false} theme={{ algorithm: theme.defaultAlgorithm, token: { borderRadius: 20, colorPrimary: '#2563eb', fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", Inter, "Segoe UI", sans-serif' } }}>
     <main className="pulse-page">
-      <section className="pulse-hero">
+      <header className="pulse-topbar">
+        <a className="pulse-brand" href="#top" aria-label="Pulse Coordinator">
+          <span className="pulse-brand-mark" aria-hidden="true" />
+          <b>Pulse</b>
+          <small>Coordinator</small>
+        </a>
+        <nav className="pulse-topnav" aria-label="页面导航">
+          <a href="#metrics">时序</a>
+          <a href="#eventbus">事件</a>
+          <a href="#clusters">主机</a>
+        </nav>
+        <div className={`pulse-topbar-status ${error ? 'is-warn' : ''}`.trim()} role="status">
+          <span className="pulse-live-dot" aria-hidden="true" />
+          <span>{error ? '重连中' : '实时'}</span>
+          <code>{hostClusterScope || '—'}</code>
+        </div>
+      </header>
+      <section className="pulse-hero" id="top">
         <Card className="hero-main" variant="outlined">
           <Typography.Text className="hero-eyebrow">Pulse 心跳平台</Typography.Text>
           <Typography.Title level={1}>心跳平台，连接运维现场</Typography.Title>
           <Typography.Paragraph className="hero-subtitle">任务、资源、监控与告警，沿一条消息链自然流动。</Typography.Paragraph>
-          <Space size="middle" wrap>
-            <Button type="primary" shape="round" size="large" href="#clusters">主机</Button>
-            <Button shape="round" size="large" href="#metrics">时序</Button>
-            <Button shape="round" size="large" href="#capability">能力</Button>
+          <Space size="small" wrap className="hero-actions">
+            <Button type="primary" shape="round" href="#clusters">主机</Button>
+            <Button shape="round" href="#metrics">时序</Button>
+            <Button shape="round" href="#eventbus">事件</Button>
           </Space>
+          <div id="capability" className="hero-cap-grid" aria-label="平台能力">
+            {[
+              ['01', '任务', '下发、执行、回执。'], ['02', '集群', '分组、编排、收敛。'],
+              ['03', '资源', '采集、聚合、判断。'], ['04', '告警', '识别、定位、闭环。']
+            ].map(([index, title, text]) => <div className="cap-card" key={title}>
+              <small>{index}</small><b>{title}</b><span>{text}</span>
+            </div>)}
+          </div>
         </Card>
-        <div className="hero-side">
-          <Card id="capability" className="hero-capability-card" variant="outlined">
-            <Typography.Text className="capability-title">平台能力</Typography.Text>
-            <div className="hero-cap-grid">
-              {[
-                ['任务', '下发、执行、回执。'], ['集群', '分组、编排、收敛。'],
-                ['资源', '采集、聚合、判断。'], ['告警', '识别、定位、闭环。']
-              ].map(([title, text]) => <Card className="cap-card" variant="borderless" key={title}><b>{title}</b><span>{text}</span></Card>)}
-            </div>
-          </Card>
-        </div>
         <div className="hero-metrics">
           <Card><Statistic title="主机" value={hosts.length} suffix="台" loading={loading}/></Card>
           <Card><Statistic title="在线率" value={hosts.length ? Math.round(alive * 100 / hosts.length) : 0} suffix="%"/></Card>
@@ -1620,13 +1832,26 @@ function App() {
 
       <div className="host-cluster-toolbar">
         <div>
-          <Typography.Text className="host-cluster-eyebrow">主机范围</Typography.Text>
+          <Typography.Text className="host-cluster-eyebrow">CLUSTER TOPOLOGY · 主机范围</Typography.Text>
           <Typography.Title level={2}>
             集群
             {hostScopePending && <small role="status" aria-live="polite">同步中</small>}
           </Typography.Title>
         </div>
         <div className="host-cluster-picker">
+          {availableHostClusters.length > 0 && <div className="host-cluster-pills" role="tablist" aria-label="快速切换集群">
+            {availableHostClusters.slice(0, 8).map(cluster => <button
+              key={cluster}
+              type="button"
+              role="tab"
+              aria-selected={hostClusterScope === cluster}
+              className={`host-cluster-pill ${hostClusterScope === cluster ? 'is-active' : ''}`.trim()}
+              disabled={hostScopePending}
+              onClick={() => handleHostClusterScopeChange(cluster)}
+            >
+              {cluster}
+            </button>)}
+          </div>}
           <span>{availableHostClusters.length} 个集群</span>
           <Select
             className="host-cluster-selector"
@@ -1959,7 +2184,7 @@ function EventBusPanel({
   const deleteButton = (onClick: () => void, label: string) =>
     <Button className="eventbus-icon-button" type="text" danger icon={<DeleteOutlined />} aria-label={label} title={label} onClick={onClick} />;
   return <>
-    <div className="metrics-eventbus-card">
+    <div className="metrics-eventbus-card" id="eventbus">
       <div className="eventbus-summary-head">
         <span className={`eventbus-status-orb ${healthy ? 'is-healthy' : 'is-error'}`}>
           {healthy ? <CheckCircleFilled /> : <ExclamationCircleFilled />}
@@ -2532,19 +2757,29 @@ const MetricsPanel = memo(function MetricsPanel({ hosts }: { hosts: HostView[] }
           />
         </div>
         <div className="metrics-scope-stats">
-          <div className="metrics-scope-card"><span>在线</span><b>{clusterAliveCount}</b><em>/ {clusterHosts.length}</em></div>
-          <div className="metrics-scope-card"><span>Leader</span><b>{clusterLeaderCount}</b><em>nodes</em></div>
-          <div className="metrics-scope-card"><span>Direct</span><b>{clusterDirectCount}</b><em>nodes</em></div>
-          <div className="metrics-scope-card"><span>写入队列</span><b>{storage?.queue_depth ?? 0}</b><em>pending</em></div>
-          <div className="metrics-scope-card"><span>队列峰值</span><b>{storage?.queue_high_watermark ?? 0}</b><em>pending</em></div>
-          <div className="metrics-scope-card"><span>失败</span><b>{storage?.failed_commands ?? 0}</b><em>commands</em></div>
-          <div className="metrics-scope-card"><span>事务批次</span><b>{storage?.transaction_batches ?? 0}</b><em>batches</em></div>
-          <div className="metrics-scope-card"><span>存储分片</span><b>{storage?.shard_count ?? 0}</b><em>files</em></div>
-          <div className="metrics-scope-card"><span>V2 存储</span><b>{formatBytes(storage?.storage_bytes)}</b><em>managed</em></div>
-          {(storage?.legacy_bytes ?? 0) > 0 && (
-            <div className="metrics-scope-card"><span>Legacy</span><b>{formatBytes(storage?.legacy_bytes)}</b><em>read only</em></div>
-          )}
-          <div className="metrics-scope-card"><span>Retention Lag</span><b>{formatDuration(storage?.retention_lag_ms)}</b><em>lag</em></div>
+          <div className="metrics-receipt-group" aria-label="集群拓扑">
+            <span className="metrics-receipt-kicker">拓扑 · Topology</span>
+            <div className="metrics-receipt-row">
+              <div className="metrics-scope-card"><span>在线</span><b>{clusterAliveCount}</b><em>/ {clusterHosts.length}</em></div>
+              <div className="metrics-scope-card"><span>Leader</span><b>{clusterLeaderCount}</b><em>nodes</em></div>
+              <div className="metrics-scope-card"><span>Direct</span><b>{clusterDirectCount}</b><em>nodes</em></div>
+            </div>
+          </div>
+          <div className="metrics-receipt-group" aria-label="时序存储">
+            <span className="metrics-receipt-kicker">存储 · Storage</span>
+            <div className="metrics-receipt-row">
+              <div className={`metrics-scope-card ${(storage?.queue_depth ?? 0) > 0 ? 'is-warn' : ''}`.trim()}><span>写入队列</span><b>{storage?.queue_depth ?? 0}</b><em>pending</em></div>
+              <div className="metrics-scope-card"><span>队列峰值</span><b>{storage?.queue_high_watermark ?? 0}</b><em>pending</em></div>
+              <div className={`metrics-scope-card ${(storage?.failed_commands ?? 0) > 0 ? 'is-error' : ''}`.trim()}><span>失败</span><b>{storage?.failed_commands ?? 0}</b><em>commands</em></div>
+              <div className="metrics-scope-card"><span>事务批次</span><b>{formatCompactCount(storage?.transaction_batches)}</b><em>batches</em></div>
+              <div className="metrics-scope-card"><span>存储分片</span><b>{storage?.shard_count ?? 0}</b><em>files</em></div>
+              <div className="metrics-scope-card"><span>V2 存储</span><b>{formatBytes(storage?.storage_bytes)}</b><em>managed</em></div>
+              {(storage?.legacy_bytes ?? 0) > 0 && (
+                <div className="metrics-scope-card"><span>Legacy</span><b>{formatBytes(storage?.legacy_bytes)}</b><em>read only</em></div>
+              )}
+              <div className="metrics-scope-card"><span>Retention Lag</span><b>{formatDuration(storage?.retention_lag_ms)}</b><em>lag</em></div>
+            </div>
+          </div>
         </div>
       </div>
       <EventBusPanel controller={queryController} clusters={eventBusClusters} onError={setError} />
@@ -3024,6 +3259,7 @@ const ClusterSection = memo(function ClusterSection({
   const attentionLabel = healthAttentionHosts.length > 0
     ? `异常节点 ${healthAttentionHosts.length}${taskAttentionHosts.length > 0 ? ` · 任务执行中 ${taskAttentionHosts.length}` : ''}`
     : `任务执行中 ${taskAttentionHosts.length}`;
+  const topology = useMemo(() => clusterTopology(hosts), [hosts]);
   return <Card
     className={`cluster-section ${collapsed ? 'cluster-section-collapsed' : ''}`.trim()}
     style={{ ['--cluster-hue' as any]: hue }}
@@ -3059,6 +3295,17 @@ const ClusterSection = memo(function ClusterSection({
             <span>状态正常 · {onlineCount}/{hosts.length} 在线</span>
           )}
         </div>
+        <div className="cluster-meta-strip" aria-label={`${cluster} 拓扑摘要`}>
+          <span><small>Leader</small><b>{topology.leaders}</b></span>
+          <span><small>Follower</small><b>{topology.followers}</b></span>
+          <span><small>Direct</small><b>{topology.direct}</b></span>
+          <span><small>Groups</small><b>{topology.groups}</b></span>
+          <span><small>AVG</small><b>{formatLoad(topology.avgLoad)}</b></span>
+          <span className={topology.maxLoad >= 260 ? 'is-hot' : undefined}><small>MAX</small><b>{formatLoad(topology.maxLoad)}</b></span>
+          {topology.areas.length > 0 && <span><small>Area</small><b>{topology.areas.join(' · ')}</b></span>}
+          {topology.roles.length > 0 && <span><small>Role</small><b>{topology.roles.join(' · ')}</b></span>}
+          {topology.runtimeCount > 0 && <span className={topology.diskHot > 0 ? 'is-hot' : undefined}><small>IO 饱和</small><b>{topology.diskHot}</b></span>}
+        </div>
       </div>
     }
     extra={<Space size={6}>
@@ -3087,7 +3334,11 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
   const level = Math.min(1, avg / 400);
   const confirmations = host.heartbeat_confirmations ?? host.heartbeatConfirmations ?? 0;
   const displayIp = normalizeAddress(host.ip);
-  const workers = Array.isArray(host.state?.workers) ? host.state?.workers : Array.isArray(host.state?.tide_workers) ? host.state?.tide_workers : [];
+  const rawWorkers = Array.isArray(host.state?.workers) ? host.state?.workers : Array.isArray(host.state?.tide_workers) ? host.state?.tide_workers : [];
+  const workers = useMemo(
+    () => [...rawWorkers].sort((a: any, b: any) => (Number(b?.cpu_percent) || 0) - (Number(a?.cpu_percent) || 0)),
+    [rawWorkers]
+  );
   const observedAt = host.observed_at_ms || host.observedAtMs;
   const lastObservedAge = hostDebugValue(host, 'last_observed_age_ms', 'lastObservedAgeMs', undefined) as number | undefined;
   const groupId = String(hostDebugValue(host, 'group_id', 'groupId'));
@@ -3095,6 +3346,17 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
   const leaderUrl = String(hostDebugValue(host, 'leader_url', 'leaderUrl'));
   const groupSize = hostDebugValue(host, 'group_size', 'groupSize', '-');
   const groupSizeLimit = hostDebugValue(host, 'group_size_limit', 'groupSizeLimit', '-');
+  const coordinatorId = String(hostDebugValue(host, 'coordinator_id', 'coordinatorId', '-'));
+  const source = String(hostDebugValue(host, 'source', 'source', '-'));
+  const seq = hostDebugValue(host, 'seq', 'seq', undefined) as number | undefined;
+  const ttlMs = hostDebugValue(host, 'ttl_ms', 'ttl_ms', undefined) as number | undefined;
+  const role = host.role && host.role !== 'unknown' ? host.role : '-';
+  const zone = host.zone && host.zone !== 'unknown' ? host.zone : '';
+  const areaZone = zone && zone !== host.area ? `${host.area || '-'} / ${zone}` : (host.area || '-');
+  const diskSummary = useMemo(() => hostDiskSummary(host), [host.state?.disks]);
+  const agentRuntime = useMemo(() => hostAgentRuntime(host), [host.state]);
+  const activeTasks = activeHostTasks(host);
+  const strokeColor = loadStrokeColor(avg);
   const handleCopyIp = useCallback(async (event: { stopPropagation: () => void }) => {
     event.stopPropagation();
     if (displayIp === '-') return;
@@ -3107,10 +3369,18 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
     }
   }, [displayIp]);
 
-  return <Card className="host-tile" style={{ ['--load-level' as any]: level }} data-agent-key={hostKey(host)} variant="borderless">
+  return <Card
+    className="host-tile"
+    style={{ ['--load-level' as any]: level }}
+    data-agent-key={hostKey(host)}
+    data-group-mode={groupMode}
+    data-host-status={host.status || 'unknown'}
+    variant="borderless"
+  >
     <Flex className="tile-header" justify="space-between" align="flex-start" gap={10}>
       <div className="tile-id-block">
         <div className="ip-title-row">
+          <span className="tile-status-dot" data-status={host.status || 'unknown'} aria-hidden="true" />
           <Typography.Text className="ip-title" data-field="ip_title" title={displayIp}>{displayIp}</Typography.Text>
           <Button
             aria-label="复制 IP"
@@ -3123,7 +3393,12 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
             onClick={handleCopyIp}
           />
         </div>
-        <AutoFitText className="seen" title={formatTime(observedAt)} text={formatSeenTime(observedAt)} minFontSize={9} maxFontSize={11} />
+        <div className="tile-meta-row">
+          <span className={`tile-chip tile-chip-mode is-${groupMode}`}>{groupMode === 'leader' ? 'LEADER' : groupMode === 'follower' ? 'FOLLOWER' : 'DIRECT'}</span>
+          {role !== '-' && <span className="tile-chip tile-chip-role">{role}</span>}
+          <span className="tile-chip tile-chip-status" data-status={statusColor(host.status)}>{statusLabel(host.status)}</span>
+          <AutoFitText className="seen" title={formatTime(observedAt)} text={formatSeenTime(observedAt)} minFontSize={9} maxFontSize={11} />
+        </div>
       </div>
       <Button className="run-button" data-status={statusColor(host.status)} type="primary" size="small" onClick={() => onRun(host)} disabled={confirmations < 3 || host.status !== 'alive'}>任务</Button>
     </Flex>
@@ -3131,41 +3406,74 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
       <div className="tile-metrics">
         <div className="tile-metric">
           <span className="metric-label">Area</span>
-          <span className="metric-value">{host.area || '-'}</span>
+          <span className="metric-value">{areaZone}</span>
+          <small className="metric-sub">role {role} · src {shortSource(source)}</small>
         </div>
         <div className="tile-metric">
           <span className="metric-label">5min AVG</span>
           <span className="metric-value metric-value-strong">{formatLoad(avg)}</span>
+          <Progress percent={Math.round(level * 100)} showInfo={false} strokeColor={strokeColor} trailColor="rgba(18,20,23,.08)" />
+        </div>
+        <div className="tile-metric">
+          <span className="metric-label">磁盘 IO {diskSummary.count ? `(${diskSummary.count}盘)` : ''}</span>
+          <span className={`metric-value ${diskSummary.saturatedCount > 0 || diskSummary.maxIo >= 95 ? 'is-hot' : ''}`.trim()}>
+            {diskSummary.count ? `${diskSummary.maxIo.toFixed(1)}%` : '-'}
+          </span>
+          <small className="metric-sub">
+            {diskSummary.count
+              ? `峰值 ${diskSummary.hottestDevice}${diskSummary.saturatedCount > 0 ? ` · 饱和 ${diskSummary.saturatedCount}` : ''}`
+              : '等待磁盘样本'}
+          </small>
+        </div>
+        <div className="tile-metric">
+          <span className="metric-label">Agent 运行时</span>
+          <span className="metric-value">{agentRuntime.rssLabel} · {agentRuntime.threadsLabel}</span>
+          <small className="metric-sub">
+            采 {agentRuntime.collectLabel} / 发 {agentRuntime.sendLabel}{agentRuntime.leaderCollectLabel ? ` · 聚 ${agentRuntime.leaderCollectLabel}` : ''}
+          </small>
         </div>
       </div>
       <div className="debug-panel">
-        <Typography.Text className="debug-title">调试</Typography.Text>
+        <div className="debug-head">
+          <Typography.Text className="debug-title">调试</Typography.Text>
+          <span className="debug-contract-meta">seq #{formatSeqCompact(seq)} · TTL {formatTtlSeconds(ttlMs)}</span>
+        </div>
         <div className="debug-grid">
-          <span><b>20s确认</b><em>{confirmations}</em></span>
+          <span><b>20s确认</b><em>{confirmations} · {statusLabel(host.status)}</em></span>
           <span><b>age</b><em>{formatAge(lastObservedAge)}</em></span>
-          <span><b>mode</b><em>{groupMode}</em></span>
-          <span><b>group</b><em>{groupId}</em></span>
-          <span><b>size</b><em>{groupSize}/{groupSizeLimit}</em></span>
-          <span><b>leader</b><em>{normalizeUrlHost(leaderUrl)}</em></span>
+          <span><b>mode</b><em>{groupMode} · {groupSize}/{groupSizeLimit}</em></span>
+          <span><b>group</b><em title={groupId}>{groupId}</em></span>
+          <span><b>size</b><em>{groupSize}/{groupSizeLimit} · coord {shortIpv6(coordinatorId)}</em></span>
+          <span><b>leader</b><em title={leaderUrl}>{normalizeUrlHost(leaderUrl)}</em></span>
         </div>
       </div>
-      <Progress percent={Math.round(level * 100)} showInfo={false} strokeColor="hsl(var(--cluster-hue) 48% 24%)" trailColor="rgba(15,23,42,.24)" />
+      {activeTasks.length > 0 && <div className="tile-active-tasks">
+        {activeTasks.slice(0, 2).map((task: any, index: number) => <span key={`${task.task_id || index}`} className="tile-task-pill">
+          <b>{statusLabel(task.status)}</b>
+          <em>{taskLabels[task.task_type] || task.task_type || 'task'}</em>
+        </span>)}
+      </div>}
       {workers.length > 0 && <div className="worker-list">
-        {workers.slice(0, 8).map((worker: any, index: number) => <div className="worker-card" key={`${worker.pid || 'worker'}-${index}`}>
-          <Flex className="worker-card-head" justify="space-between" align="center" gap={6}>
-            <Typography.Text className="worker-pid">pid {workerValue(worker, 'pid')}</Typography.Text>
-            <Typography.Text className="worker-version">{workerValue(worker, 'component_version')}</Typography.Text>
-          </Flex>
-          <div className="worker-metrics">
-            <span><b>cpu</b><em>{workerValue(worker, 'cpu_percent')}</em></span>
-            <span><b>usr</b><em>{workerValue(worker, 'user_cpu_percent')}</em></span>
-            <span><b>sys</b><em>{workerValue(worker, 'sys_cpu_percent')}</em></span>
-            <span><b>rss</b><em>{formatRssMb(worker)}</em></span>
-            <span><b>mem</b><em>{workerValue(worker, 'mem_percent')}</em></span>
-            <span><b>thr</b><em>{workerValue(worker, 'threads')}</em></span>
-            {worker.port1 && <span><b>port</b><em>{workerValue(worker, 'port1')}</em></span>}
-          </div>
-        </div>)}
+        <div className="worker-list-head">
+          <span>Tide Workers · {workers.length} 进程</span>
+          <span>CPU / 内存 / 线程</span>
+        </div>
+        <div className="worker-grid">
+          {workers.slice(0, 8).map((worker: any, index: number) => <div className="worker-card" key={`${worker.pid || 'worker'}-${index}`}>
+            <Flex className="worker-card-head" justify="space-between" align="center" gap={6}>
+              <Typography.Text className="worker-pid">pid {workerValue(worker, 'pid')}{worker.port1 ? ` :${workerValue(worker, 'port1')}` : ''}</Typography.Text>
+              <Typography.Text className="worker-version">{workerValue(worker, 'component_version')}</Typography.Text>
+            </Flex>
+            <div className="worker-metrics">
+              <span><b>cpu</b><em>{workerValue(worker, 'cpu_percent')}%</em></span>
+              <span><b>usr</b><em>{workerValue(worker, 'user_cpu_percent')}%</em></span>
+              <span><b>sys</b><em>{workerValue(worker, 'sys_cpu_percent')}%</em></span>
+              <span><b>rss</b><em>{formatRssMb(worker)}</em></span>
+              <span><b>mem</b><em>{workerValue(worker, 'mem_percent')}%</em></span>
+              <span><b>thr</b><em>{workerValue(worker, 'threads')}</em></span>
+            </div>
+          </div>)}
+        </div>
       </div>}
     </div>
   </Card>;

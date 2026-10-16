@@ -151,7 +151,13 @@ public class LegacyCoordinatorHttpServer {
                 return;
             }
             if ("GET".equals(method) && "/api/hosts".equals(path)) {
-                writeJson(exchange, 200, service.hosts());
+                List<String> scope = queryList(exchange.getRequestURI(), "clusters");
+                List<HostView> scoped = scopedHosts(service.hosts(), scope);
+                if ("card".equals(queryValue(exchange.getRequestURI(), "view"))) {
+                    writeJson(exchange, 200, HostCardProjection.project(scoped));
+                } else {
+                    writeJson(exchange, 200, scoped);
+                }
                 return;
             }
             if ("GET".equals(method) && "/api/hosts/stream".equals(path)) {
