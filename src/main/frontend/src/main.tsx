@@ -3219,6 +3219,45 @@ function formatChartTime(timestamp: number) {
   return new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 
+type ClusterLensMode = 'all' | 'leader' | 'follower' | 'io-hot' | 'load-hot';
+type ClusterScaleMode = 'compact' | 'topology' | 'workers' | 'full';
+
+function hostMatchesLens(host: HostView, lens: ClusterLensMode, loadHotThreshold: number) {
+  if (lens === 'all') return true;
+  const mode = String(hostDebugValue(host, 'group_mode', 'groupMode'));
+  if (lens === 'leader') return mode === 'leader';
+  if (lens === 'follower') return mode === 'follower';
+  if (lens === 'io-hot') {
+    const disk = hostDiskSummary(host);
+    return disk.saturatedCount > 0 || disk.maxIo >= 85;
+  }
+  if (lens === 'load-hot') {
+    return averageLoad(host) >= loadHotThreshold;
+  }
+  return true;
+}
+
+function workerSummaryStats(workers: any[]) {
+  if (!workers.length) return { count: 0, maxCpu: 0, totalRssGb: '-' };
+  let maxCpu = 0;
+  let rssKbSum = 0;
+  for (const w of workers) {
+    const cpu = Number.parseFloat(workerValue(w, 'cpu_percent', '0'));
+    if (Number.isFinite(cpu) && cpu > maxCpu) maxCpu = cpu;
+    const rss = Number.parseFloat(workerValue(w, 'rss_kb', '0'));
+    if (Number.isFinite(rss) && rss > 0) rssKbSum += rss;
+  }
+  const mb = rssKbSum / 1024;
+  const totalRssGb = mb <= 0 ? '-' : mb >= 1024 ? `${(mb / 1024).toFixed(0)}GB` : `${mb.toFixed(0)}MB`;
+  return { count: workers.length, maxCpu: Math.round(maxCpu), totalRssGb };
+}
+
+function shortGroupName(groupId: string) {
+  if (!groupId || groupId === '-') return 'direct';
+  const parts = groupId.split('/').filter(Boolean);
+  return parts.length >= 2 ? parts.slice(-2).join('/') : groupId;
+}
+
 const ClusterSection = memo(function ClusterSection({
   cluster,
   hosts,
@@ -3239,6 +3278,10 @@ const ClusterSection = memo(function ClusterSection({
   onClusterRun: (cluster: string, hosts: HostView[]) => void;
 }) {
   const [sortMode, setSortMode] = useState<ClusterSortMode>('ip');
+  const [lensMode, setLensMode] = useState<ClusterLensMode>('all');
+  const [scaleMode, setScaleMode] = useState<ClusterScaleMode>('compact');
+  const [hoveredGroup, setHoveredGroup] = useState<string | null>(null);
+  const [pinnedGroup, setPinnedGroup] = useState<string | null>(null);
   const sorted = useMemo(() => sortClusterHosts(hosts, sortMode), [hosts, sortMode]);
   const attentionHosts = useMemo(() => clusterAttentionHosts(hosts), [hosts]);
   const healthAttentionHosts = useMemo(() => attentionHosts.filter(hostHealthNeedsAttention), [attentionHosts]);
@@ -3260,52 +3303,131 @@ const ClusterSection = memo(function ClusterSection({
     ? `异常节点 ${healthAttentionHosts.length}${taskAttentionHosts.length > 0 ? ` · 任务执行中 ${taskAttentionHosts.length}` : ''}`
     : `任务执行中 ${taskAttentionHosts.length}`;
   const topology = useMemo(() => clusterTopology(hosts), [hosts]);
+  const loadHotThreshold = useMemo(() => {
+    if (!hosts.length) return 200;
+    const loads = hosts.map(averageLoad).sort((a, b) => b - a);
+    const topIdx = Math.max(0, Math.min(loads.length - 1, Math.floor(loads.length * 0.2)));
+    return Math.max(180, loads[topIdx] || 200);
+  }, [hosts]);
+  const loadHotCount = useMemo(
+    () => hosts.filter(h => averageLoad(h) >= loadHotThreshold).length,
+    [hosts, loadHotThreshold]
+  );
+  const ioHotCount = useMemo(
+    () => hosts.filter(h => {
+      const d = hostDiskSummary(h);
+      return d.saturatedCount > 0 || d.maxIo >= 85;
+    }).length,
+    [hosts]
+  );
+  const activeGroupSpotlight = pinnedGroup || hoveredGroup;
+  const spotlightActive = Boolean(activeGroupSpotlight) || lensMode !== 'all';
+
+  const handleGroupHover = useCallback((groupId: string | null) => {
+    setHoveredGroup(groupId);
+  }, []);
+
+  const handleGroupTogglePin = useCallback((groupId: string) => {
+    if (!groupId || groupId === '-') return;
+    setPinnedGroup(current => current === groupId ? null : groupId);
+  }, []);
+
   return <Card
     className={`cluster-section ${collapsed ? 'cluster-section-collapsed' : ''}`.trim()}
     style={{ ['--cluster-hue' as any]: hue }}
     title={
       <div className="cluster-title-block">
-        <div className="cluster-title-line">
-          <Space size={8}>
-            <span>{cluster}</span>
+        <div className="cluster-title-top">
+          <div className="cluster-title-line">
+            <span className="cluster-index-kicker">CLUSTER</span>
+            <span className="cluster-name-heading">{cluster}</span>
             <Tag>{hosts.length} 台</Tag>
             {needsAttention
               ? <Tag color={healthAttentionHosts.length > 0 ? 'warning' : 'processing'}>{healthAttentionHosts.length > 0 ? '需关注' : '任务执行中'}</Tag>
               : warmingCount > 0 && <Tag color="processing">确认中</Tag>}
-          </Space>
+            <div
+              className={`cluster-status-bar ${needsAttention ? 'cluster-status-attention' : warmingCount > 0 ? 'cluster-status-confirming' : 'cluster-status-healthy'}`}
+              role="status"
+              aria-label={needsAttention
+                ? `${attentionLabel}：${attentionNames.join('、')}`
+                : warmingCount > 0
+                  ? `状态确认中，${warmingCount}/${hosts.length} 台`
+                  : `状态正常，${onlineCount}/${hosts.length} 台在线`}
+            >
+              <span className="cluster-status-dot" aria-hidden="true" />
+              {needsAttention ? <>
+                <span className="cluster-status-label">{attentionLabel}</span>
+                <span className="cluster-status-hosts" title={attentionTitle}>
+                  {visibleAttentionNames.join('、')}{remainingAttentionCount > 0 ? ` +${remainingAttentionCount}` : ''}
+                </span>
+              </> : warmingCount > 0 ? (
+                <span>状态确认中 · {warmingCount}/{hosts.length}</span>
+              ) : (
+                <span>状态正常 · {onlineCount}/{hosts.length} 在线</span>
+              )}
+            </div>
+          </div>
+          <div className="cluster-meta-strip" aria-label={`${cluster} 拓扑摘要`}>
+            <span><small>Leader</small><b>{topology.leaders}</b></span>
+            <span><small>Follower</small><b>{topology.followers}</b></span>
+            {topology.direct > 0 && <span><small>Direct</small><b>{topology.direct}</b></span>}
+            <span><small>Groups</small><b>{topology.groups}</b></span>
+            <span><small>AVG</small><b>{formatLoad(topology.avgLoad)}</b></span>
+            <span className={topology.maxLoad >= 260 ? 'is-hot' : undefined}><small>MAX</small><b>{formatLoad(topology.maxLoad)}</b></span>
+            {topology.areas.length > 0 && <span><small>Area</small><b>{topology.areas.join(' · ')}</b></span>}
+            {topology.roles.length > 0 && <span><small>Role</small><b>{topology.roles.join(' · ')}</b></span>}
+            {topology.runtimeCount > 0 && <span className={topology.diskHot > 0 ? 'is-hot' : undefined}><small>IO 饱和</small><b>{topology.diskHot}</b></span>}
+          </div>
         </div>
-        <div
-          className={`cluster-status-bar ${needsAttention ? 'cluster-status-attention' : warmingCount > 0 ? 'cluster-status-confirming' : 'cluster-status-healthy'}`}
-          role="status"
-          aria-label={needsAttention
-            ? `${attentionLabel}：${attentionNames.join('、')}`
-            : warmingCount > 0
-              ? `状态确认中，${warmingCount}/${hosts.length} 台`
-              : `状态正常，${onlineCount}/${hosts.length} 台在线`}
-        >
-          <span className="cluster-status-dot" aria-hidden="true" />
-          {needsAttention ? <>
-            <span className="cluster-status-label">{attentionLabel}</span>
-            <span className="cluster-status-hosts" title={attentionTitle}>
-              {visibleAttentionNames.join('、')}{remainingAttentionCount > 0 ? ` +${remainingAttentionCount}` : ''}
-            </span>
-          </> : warmingCount > 0 ? (
-            <span>状态确认中 · {warmingCount}/{hosts.length}</span>
-          ) : (
-            <span>状态正常 · {onlineCount}/{hosts.length} 在线</span>
-          )}
-        </div>
-        <div className="cluster-meta-strip" aria-label={`${cluster} 拓扑摘要`}>
-          <span><small>Leader</small><b>{topology.leaders}</b></span>
-          <span><small>Follower</small><b>{topology.followers}</b></span>
-          <span><small>Direct</small><b>{topology.direct}</b></span>
-          <span><small>Groups</small><b>{topology.groups}</b></span>
-          <span><small>AVG</small><b>{formatLoad(topology.avgLoad)}</b></span>
-          <span className={topology.maxLoad >= 260 ? 'is-hot' : undefined}><small>MAX</small><b>{formatLoad(topology.maxLoad)}</b></span>
-          {topology.areas.length > 0 && <span><small>Area</small><b>{topology.areas.join(' · ')}</b></span>}
-          {topology.roles.length > 0 && <span><small>Role</small><b>{topology.roles.join(' · ')}</b></span>}
-          {topology.runtimeCount > 0 && <span className={topology.diskHot > 0 ? 'is-hot' : undefined}><small>IO 饱和</small><b>{topology.diskHot}</b></span>}
-        </div>
+        {!collapsed && <div className="cluster-lens-toolbar" aria-label="语义镜头与展示尺度">
+          <div className="cluster-lens-group" role="group" aria-label="语义镜头">
+            <span className="cluster-toolbar-label">语义镜头</span>
+            {([
+              ['all', `全景 ${hosts.length}`],
+              ['leader', `Leader ${topology.leaders}`],
+              ['follower', `Follower ${topology.followers}`],
+              ['load-hot', `高负载 ${loadHotCount}`],
+              ['io-hot', `IO 热点 ${ioHotCount}`]
+            ] as const).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={`cluster-lens-pill ${lensMode === key ? 'is-active' : ''}`.trim()}
+                onClick={() => setLensMode(current => current === key ? 'all' : key)}
+              >
+                {label}
+              </button>
+            ))}
+            {pinnedGroup && (
+              <button
+                type="button"
+                className="cluster-lens-pill is-pinned"
+                onClick={() => setPinnedGroup(null)}
+                title="点击取消锁定心跳组"
+              >
+                锁定组: {shortGroupName(pinnedGroup)} ×
+              </button>
+            )}
+          </div>
+          <div className="cluster-scale-group" role="group" aria-label="展示尺度">
+            <span className="cluster-toolbar-label">展示尺度</span>
+            {([
+              ['compact', '紧凑概览'],
+              ['topology', '拓扑契约'],
+              ['workers', '进程透视'],
+              ['full', '全量展开']
+            ] as const).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={`cluster-scale-pill ${scaleMode === key ? 'is-active' : ''}`.trim()}
+                onClick={() => setScaleMode(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>}
       </div>
     }
     extra={<Space size={6}>
@@ -3323,13 +3445,52 @@ const ClusterSection = memo(function ClusterSection({
     </Space>}
     variant="outlined"
   >
-    {!collapsed && <div className="tile-grid">
-      {sorted.map(host => <HostTile host={host} key={hostKey(host)} onRun={onRun} />)}
+    {!collapsed && <div
+      className="tile-grid"
+      data-scale-mode={scaleMode}
+      data-spotlight-active={spotlightActive ? 'true' : 'false'}
+    >
+      {sorted.map(host => {
+        const hostGroup = String(hostDebugValue(host, 'group_id', 'groupId'));
+        const matchesGroup = activeGroupSpotlight ? hostGroup === activeGroupSpotlight : true;
+        const matchesLens = hostMatchesLens(host, lensMode, loadHotThreshold);
+        const isSpotlightMatch = matchesGroup && matchesLens;
+        return <HostTile
+          host={host}
+          key={hostKey(host)}
+          scaleMode={scaleMode}
+          spotlightMatch={!spotlightActive || isSpotlightMatch}
+          isGroupHighlighted={Boolean(activeGroupSpotlight && hostGroup === activeGroupSpotlight)}
+          isGroupPinned={Boolean(pinnedGroup && hostGroup === pinnedGroup)}
+          onGroupHover={handleGroupHover}
+          onGroupTogglePin={handleGroupTogglePin}
+          onRun={onRun}
+        />;
+      })}
     </div>}
   </Card>;
 });
 
-const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun: (host: HostView) => void }) {
+const HostTile = memo(function HostTile({
+  host,
+  scaleMode = 'compact',
+  spotlightMatch = true,
+  isGroupHighlighted = false,
+  isGroupPinned = false,
+  onGroupHover,
+  onGroupTogglePin,
+  onRun
+}: {
+  host: HostView;
+  scaleMode?: ClusterScaleMode;
+  spotlightMatch?: boolean;
+  isGroupHighlighted?: boolean;
+  isGroupPinned?: boolean;
+  onGroupHover?: (groupId: string | null) => void;
+  onGroupTogglePin?: (groupId: string) => void;
+  onRun: (host: HostView) => void;
+}) {
+  const [localDrawer, setLocalDrawer] = useState<'none' | 'debug' | 'workers'>('none');
   const avg = averageLoad(host);
   const level = Math.min(1, avg / 400);
   const confirmations = host.heartbeat_confirmations ?? host.heartbeatConfirmations ?? 0;
@@ -3339,6 +3500,7 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
     () => [...rawWorkers].sort((a: any, b: any) => (Number(b?.cpu_percent) || 0) - (Number(a?.cpu_percent) || 0)),
     [rawWorkers]
   );
+  const workerStats = useMemo(() => workerSummaryStats(workers), [workers]);
   const observedAt = host.observed_at_ms || host.observedAtMs;
   const lastObservedAge = hostDebugValue(host, 'last_observed_age_ms', 'lastObservedAgeMs', undefined) as number | undefined;
   const groupId = String(hostDebugValue(host, 'group_id', 'groupId'));
@@ -3357,6 +3519,9 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
   const agentRuntime = useMemo(() => hostAgentRuntime(host), [host.state]);
   const activeTasks = activeHostTasks(host);
   const strokeColor = loadStrokeColor(avg);
+  const showDebugDrawer = scaleMode === 'topology' || scaleMode === 'full' || localDrawer === 'debug';
+  const showWorkersDrawer = (scaleMode === 'workers' || scaleMode === 'full' || localDrawer === 'workers') && workers.length > 0;
+
   const handleCopyIp = useCallback(async (event: { stopPropagation: () => void }) => {
     event.stopPropagation();
     if (displayIp === '-') return;
@@ -3370,14 +3535,17 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
   }, [displayIp]);
 
   return <Card
-    className="host-tile"
+    className={`host-tile ${isGroupHighlighted ? 'is-group-spotlight' : ''} ${!spotlightMatch ? 'is-dimmed' : ''}`.trim()}
     style={{ ['--load-level' as any]: level }}
     data-agent-key={hostKey(host)}
     data-group-mode={groupMode}
     data-host-status={host.status || 'unknown'}
+    data-spotlight-match={spotlightMatch ? 'true' : 'false'}
+    onMouseEnter={() => { if (groupId && groupId !== '-') onGroupHover?.(groupId); }}
+    onMouseLeave={() => onGroupHover?.(null)}
     variant="borderless"
   >
-    <Flex className="tile-header" justify="space-between" align="flex-start" gap={10}>
+    <Flex className="tile-header" justify="space-between" align="flex-start" gap={8}>
       <div className="tile-id-block">
         <div className="ip-title-row">
           <span className="tile-status-dot" data-status={host.status || 'unknown'} aria-hidden="true" />
@@ -3405,38 +3573,81 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
     <div className="tile-scroll">
       <div className="tile-metrics">
         <div className="tile-metric">
-          <span className="metric-label">Area</span>
-          <span className="metric-value">{areaZone}</span>
-          <small className="metric-sub">role {role} · src {shortSource(source)}</small>
-        </div>
-        <div className="tile-metric">
           <span className="metric-label">5min AVG</span>
           <span className="metric-value metric-value-strong">{formatLoad(avg)}</span>
-          <Progress percent={Math.round(level * 100)} showInfo={false} strokeColor={strokeColor} trailColor="rgba(18,20,23,.08)" />
+          <Progress percent={Math.round(level * 100)} showInfo={false} strokeColor={strokeColor} trailColor="rgba(20,20,19,.07)" />
         </div>
         <div className="tile-metric">
-          <span className="metric-label">磁盘 IO {diskSummary.count ? `(${diskSummary.count}盘)` : ''}</span>
+          <span className="metric-label">磁盘 IO {diskSummary.count ? `· ${diskSummary.count}盘` : ''}</span>
           <span className={`metric-value ${diskSummary.saturatedCount > 0 || diskSummary.maxIo >= 95 ? 'is-hot' : ''}`.trim()}>
             {diskSummary.count ? `${diskSummary.maxIo.toFixed(1)}%` : '-'}
           </span>
           <small className="metric-sub">
             {diskSummary.count
-              ? `峰值 ${diskSummary.hottestDevice}${diskSummary.saturatedCount > 0 ? ` · 饱和 ${diskSummary.saturatedCount}` : ''}`
-              : '等待磁盘样本'}
+              ? `${diskSummary.hottestDevice}${diskSummary.saturatedCount > 0 ? ` · 饱和${diskSummary.saturatedCount}` : ''}`
+              : '等待样本'}
           </small>
         </div>
         <div className="tile-metric">
           <span className="metric-label">Agent 运行时</span>
           <span className="metric-value">{agentRuntime.rssLabel} · {agentRuntime.threadsLabel}</span>
           <small className="metric-sub">
-            采 {agentRuntime.collectLabel} / 发 {agentRuntime.sendLabel}{agentRuntime.leaderCollectLabel ? ` · 聚 ${agentRuntime.leaderCollectLabel}` : ''}
+            采{agentRuntime.collectLabel}/发{agentRuntime.sendLabel}{agentRuntime.leaderCollectLabel ? `·聚${agentRuntime.leaderCollectLabel}` : ''}
           </small>
         </div>
+        <div className="tile-metric">
+          <span className="metric-label">Area · 源</span>
+          <span className="metric-value">{areaZone}</span>
+          <small className="metric-sub">{shortSource(source)}</small>
+        </div>
       </div>
-      <div className="debug-panel">
+
+      {activeTasks.length > 0 && <div className="tile-active-tasks">
+        {activeTasks.slice(0, 2).map((task: any, index: number) => <span key={`${task.task_id || index}`} className="tile-task-pill">
+          <b>{statusLabel(task.status)}</b>
+          <em>{taskLabels[task.task_type] || task.task_type || 'task'}</em>
+        </span>)}
+      </div>}
+
+      <div className="tile-interactive-bar" role="group" aria-label="节点透视抽屉">
+        <button
+          type="button"
+          className={`tile-drawer-trigger ${showDebugDrawer ? 'is-open' : ''} ${isGroupPinned ? 'is-pinned' : ''}`.trim()}
+          onClick={() => setLocalDrawer(curr => curr === 'debug' ? 'none' : 'debug')}
+          onDoubleClick={() => onGroupTogglePin?.(groupId)}
+          title="点击展开拓扑与心跳契约；悬停联动同组节点；双击锁定该组"
+        >
+          <span className="trigger-kicker">拓扑</span>
+          <b>{shortGroupName(groupId)}</b>
+          <small>{groupSize}/{groupSizeLimit}</small>
+        </button>
+        {workers.length > 0 && (
+          <button
+            type="button"
+            className={`tile-drawer-trigger ${showWorkersDrawer ? 'is-open' : ''}`.trim()}
+            onClick={() => setLocalDrawer(curr => curr === 'workers' ? 'none' : 'workers')}
+            title="点击展开 Tide Worker 进程明细"
+          >
+            <span className="trigger-kicker">进程</span>
+            <b>{workerStats.count}W · {workerStats.maxCpu}%</b>
+            <small>{workerStats.totalRssGb}</small>
+          </button>
+        )}
+      </div>
+
+      <div className={`debug-panel ${showDebugDrawer ? 'is-open' : 'is-collapsed'}`.trim()}>
         <div className="debug-head">
           <Typography.Text className="debug-title">调试</Typography.Text>
           <span className="debug-contract-meta">seq #{formatSeqCompact(seq)} · TTL {formatTtlSeconds(ttlMs)}</span>
+          {groupId !== '-' && (
+            <button
+              type="button"
+              className={`debug-pin-btn ${isGroupPinned ? 'is-active' : ''}`.trim()}
+              onClick={() => onGroupTogglePin?.(groupId)}
+            >
+              {isGroupPinned ? '已锁组' : '锁组对比'}
+            </button>
+          )}
         </div>
         <div className="debug-grid">
           <span><b>20s确认</b><em>{confirmations} · {statusLabel(host.status)}</em></span>
@@ -3447,16 +3658,11 @@ const HostTile = memo(function HostTile({ host, onRun }: { host: HostView; onRun
           <span><b>leader</b><em title={leaderUrl}>{normalizeUrlHost(leaderUrl)}</em></span>
         </div>
       </div>
-      {activeTasks.length > 0 && <div className="tile-active-tasks">
-        {activeTasks.slice(0, 2).map((task: any, index: number) => <span key={`${task.task_id || index}`} className="tile-task-pill">
-          <b>{statusLabel(task.status)}</b>
-          <em>{taskLabels[task.task_type] || task.task_type || 'task'}</em>
-        </span>)}
-      </div>}
-      {workers.length > 0 && <div className="worker-list">
+
+      {workers.length > 0 && <div className={`worker-list ${showWorkersDrawer ? 'is-open' : 'is-collapsed'}`.trim()}>
         <div className="worker-list-head">
           <span>Tide Workers · {workers.length} 进程</span>
-          <span>CPU / 内存 / 线程</span>
+          <span>CPU / RSS / 线程</span>
         </div>
         <div className="worker-grid">
           {workers.slice(0, 8).map((worker: any, index: number) => <div className="worker-card" key={`${worker.pid || 'worker'}-${index}`}>
