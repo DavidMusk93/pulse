@@ -3563,6 +3563,7 @@ const HostTile = memo(function HostTile({
         </div>
         <div className="tile-meta-row">
           <span className={`tile-chip tile-chip-mode is-${groupMode}`}>{groupMode === 'leader' ? 'LEADER' : groupMode === 'follower' ? 'FOLLOWER' : 'DIRECT'}</span>
+          {areaZone !== '-' && <span className="tile-chip tile-chip-area">{areaZone}</span>}
           {role !== '-' && <span className="tile-chip tile-chip-role">{role}</span>}
           <span className="tile-chip tile-chip-status" data-status={statusColor(host.status)}>{statusLabel(host.status)}</span>
           <AutoFitText className="seen" title={formatTime(observedAt)} text={formatSeenTime(observedAt)} minFontSize={9} maxFontSize={11} />
@@ -3578,13 +3579,13 @@ const HostTile = memo(function HostTile({
           <Progress percent={Math.round(level * 100)} showInfo={false} strokeColor={strokeColor} trailColor="rgba(20,20,19,.07)" />
         </div>
         <div className="tile-metric">
-          <span className="metric-label">磁盘 IO {diskSummary.count ? `· ${diskSummary.count}盘` : ''}</span>
+          <span className="metric-label">磁盘 IO{diskSummary.count ? ` · ${diskSummary.count}盘` : ''}</span>
           <span className={`metric-value ${diskSummary.saturatedCount > 0 || diskSummary.maxIo >= 95 ? 'is-hot' : ''}`.trim()}>
             {diskSummary.count ? `${diskSummary.maxIo.toFixed(1)}%` : '-'}
           </span>
           <small className="metric-sub">
             {diskSummary.count
-              ? `${diskSummary.hottestDevice}${diskSummary.saturatedCount > 0 ? ` · 饱和${diskSummary.saturatedCount}` : ''}`
+              ? `峰值 ${diskSummary.hottestDevice}${diskSummary.saturatedCount > 0 ? ` · 饱${diskSummary.saturatedCount}` : ''}`
               : '等待样本'}
           </small>
         </div>
@@ -3592,13 +3593,8 @@ const HostTile = memo(function HostTile({
           <span className="metric-label">Agent 运行时</span>
           <span className="metric-value">{agentRuntime.rssLabel} · {agentRuntime.threadsLabel}</span>
           <small className="metric-sub">
-            采{agentRuntime.collectLabel}/发{agentRuntime.sendLabel}{agentRuntime.leaderCollectLabel ? `·聚${agentRuntime.leaderCollectLabel}` : ''}
+            采 {agentRuntime.collectLabel} / 发 {agentRuntime.sendLabel}{agentRuntime.leaderCollectLabel ? ` · 聚 ${agentRuntime.leaderCollectLabel}` : ''}
           </small>
-        </div>
-        <div className="tile-metric">
-          <span className="metric-label">Area · 源</span>
-          <span className="metric-value">{areaZone}</span>
-          <small className="metric-sub">{shortSource(source)}</small>
         </div>
       </div>
 

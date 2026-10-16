@@ -1744,6 +1744,10 @@ body {
   color: var(--hue-violet);
   background: rgba(109, 40, 217, .08);
 }
+.tile-chip-area {
+  color: var(--text-2);
+  background: var(--surface-2);
+}
 .tile-chip-role {
   color: var(--text-3);
   background: transparent;
@@ -1779,7 +1783,7 @@ body {
 }
 .tile-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: .78fr .96fr 1.26fr;
   gap: 0;
   padding-top: 8px;
   border-top: 1px solid var(--line);
@@ -1807,7 +1811,7 @@ body {
   font-family: var(--mono);
   font-size: 9px;
   font-weight: 650;
-  letter-spacing: .03em;
+  letter-spacing: .02em;
   text-transform: uppercase;
   line-height: 1.15;
   white-space: nowrap;
@@ -2060,7 +2064,7 @@ body {
   pointer-events: none;
 }
 .worker-list.is-open {
-  max-height: 280px;
+  max-height: 360px;
   opacity: 1;
 }
 .worker-list-head {
@@ -2079,7 +2083,7 @@ body {
   display: grid;
   grid-template-columns: 1fr;
   gap: 0;
-  max-height: 220px;
+  max-height: 320px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
